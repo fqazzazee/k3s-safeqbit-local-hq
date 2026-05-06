@@ -14,7 +14,7 @@ data:
   DOMAIN: "https://vaultwarden.local.safeqbit.com"
 
   # Disable open signups. Existing users still log in normally.
-  # Toggle to "true" briefly if you need to add a new user, then back to false.
+  # Toggle to "true" briefly if you need to add a new user, then back to false :)
   SIGNUPS_ALLOWED: "false"
 
   # Disable invitation-only signups too unless you specifically use them.
