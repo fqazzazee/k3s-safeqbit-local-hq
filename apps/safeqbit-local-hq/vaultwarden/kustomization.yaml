@@ -1,0 +1,22 @@
+# kustomization.yaml
+# Tells Kustomize (and Flux's kustomize-controller) what to apply for Vaultwarden.
+# Lists each YAML file in this directory as a "resource" to include.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Files relative to this directory. Order doesn't strictly matter; Kustomize
+# resolves dependencies during apply.
+resources:
+  - 01-namespace-pvc.yaml
+  - 02-sealed-secret.yaml
+  - 03-configmap.yaml
+  - 04-deployment.yaml
+  - 05-service.yaml
+  - 06-ingress.yaml
+
+# commonLabels: optional. Adds these labels to every resource Kustomize
+# generates. Useful for "all my cluster apps" queries later.
+commonLabels:
+  cluster: safeqbit-local-hq
+  managed-by: flux

@@ -1,0 +1,14 @@
+# apps/safeqbit-local-hq/kustomization.yaml
+# Top-level list of every app on the safeqbit-local-hq cluster. As you add
+# apps, add them to the resources: list. Each entry is a relative path to a
+# directory containing its own kustomization.yaml.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - vaultwarden
+  # When you add Linkding or other apps later, append them here:
+  # - linkding
+  # - paperless-ngx
+  # - homepage

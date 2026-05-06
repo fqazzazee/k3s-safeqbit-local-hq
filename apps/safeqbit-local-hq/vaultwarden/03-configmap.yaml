@@ -1,0 +1,38 @@
+# 03-configmap.yaml
+# Non-sensitive Vaultwarden configuration. These values are visible in
+# kubectl get configmap output, so don't put anything secret here.
+# Sensitive values live in the SealedSecret in 02-sealed-secret.yaml.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vaultwarden-config
+  namespace: vaultwarden
+data:
+  # Public URL Vaultwarden is served at — must match the Ingress hostname.
+  # Vaultwarden uses this for password reset emails, push notifications, etc.
+  DOMAIN: "https://vaultwarden.local.safeqbit.com"
+
+  # Disable open signups. Existing users still log in normally.
+  # Toggle to "true" briefly if you need to add a new user, then back to false.
+  SIGNUPS_ALLOWED: "false"
+
+  # Disable invitation-only signups too unless you specifically use them.
+  INVITATIONS_ALLOWED: "false"
+
+  # SMTP settings — adjust to your real mail provider, or remove this block
+  # entirely if you don't use SMTP.
+  #SMTP_HOST: "smtp.example.com"
+  #SMTP_FROM: "vault@safeqbit.com"
+  #SMTP_PORT: "587"
+  #SMTP_SECURITY: "starttls"
+  #SMTP_USERNAME: "vault@safeqbit.com"
+
+  # Tell Vaultwarden to log to stdout (default for containers, just being explicit).
+  # The Vaultwarden image is 0=Trace,1=Debug,2=Info,3=Warn,4=Error.
+  LOG_LEVEL: "warn"
+
+  # Trust the X-Forwarded-* headers from ingress-nginx so source IPs are real
+  # in Vaultwarden's logs and rate limiting decisions. Required when behind
+  # a reverse proxy.
+  IP_HEADER: "X-Forwarded-For"

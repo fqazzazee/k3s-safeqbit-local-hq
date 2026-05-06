@@ -1,0 +1,26 @@
+# 05-service.yaml
+# ClusterIP Service for Vaultwarden. Internal-only — the Ingress is what
+# exposes Vaultwarden to your LAN, not this Service directly. The Service
+# gives the Ingress controller a stable target to forward to.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaultwarden
+  namespace: vaultwarden
+spec:
+  # ClusterIP: an internal-only virtual IP, reachable only from inside the
+  # cluster. No external IP, no MetalLB involvement. The Ingress controller
+  # is what bridges external traffic to this Service.
+  type: ClusterIP
+
+  # Match Pods labeled app=vaultwarden — same label set on the Deployment's
+  # Pod template above.
+  selector:
+    app: vaultwarden
+
+  ports:
+    - name: http
+      port: 80                    # the Service port
+      targetPort: 80              # the Pod's containerPort
+      protocol: TCP

@@ -1,0 +1,30 @@
+# 01-namespace-pvc.yaml
+# Stage 1 of the Vaultwarden migration: create the PVC so the provisioner
+# allocates a TrueNAS subdirectory. We'll copy data into that directory
+# before deploying the Vaultwarden Pod itself.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vaultwarden
+---
+# PersistentVolumeClaim — requests storage from the nfs-truenas provisioner.
+# The provisioner watches for new PVCs with our StorageClass and dynamically
+# creates a subdirectory on TrueNAS plus a matching PV object.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vaultwarden-data
+  namespace: vaultwarden
+spec:
+  # RWO matches Vaultwarden's single-writer reality. NFS will only let
+  # one node mount it as RW at a time, which is what we want.
+  accessModes:
+    - ReadWriteOnce
+  # Use the default StorageClass (nfs-truenas) — the provisioner will
+  # create a subdirectory under /mnt/nvme2tb/k8s/pvs/ on TrueNAS.
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 5Gi

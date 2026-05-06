@@ -1,0 +1,113 @@
+# 04-deployment.yaml
+# Vaultwarden Deployment. Single replica, mounts the PVC for persistent state,
+# pulls config from the ConfigMap, secrets from the SealedSecret-derived Secret.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vaultwarden
+  namespace: vaultwarden
+spec:
+  # One replica only. Vaultwarden's SQLite backend doesn't tolerate concurrent
+  # writers, and the PVC is RWO. If you ever want HA, switch to PostgreSQL
+  # via DATABASE_URL and bump replicas — that's a separate exercise.
+  replicas: 1
+
+  # Recreate strategy: stop the old Pod completely before starting the new one.
+  # This avoids two Pods both trying to mount the RWO PVC during a rollout.
+  # Tradeoff: brief downtime during updates (a few seconds).
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: vaultwarden            # must match Pod template labels exactly
+
+  template:
+    metadata:
+      labels:
+        app: vaultwarden          # what the Service selector matches against
+    spec:
+      # Soft preference for tier=primary (meatball). The Pod will land there
+      # if possible but won't refuse to schedule elsewhere if meatball is full
+      # or down.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      # securityContext sets the UID/GID the container runs as. Vaultwarden's
+      # official image runs as root by default, which is fine for our setup
+      # because TrueNAS Maproot is configured to keep root as root server-side.
+      # If you wanted to lock this down further, set runAsUser to a specific
+      # UID and chown the data directory accordingly.
+      # securityContext:
+      #   runAsUser: 0
+      #   fsGroup: 0
+
+      containers:
+        - name: vaultwarden
+          # Pin to a specific version. Don't use :latest — you'll lose
+          # control of when upgrades happen.
+          image: vaultwarden/server:1.32.0
+
+          # The container listens on port 80 by default.
+          ports:
+            - containerPort: 80
+              name: http
+
+          # Pull all env vars from the ConfigMap and the Secret.
+          # envFrom is the bulk import; env: would let you specify individual
+          # vars or override values per-key.
+          envFrom:
+            - configMapRef:
+                name: vaultwarden-config
+            - secretRef:
+                name: vaultwarden-secrets
+
+          # Mount the PVC at /data, where Vaultwarden stores everything.
+          volumeMounts:
+            - name: data
+              mountPath: /data
+
+          # Resource requests and limits. These numbers are reasonable for
+          # a personal Vaultwarden — you can adjust based on actual usage.
+          resources:
+            requests:
+              cpu: 50m            # 0.05 cores baseline
+              memory: 128Mi       # baseline memory
+            limits:
+              memory: 512Mi       # hard ceiling, OOM-kill if exceeded
+
+          # Readiness probe: Vaultwarden has an /alive endpoint that returns
+          # 200 OK when the app is ready. The probe gates whether the Service
+          # forwards traffic to this Pod (no restart on failure).
+          readinessProbe:
+            httpGet:
+              path: /alive
+              port: 80
+            initialDelaySeconds: 5     # wait 5s after Pod starts before checking
+            periodSeconds: 10          # check every 10s
+            failureThreshold: 3        # 3 failures = mark NotReady
+
+          # Liveness probe: same endpoint, but failure causes a container restart.
+          # Be more conservative here — we don't want to thrash on transient errors.
+          livenessProbe:
+            httpGet:
+              path: /alive
+              port: 80
+            initialDelaySeconds: 30    # give Vaultwarden plenty of time to start
+            periodSeconds: 30          # check every 30s, not every 10s
+            failureThreshold: 5        # 5 failures = restart container
+
+      # Volumes section: link the PVC into the Pod under the name 'data'
+      # which the volumeMount above references.
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: vaultwarden-data

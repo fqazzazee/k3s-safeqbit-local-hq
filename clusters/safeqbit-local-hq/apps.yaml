@@ -1,0 +1,33 @@
+# clusters/safeqbit-local-hq/apps.yaml
+# Flux Kustomization (different from Kustomize Kustomization — note the apiVersion).
+# This tells Flux: "watch the apps/safeqbit-local-hq/ path in this Git repo,
+# and apply everything that Kustomize generates from there."
+
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: apps
+  namespace: flux-system
+spec:
+  # How often to reconcile. Every 10 minutes is fine for a homelab.
+  # Reconciliation also happens immediately on any commit Flux notices.
+  interval: 10m
+
+  # Where in the repo to find the manifests. This is relative to the repo root.
+  path: ./apps/safeqbit-local-hq
+
+  # Don't prune resources that disappear from Git. Set to true once you trust
+  # the workflow — when you delete a directory in Git, Flux will then delete
+  # the corresponding cluster resources. Useful but irreversible if mistaken.
+  prune: false
+
+  # Reference to the GitRepository source defined by bootstrap.
+  # This is what tells Flux which Git repo to read from.
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+
+  # Wait for the kustomization to fully reconcile before reporting status.
+  # Helpful for catching errors during apply.
+  timeout: 5m

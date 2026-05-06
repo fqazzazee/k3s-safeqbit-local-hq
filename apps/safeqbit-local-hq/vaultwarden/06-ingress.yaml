@@ -1,0 +1,51 @@
+# 06-ingress.yaml
+# Ingress rule that routes vaultwarden.local.safeqbit.com to the Vaultwarden
+# Service. cert-manager watches Ingress objects with the cluster-issuer
+# annotation and automatically issues a Let's Encrypt cert for the host(s)
+# in spec.tls.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vaultwarden
+  namespace: vaultwarden
+  annotations:
+    # Tells cert-manager to issue a cert for this Ingress's TLS hosts.
+    # Use letsencrypt-staging first to verify the flow without burning
+    # rate limits, then switch to letsencrypt-prod after testing.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # Vaultwarden uses WebSockets for real-time updates and notifications.
+    # Tell ingress-nginx to allow long-lived connections.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+
+    # Allow larger uploads for password import files and attachments.
+    # Also matches the controller-wide proxy-body-size we set in Lesson 4.
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+
+spec:
+  # Tell Kubernetes which IngressClass implementation to use. We have
+  # ingress-nginx installed as the only ingress controller, named "nginx".
+  ingressClassName: nginx
+
+  # The TLS section tells the controller (and cert-manager) which hosts
+  # need TLS termination and where to store the resulting cert.
+  tls:
+    - hosts:
+        - vaultwarden.local.safeqbit.com
+      # cert-manager will create this Secret with the issued cert.
+      # The Ingress controller reads the cert from here at request time.
+      secretName: vaultwarden-tls
+
+  rules:
+    - host: vaultwarden.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix              # all paths under / match this rule
+            backend:
+              service:
+                name: vaultwarden          # Service we defined in 05-service.yaml
+                port:
+                  number: 80
