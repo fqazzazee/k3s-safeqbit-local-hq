@@ -17,6 +17,11 @@ resources:
 
 # commonLabels: optional. Adds these labels to every resource Kustomize
 # generates. Useful for "all my cluster apps" queries later.
-commonLabels:
-  cluster: safeqbit-local-hq
-  managed-by: flux
+# Modern replacement for commonLabels.
+# includeSelectors: false  -> labels go on metadata only, NOT on selectors.
+# This is what you almost always want.
+labels:
+  - includeSelectors: false
+    pairs:
+      cluster: safeqbit-local-hq
+      managed-by: flux
