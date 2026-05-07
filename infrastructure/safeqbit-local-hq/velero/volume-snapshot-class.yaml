@@ -1,0 +1,29 @@
+# volume-snapshot-class.yaml
+# Tells Kubernetes how to take snapshots of Longhorn volumes, and tells
+# Velero (via the label) to use this class for CSI snapshots of any PVC
+# backed by driver.longhorn.io.
+
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: longhorn-velero
+  labels:
+    # The label Velero looks for. This is what makes Velero pick this class
+    # for CSI snapshots of Longhorn-backed PVCs during a backup.
+    velero.io/csi-volumesnapshot-class: "true"
+
+# The CSI driver this snapshot class is for.
+driver: driver.longhorn.io
+
+# How Longhorn handles the snapshot when its VolumeSnapshot is deleted.
+# "Delete" means the snapshot is also removed from Longhorn when its
+# VolumeSnapshot k8s object is garbage-collected. Velero's design relies
+# on this so that expired backups don't leave orphan snapshots behind.
+deletionPolicy: Delete
+
+parameters:
+  # "snap" creates a Longhorn local in-volume snapshot. Combined with
+  # Velero's snapshotMoveData=true, Velero takes this local snapshot,
+  # uses its data mover to copy the snapshot contents to B2, then deletes
+  # the local snapshot. The cluster doesn't carry snapshot bloat over time.
+  type: snap
