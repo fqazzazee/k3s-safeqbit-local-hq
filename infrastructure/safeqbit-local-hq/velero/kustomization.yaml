@@ -1,8 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-  - cloud-credentials.yaml
-  - volume-snapshot-class.yaml
-  - schedule-daily.yaml
-  - schedule-vaultwarden.yaml

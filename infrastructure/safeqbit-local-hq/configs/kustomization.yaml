@@ -13,5 +13,7 @@ resources:
   - cert-manager-cloudflare.yaml
   - cert-manager-issuers.yaml
   - grafana-admin.yaml
-  - velero-b2.yaml
-  - volumesnapshotclass.yaml
+  - velero-cloud-credentials.yaml
+  - velero-volume-snapshot-class.yaml
+  - velero-schedule-daily.yaml
+  - velero-schedule-vaultwarden.yaml
