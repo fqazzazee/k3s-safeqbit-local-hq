@@ -12,7 +12,7 @@ resources:
   # Added in subsequent parts:
   - metallb.yaml
   - cert-manager.yaml
-  # - sealed-secrets.yaml
+  - sealed-secrets.yaml
   # - nfs-provisioner.yaml
   # - monitoring.yaml
   # - longhorn.yaml
