@@ -3,6 +3,6 @@ kind: Kustomization
 
 resources:
   - cloud-credentials.yaml
-  - volume-snapshot-class.yaml      # NEW
-  - schedule-daily.yaml             # we'll add these next
-  - schedule-vaultwarden.yaml       # we'll add these next
+  - volume-snapshot-class.yaml
+  - schedule-daily.yaml
+  - schedule-vaultwarden.yaml

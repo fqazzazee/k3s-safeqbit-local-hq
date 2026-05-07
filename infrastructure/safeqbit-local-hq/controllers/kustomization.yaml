@@ -1,0 +1,19 @@
+# infrastructure/safeqbit-local-hq/controllers/kustomization.yaml
+# Lists every controller-tier resource. Flux's kustomize-controller uses this
+# to decide what to apply. As we add more chart resources below, append them
+# to the resources: list.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - sources.yaml
+  - ingress-nginx.yaml
+  # Added in subsequent parts:
+  # - metallb.yaml
+  # - cert-manager.yaml
+  # - sealed-secrets.yaml
+  # - nfs-provisioner.yaml
+  # - monitoring.yaml
+  # - longhorn.yaml
+  # - velero.yaml

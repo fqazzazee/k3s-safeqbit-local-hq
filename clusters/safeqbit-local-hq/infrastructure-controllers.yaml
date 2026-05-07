@@ -1,0 +1,34 @@
+# infrastructure-controllers.yaml
+# Flux Kustomization (note: kustomize.toolkit.fluxcd.io, NOT the same kind
+# as the kustomization.yaml file inside controllers/). This one tells Flux to
+# watch a path in the repo and apply what kustomize-controller renders.
+#
+# This is the entrypoint for everything in infrastructure/safeqbit-local-hq/
+# controllers/. When this Kustomization reconciles, it applies HelmRepositories
+# and HelmReleases. helm-controller takes those HelmReleases and installs the
+# charts.
+
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-controllers
+  namespace: flux-system
+spec:
+  # Reconcile every 10 minutes; commits trigger immediate reconcile too.
+  interval: 10m
+  # Where the manifests live in the repo
+  path: ./infrastructure/safeqbit-local-hq/controllers
+  # Don't prune resources removed from Git for the infrastructure layer.
+  # Pruning a controller (e.g., MetalLB) would tear down dependent Services
+  # in a cascade; safer to manually uninstall when you really mean it.
+  prune: false
+  # Reference to the cluster's GitRepository source from `flux bootstrap`
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # Wait until everything in this Kustomization has reconciled successfully
+  # before reporting healthy. Other Kustomizations can dependsOn this and trust
+  # the readiness signal.
+  wait: true
+  timeout: 10m

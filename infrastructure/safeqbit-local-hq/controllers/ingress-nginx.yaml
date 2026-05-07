@@ -1,0 +1,109 @@
+# ingress-nginx.yaml
+# HelmRelease replaces the imperative `helm install ingress-nginx ...` you ran
+# in Lesson 4. The chart, version, namespace, and values now all live in Git.
+#
+# helm-controller reconciles this resource: if no release exists in the named
+# namespace with the named release name, it installs. If one exists with a
+# matching name+namespace, it upgrades. Mismatched values trigger an upgrade.
+# An identical state is a no-op (idempotent).
+#
+# Migration note: an existing release with name=ingress-nginx in namespace=
+# ingress-nginx will be adopted by this resource. helm-controller treats it
+# as a regular upgrade target. If your pinned chartVersion matches the deployed
+# version and your values match the deployed values, the upgrade is a no-op.
+
+---
+# The Namespace must exist before the HelmRelease can install into it.
+# Including it inline in the controllers/ kustomization keeps it simple.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ingress-nginx                     # Flux resource name
+  namespace: ingress-nginx                # where the HelmRelease object lives
+spec:
+  # How often helm-controller re-evaluates the desired state. Hourly is plenty;
+  # any commit to Git triggers a reconcile sooner via the source-controller.
+  interval: 1h
+
+  chart:
+    spec:
+      chart: ingress-nginx                # chart name in the repo's index
+      # PIN A VERSION. Replace with whatever `helm list` showed you above.
+      # Without pinning, every chart-repo refresh would trigger an upgrade
+      # to "latest" which you almost never want unannounced.
+      version: 4.15.1
+      sourceRef:
+        kind: HelmRepository
+        name: ingress-nginx               # references the HelmRepo from sources.yaml
+        namespace: flux-system
+      # How often source-controller checks for chart updates (separate from
+      # the HelmRepo's index refresh). 1h is fine.
+      interval: 1h
+
+  # Release name as Helm sees it. Defaults to metadata.name if omitted, but
+  # being explicit avoids surprises when you have multiple HelmReleases in a
+  # namespace.
+  releaseName: ingress-nginx
+
+  # Behavior on first install
+  install:
+    # If the install fails partway, retry up to N times before giving up.
+    remediation:
+      retries: 3
+
+  # Behavior on subsequent upgrades
+  upgrade:
+    # Likewise for upgrade failures
+    remediation:
+      retries: 3
+    # Some charts replace immutable fields (selectors, etc.) on upgrade and
+    # need a forced replace. Force=false is safer; set to true only if you
+    # hit "field is immutable" errors.
+    force: false
+    # Apply CRD changes on upgrade if the chart bundles updated CRDs.
+    # CreateReplace is the most aggressive; Skip means CRDs are never touched
+    # by helm-controller.
+    crds: CreateReplace
+
+  # Values - this is where ~/k3s-lab/ingress-nginx/values.yaml moves to.
+  # Paste your existing values.yaml contents under values: with two-space
+  # indentation. Below is a faithful copy of what we put in Lesson 4.
+  values:
+    controller:
+      kind: DaemonSet
+      ingressClassResource:
+        name: nginx
+        enabled: true
+        default: true
+      ingressClass: nginx
+
+      service:
+        enabled: true
+        type: LoadBalancer
+        annotations:
+          # MetalLB annotations - the chart owns the Service, but these
+          # annotations get applied by the chart's templates.
+          metallb.universe.tf/loadBalancerIPs: "10.10.13.50"
+          metallb.universe.tf/address-pool: "reserved-pool"
+        externalTrafficPolicy: Local
+
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true                   # kube-prometheus-stack is up; flip on
+
+      config:
+        use-forwarded-headers: "true"
+        proxy-body-size: "50m"
