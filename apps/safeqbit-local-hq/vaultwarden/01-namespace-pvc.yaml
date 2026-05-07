@@ -24,7 +24,7 @@ spec:
     - ReadWriteOnce
   # Use the default StorageClass (nfs-truenas) — the provisioner will
   # create a subdirectory under /mnt/nvme2tb/k8s/pvs/ on TrueNAS.
-  storageClassName: nfs-truenas
+  storageClassName: longhorn
   resources:
     requests:
       storage: 5Gi
