@@ -106,4 +106,4 @@ spec:
 
       config:
         use-forwarded-headers: "true"
-        proxy-body-size: "75m"
+        proxy-body-size: "50m"
