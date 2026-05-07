@@ -1,0 +1,40 @@
+# schedule-daily.yaml
+# Daily backup of all user-visible namespaces, using CSI snapshots for any
+# Longhorn-backed PVCs. Snapshot data is offloaded to B2 via Velero's data
+# mover. Local snapshots are removed after offload completes.
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-everything
+  namespace: velero
+spec:
+  schedule: "0 3 * * *"   # 03:00 UTC daily
+
+  template:
+    ttl: "720h"   # 30 days
+
+    # Explicitly include namespaces. Add new ones here as you migrate apps.
+    includedNamespaces:
+      - vaultwarden
+
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+
+    # CSI snapshots for any PVC with a CSI-backed StorageClass and a
+    # registered VolumeSnapshotClass. This is now the case for Longhorn.
+    snapshotVolumes: true
+
+    # Offload snapshot data to B2 via the data mover. Without this, the
+    # snapshot would stay local in Longhorn and be lost if the cluster died.
+    snapshotMoveData: true
+
+    # Don't ALSO do FSB. Belt-and-suspenders against the values.yaml flag.
+    defaultVolumesToFsBackup: false
+
+    storageLocation: default
+
+  paused: false

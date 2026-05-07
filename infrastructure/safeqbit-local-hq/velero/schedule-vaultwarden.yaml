@@ -1,0 +1,23 @@
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: vaultwarden-frequent
+  namespace: velero
+spec:
+  schedule: "0 */6 * * *"   # every 6 hours
+
+  template:
+    ttl: "168h"   # 7 days
+    includedNamespaces:
+      - vaultwarden
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false
