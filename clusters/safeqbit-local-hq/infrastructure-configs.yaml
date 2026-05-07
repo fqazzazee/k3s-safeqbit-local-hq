@@ -1,0 +1,28 @@
+# infrastructure-configs.yaml
+# Flux Kustomization for everything in infrastructure/safeqbit-local-hq/configs/.
+# CRITICAL: dependsOn infrastructure-controllers, so on a fresh cluster
+# bootstrap, configs wait until controllers are healthy before applying.
+# Without this, the IPAddressPools, ClusterIssuers, etc. would fail to apply
+# (CRDs not registered yet) and Flux would retry until controllers caught up,
+# which works but produces noisy errors.
+
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure-configs
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure/safeqbit-local-hq/configs
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  # The dependsOn list - this Kustomization won't reconcile until each named
+  # one is in a Ready state. Combined with controllers' wait: true, the
+  # ordering on a fresh cluster is correct.
+  dependsOn:
+    - name: infrastructure-controllers
+  wait: true
+  timeout: 10m

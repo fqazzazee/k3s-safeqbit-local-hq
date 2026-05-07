@@ -1,0 +1,35 @@
+# metallb-pools.yaml
+# IPAddressPools and L2Advertisement. These are CRs the MetalLB chart's CRDs
+# define. They cannot be applied until MetalLB is up and the CRDs are
+# established, which is why this file lives in configs/ (depends on controllers/).
+
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: reserved-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 10.10.13.50-10.10.13.59             # ten IPs reserved for pinned services
+  autoAssign: false                        # only assigned via explicit annotation
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: auto-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 10.10.13.60-10.10.13.100            # 41 IPs for auto-assignment
+  autoAssign: true
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: l2-advertisement
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - reserved-pool
+    - auto-pool

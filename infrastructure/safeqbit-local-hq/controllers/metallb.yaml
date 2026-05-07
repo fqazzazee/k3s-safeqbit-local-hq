@@ -1,0 +1,38 @@
+# metallb.yaml
+# MetalLB chart. Installs metallb-controller (1 Pod) and metallb-speaker
+# (DaemonSet, one Pod per node). The chart ships the IPAddressPool, L2Advertisement,
+# and BGPPeer CRDs which are needed before our pools.yaml can apply.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+  namespace: metallb-system
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: metallb
+      version: 0.15.3                     # check `helm list -n metallb-system`
+      sourceRef:
+        kind: HelmRepository
+        name: metallb
+        namespace: flux-system
+      interval: 1h
+  releaseName: metallb
+  install:
+    remediation:
+      retries: 3
+    crds: CreateReplace                   # IPAddressPool, L2Advertisement CRDs
+  upgrade:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  # MetalLB has very few values to override
+  values: {}

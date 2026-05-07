@@ -10,7 +10,7 @@ resources:
   - sources.yaml
   - ingress-nginx.yaml
   # Added in subsequent parts:
-  # - metallb.yaml
+  - metallb.yaml
   # - cert-manager.yaml
   # - sealed-secrets.yaml
   # - nfs-provisioner.yaml

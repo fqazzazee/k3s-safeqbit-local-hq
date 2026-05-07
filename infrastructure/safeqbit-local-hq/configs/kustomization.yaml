@@ -1,0 +1,16 @@
+# infrastructure/safeqbit-local-hq/configs/kustomization.yaml
+# Lists every config-tier resource. These all depend on at least one controller
+# from the controllers/ directory being installed first. The Flux Kustomization
+# in clusters/safeqbit-local-hq/infrastructure-configs.yaml uses dependsOn
+# to enforce that ordering.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - metallb-pools.yaml
+  # Added in subsequent parts:
+  # - cert-manager-cloudflare.yaml
+  # - cert-manager-issuers.yaml
+  # - velero-b2.yaml
+  # - volumesnapshotclass.yaml
