@@ -12,5 +12,6 @@ resources:
   # Added in subsequent parts:
   - cert-manager-cloudflare.yaml
   - cert-manager-issuers.yaml
+  - grafana-admin.yaml
   # - velero-b2.yaml
   # - volumesnapshotclass.yaml

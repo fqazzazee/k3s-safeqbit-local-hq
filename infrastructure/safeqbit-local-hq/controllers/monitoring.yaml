@@ -1,0 +1,106 @@
+# monitoring.yaml
+# Largest chart of the bunch. Installs Prometheus, Grafana, Alertmanager,
+# node-exporter, kube-state-metrics, and a stack of pre-built dashboards.
+# The values block here is a copy of ~/k3s-lab/monitoring/values.yaml.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: monitoring
+  namespace: monitoring
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: 84.5.0                     # check `helm list -n monitoring`
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: flux-system
+      interval: 1h
+  releaseName: monitoring
+  install:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  upgrade:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+    # kube-prometheus-stack regularly changes immutable fields (selectors,
+    # PodTemplateSpec). Helm errors out unless we recreate. Set this if you
+    # see "field is immutable" on chart upgrades; safe to leave default until then.
+    # force: true
+  # The Grafana admin password is sensitive. Reference a SealedSecret instead
+  # of putting plaintext in values. The chart supports admin.existingSecret.
+  values:
+    defaultRules:
+      create: true
+      rules:
+        kubeApiserverAvailability: true
+        kubeApiserverSlos: true
+        nodeExporterAlerting: true
+        etcd: true
+    prometheus:
+      prometheusSpec:
+        retention: 30d
+        resources:
+          requests:
+            cpu: 200m
+            memory: 1Gi
+          limits:
+            memory: 2Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: nfs-truenas
+              accessModes: [ReadWriteOnce]
+              resources:
+                requests:
+                  storage: 10Gi
+        nodeSelector:
+          tier: primary
+    grafana:
+      enabled: true
+      persistence:
+        enabled: true
+        storageClassName: nfs-truenas
+        size: 5Gi
+      # Reference a Secret created by SealedSecret rather than embedding the
+      # admin password in this manifest. See grafana-admin.yaml in configs/.
+      admin:
+        existingSecret: grafana-admin
+        userKey: admin
+        passwordKey: lnl39AOVwFif4g
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+        hosts:
+          - grafana.local.safeqbit.com
+        tls:
+          - secretName: grafana-tls
+            hosts:
+              - grafana.local.safeqbit.com
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
+      nodeSelector:
+        tier: primary
+    alertmanager:
+      enabled: false
+    prometheus-windows-exporter:
+      enabled: false
+    windowsMonitoring:
+      enabled: false

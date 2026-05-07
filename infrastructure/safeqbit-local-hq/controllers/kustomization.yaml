@@ -13,7 +13,7 @@ resources:
   - metallb.yaml
   - cert-manager.yaml
   - sealed-secrets.yaml
-  # - nfs-provisioner.yaml
-  # - monitoring.yaml
+  - nfs-provisioner.yaml
+  - monitoring.yaml
   # - longhorn.yaml
   # - velero.yaml

@@ -1,0 +1,59 @@
+# nfs-provisioner.yaml
+# The TrueNAS NFS provisioner. Note that after Lesson 7.1, this is no longer
+# the default StorageClass; Longhorn took that role. nfs-truenas remains for
+# RWX workloads and any app you want pinned to TrueNAS specifically.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nfs-provisioner
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: nfs-provisioner
+  namespace: nfs-provisioner
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: nfs-subdir-external-provisioner
+      version: 4.0.18                     # check `helm list -n nfs-provisioner`
+      sourceRef:
+        kind: HelmRepository
+        name: nfs-subdir-external-provisioner
+        namespace: flux-system
+      interval: 1h
+  releaseName: nfs-provisioner
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    nfs:
+      server: 10.10.10.5                  # primary TrueNAS
+      path: /mnt/nvme2tb/k8s/pvs
+      mountOptions:
+        - nfsvers=4.2
+        - hard
+        - noatime
+    storageClass:
+      create: true
+      name: nfs-truenas
+      defaultClass: false                 # demoted in Lesson 7.1
+      reclaimPolicy: Retain
+      pathPattern: "${.PVC.namespace}-${.PVC.name}-${.PV.name}"
+      onDelete: archive
+      allowVolumeExpansion: true
+      accessModes: ReadWriteMany
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+    nodeSelector:
+      tier: primary
