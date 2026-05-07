@@ -1,0 +1,10 @@
+# infrastructure/safeqbit-local-hq/kustomization.yaml
+# Top-level list of infrastructure-level configs for the safeqbit-local-hq cluster.
+# Append future infrastructure subdirectories (e.g., HelmReleases for ingress-nginx,
+# cert-manager, sealed-secrets) here as you bring more services under GitOps.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - velero

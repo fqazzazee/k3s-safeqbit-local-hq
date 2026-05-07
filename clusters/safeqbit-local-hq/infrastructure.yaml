@@ -1,0 +1,18 @@
+# clusters/safeqbit-local-hq/infrastructure.yaml
+# Tells Flux to reconcile the infrastructure/ tree, mirroring apps.yaml.
+# This is the missing piece that makes "flux reconcile kustomization infrastructure" work.
+
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infrastructure
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure/safeqbit-local-hq
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  timeout: 5m
