@@ -15,7 +15,7 @@ data:
 
   # Disable open signups. Existing users still log in normally.
   # Toggle to "true" briefly if you need to add a new user, then back to false :)
-  SIGNUPS_ALLOWED: "false"
+  SIGNUPS_ALLOWED: "true"
 
   # Disable invitation-only signups too unless you specifically use them.
   INVITATIONS_ALLOWED: "false"
