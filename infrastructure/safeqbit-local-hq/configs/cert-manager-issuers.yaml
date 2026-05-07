@@ -1,0 +1,56 @@
+# cert-manager-issuers.yaml
+# ClusterIssuers reference the Cloudflare API token Secret (which the
+# sealed-secrets controller materializes from the SealedSecret in the same
+# directory). Order between this file and cert-manager-cloudflare.yaml within
+# configs/ doesn't matter; Kustomize handles them as a set, and the SealedSecret
+# decryption + the ClusterIssuer apply happen close in time.
+#
+# What does matter is that cert-manager (chart) is up before this file applies,
+# because ClusterIssuer is a CRD shipped by the chart. dependsOn handles that.
+
+---
+# Staging issuer: rate limits are generous. Use for testing new Ingress/cert
+# configurations without burning Let's Encrypt's strict prod quota.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: fadi@safeqbit.com             # CHANGE to your real email
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        # Restrict this solver to your domain; cert-manager won't try
+        # Cloudflare for unrelated domains
+        selector:
+          dnsZones:
+            - safeqbit.com
+---
+# Production issuer: real, browser-trusted certs. Use this for everything once
+# you've validated the configuration with the staging issuer.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: fadi@safeqbit.com             # CHANGE to your real email
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - safeqbit.com

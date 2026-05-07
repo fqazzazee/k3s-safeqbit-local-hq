@@ -1,0 +1,64 @@
+# cert-manager.yaml
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: cert-manager
+      version: v1.16.1                    # check `helm list -n cert-manager`
+      sourceRef:
+        kind: HelmRepository
+        name: jetstack
+        namespace: flux-system
+      interval: 1h
+  releaseName: cert-manager
+  install:
+    remediation:
+      retries: 3
+    # cert-manager ships its CRDs. CreateReplace ensures upgrades migrate them.
+    crds: CreateReplace
+  upgrade:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  values:
+    # Match what's in ~/k3s-lab/cert-manager/values.yaml
+    crds:
+      enabled: true
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+    webhook:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+    cainjector:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+    nodeSelector:
+      tier: primary
+    prometheus:
+      enabled: true
+      servicemonitor:
+        enabled: true

@@ -10,7 +10,7 @@ kind: Kustomization
 resources:
   - metallb-pools.yaml
   # Added in subsequent parts:
-  # - cert-manager-cloudflare.yaml
-  # - cert-manager-issuers.yaml
+  - cert-manager-cloudflare.yaml
+  - cert-manager-issuers.yaml
   # - velero-b2.yaml
   # - volumesnapshotclass.yaml
