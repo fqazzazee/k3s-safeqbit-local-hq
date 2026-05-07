@@ -1,0 +1,63 @@
+# velero.yaml
+# Velero with CSI snapshot data movement against B2. The B2 credentials are
+# referenced as a Secret named "velero-b2-credentials"; we materialize that
+# from a SealedSecret in configs/velero-b2.yaml.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: velero
+  namespace: velero
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: velero
+      version: 12.0.1                      # check `helm list -n velero`
+      sourceRef:
+        kind: HelmRepository
+        name: vmware-tanzu
+        namespace: flux-system
+      interval: 1h
+  releaseName: velero
+  install:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  upgrade:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  values:
+    initContainers:
+      - name: velero-plugin-for-aws
+        image: velero/velero-plugin-for-aws:v1.14.0
+        volumeMounts:
+          - mountPath: /target
+            name: plugins
+    configuration:
+      backupStorageLocation:
+        - name: default
+          provider: aws
+          bucket: k3s-safeqbit-local-hq-velero
+          config:
+            region: us-east-005      # e.g. us-east-005
+            s3ForcePathStyle: "true"
+            s3Url: https://s3.us-east-005.backblazeb2.com     # e.g. https://s3.us-east-005.backblazeb2.com
+      volumeSnapshotLocation:
+        - name: default
+          provider: csi
+      features: EnableCSI
+      defaultVolumesToFsBackup: false
+    credentials:
+      useSecret: true
+      existingSecret: velero-b2-credentials
+    snapshotsEnabled: true
+    deployNodeAgent: true
+    schedules: {}                          # populated by app-level schedules

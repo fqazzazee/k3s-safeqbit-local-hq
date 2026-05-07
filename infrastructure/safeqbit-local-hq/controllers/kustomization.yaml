@@ -15,5 +15,5 @@ resources:
   - sealed-secrets.yaml
   - nfs-provisioner.yaml
   - monitoring.yaml
-  # - longhorn.yaml
-  # - velero.yaml
+  - longhorn.yaml
+  - velero.yaml

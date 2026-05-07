@@ -1,0 +1,14 @@
+# volumesnapshotclass.yaml
+# Tells the snapshot-controller (installed in Lesson 7.1) which CSI driver
+# to use when Velero asks for a snapshot. Labeled so Velero discovers it.
+
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: longhorn-snapshot-vsc
+  labels:
+    velero.io/csi-volumesnapshot-class: "true"
+driver: driver.longhorn.io
+deletionPolicy: Retain
+parameters:
+  type: snap                              # native Longhorn snapshots, in-cluster
