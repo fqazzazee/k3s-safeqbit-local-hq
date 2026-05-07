@@ -57,7 +57,7 @@ spec:
       defaultVolumesToFsBackup: false
     credentials:
       useSecret: true
-      existingSecret: velero-credentials
+      existingSecret: cloud-credentials
     snapshotsEnabled: true
     deployNodeAgent: true
     schedules: {}                          # populated by app-level schedules
