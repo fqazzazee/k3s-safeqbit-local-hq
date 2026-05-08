@@ -60,7 +60,7 @@ spec:
         storageSpec:
           volumeClaimTemplate:
             spec:
-              storageClassName: nfs-truenas
+              storageClassName: longhorn
               accessModes: [ReadWriteOnce]
               resources:
                 requests:
@@ -71,7 +71,7 @@ spec:
       enabled: true
       persistence:
         enabled: true
-        storageClassName: nfs-truenas
+        storageClassName: longhorn
         size: 5Gi
       # Reference a Secret created by SealedSecret rather than embedding the
       # admin password in this manifest. See grafana-admin.yaml in configs/.
