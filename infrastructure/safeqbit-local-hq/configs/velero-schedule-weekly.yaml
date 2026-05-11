@@ -1,18 +1,22 @@
-# schedule-daily.yaml
-# Daily backup of all user-visible namespaces, using CSI snapshots for any
+# schedule-weekly.yaml
+# Weekly backup of all user-visible namespaces, using CSI snapshots for any
 # Longhorn-backed PVCs. Snapshot data is offloaded to B2 via Velero's data
 # mover. Local snapshots are removed after offload completes.
 
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: daily-everything
+  name: weekly-everything
   namespace: velero
 spec:
-  schedule: "0 3 * * *"   # 03:00 UTC daily
+  schedule: "0 3 * * 0"     
+  # Sunday 03:00 UTC = Saturday 23:00 EDT. Off-peak, predictable.
+  # cron schedule is well explained here: https://crontab.guru/#0_3_*_*_0
 
   template:
-    ttl: "720h"   # 30 days
+    # 3 months. At weekly cadence this gives us ~13 restore points at steady
+    # state. More than enough for our usage in a homelab.
+    ttl: "2160"
 
     # Explicitly include namespaces. Add new ones here as you migrate apps.
     includedNamespaces:
