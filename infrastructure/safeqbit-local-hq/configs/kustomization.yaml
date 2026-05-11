@@ -15,5 +15,5 @@ resources:
   - grafana-admin.yaml
   - velero-cloud-credentials.yaml
   - velero-volume-snapshot-class.yaml
-  - velero-schedule-daily.yaml
+  - velero-schedule-weekly.yaml
   - velero-schedule-vaultwarden.yaml
