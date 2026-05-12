@@ -37,7 +37,7 @@ spec:
     # kube-prometheus-stack regularly changes immutable fields (selectors,
     # PodTemplateSpec). Helm errors out unless we recreate. Set this if you
     # see "field is immutable" on chart upgrades; safe to leave default until then.
-    # force: true
+    force: true
   # The Grafana admin password is sensitive. Reference a SealedSecret instead
   # of putting plaintext in values. The chart supports admin.existingSecret.
   values:
