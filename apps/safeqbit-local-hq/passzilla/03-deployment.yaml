@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: passzilla
+  namespace: passzilla
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: passzilla
+  template:
+    metadata:
+      labels:
+        app: passzilla
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      containers:
+        - name: passzilla
+          # Pin to a specific version tag instead of latest before going to prod.
+          image: pglombardo/pwpush:latest
+
+          # PasswordPusher listens on 5100 by default.
+          ports:
+            - containerPort: 5100
+              name: http
+
+          envFrom:
+            - configMapRef:
+                name: passzilla-config
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5100
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5100
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: passzilla-config
+  namespace: passzilla
+data:
+  # Public domain PasswordPusher uses when generating share links.
+  # This is the external hostname, not the cluster-local ingress hostname.
+  PWP__HOST_DOMAIN: "passzilla.safeqbit.com"
+
+  # Disable user accounts — anonymous password sharing only.
+  PWP__ENABLE_LOGINS: "false"
