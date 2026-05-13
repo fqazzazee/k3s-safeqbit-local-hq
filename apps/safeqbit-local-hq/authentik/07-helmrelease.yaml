@@ -7,8 +7,8 @@
 #
 # IMPORTANT: before committing, run
 #   helm show values authentik/authentik --version 2025.10.3
-# and confirm that the value names below (existingSecret, server.*,
-# worker.*, etc.) match the chart's schema for the version you're pinning.
+# and confirm that the value names below (server.*, worker.*, etc.) match
+# the chart's schema for the version you're pinning.
 # The chart re-organizes occasionally; this lesson reflects 2025.10.x.
 
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -44,13 +44,22 @@ spec:
           value: "https://authentik.local.safeqbit.com/"
         - name: AUTHENTIK_LOG_LEVEL
           value: info
+        # Inject credentials from our SealedSecret. Using explicit env[].valueFrom
+        # entries rather than envFrom so these take precedence over the chart's
+        # own auto-generated secret (which would otherwise win with an empty value).
+        - name: AUTHENTIK_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: authentik-credentials
+              key: AUTHENTIK_SECRET_KEY
+        - name: AUTHENTIK_POSTGRESQL__PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: authentik-credentials
+              key: AUTHENTIK_POSTGRESQL__PASSWORD
 
     # -- Authentik core --
     authentik:
-      # secret_key is set via the existingSecret mechanism below; this
-      # placeholder is required by the chart schema but ignored.
-      secret_key: ""
-
       error_reporting:
         enabled: false                       # don't phone home unless asked
 
@@ -60,14 +69,6 @@ spec:
         port: 5432
         name: authentik
         user: authentik
-        # password injected via existingSecret
-
-    # The chart mounts this Secret as env vars on both server and worker
-    # pods. Our SealedSecret produces a Secret with exactly these key names:
-    #   POSTGRES_PASSWORD                     (used by Postgres only)
-    #   AUTHENTIK_POSTGRESQL__PASSWORD        (used by chart)
-    #   AUTHENTIK_SECRET_KEY                  (used by chart)
-    existingSecret: authentik-credentials
 
     # -- Server: web UI, API, embedded outpost --
     server:
