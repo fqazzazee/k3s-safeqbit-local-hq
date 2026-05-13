@@ -10,3 +10,5 @@ data:
 
   # Disable user accounts — anonymous password sharing only.
   PWP__ENABLE_LOGINS: "false"
+  PWP__REQUIRE_MFA: "true"
+  PWP__THEME: "cyborg"
