@@ -1,0 +1,161 @@
+# 07-helmrelease.yaml
+# Flux HelmRelease for Authentik. helm-controller installs and reconciles
+# the release to match the values block here. Same pattern as Lesson 8.
+#
+# Chart: https://charts.goauthentik.io  (registered as HelmRepository
+# named "authentik" in flux-system; see Part 3)
+#
+# IMPORTANT: before committing, run
+#   helm show values authentik/authentik --version 2025.10.3
+# and confirm that the value names below (existingSecret, server.*,
+# worker.*, etc.) match the chart's schema for the version you're pinning.
+# The chart re-organizes occasionally; this lesson reflects 2025.10.x.
+
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: authentik
+  namespace: authentik
+spec:
+  interval: 30m                              # reconcile every half hour
+  chart:
+    spec:
+      chart: authentik                       # chart name in the repo's index
+      version: 2025.10.3                     # PIN. No floating tags.
+      sourceRef:
+        kind: HelmRepository
+        name: authentik
+        namespace: flux-system
+
+  install:
+    remediation:
+      retries: 2
+  upgrade:
+    remediation:
+      retries: 2
+
+  values:
+    # -- Global settings shared by server and worker --
+    global:
+      env:
+        # AUTHENTIK_HOST is informational; some outpost components use it
+        # for self-discovery.
+        - name: AUTHENTIK_HOST
+          value: "https://authentik.local.safeqbit.com/"
+        - name: AUTHENTIK_LOG_LEVEL
+          value: info
+
+    # -- Authentik core --
+    authentik:
+      # secret_key is set via the existingSecret mechanism below; this
+      # placeholder is required by the chart schema but ignored.
+      secret_key: ""
+
+      error_reporting:
+        enabled: false                       # don't phone home unless asked
+
+      # Database connection points at our managed Postgres.
+      postgresql:
+        host: authentik-postgres             # the headless Service from 05
+        port: 5432
+        name: authentik
+        user: authentik
+        # password injected via existingSecret
+
+    # The chart mounts this Secret as env vars on both server and worker
+    # pods. Our SealedSecret produces a Secret with exactly these key names:
+    #   POSTGRES_PASSWORD                     (used by Postgres only)
+    #   AUTHENTIK_POSTGRESQL__PASSWORD        (used by chart)
+    #   AUTHENTIK_SECRET_KEY                  (used by chart)
+    existingSecret: authentik-credentials
+
+    # -- Server: web UI, API, embedded outpost --
+    server:
+      replicas: 1
+      service:
+        type: ClusterIP                       # Ingress fronts it, no LB needed
+      ingress:
+        enabled: false                        # we ship our own Ingress (Part 8)
+
+      pod:
+        annotations:
+          # Stakater Reloader watches Secrets/ConfigMaps and rolls pods when
+          # they change. So a `kubeseal` rotate-and-push triggers a clean
+          # restart automatically. Optional but useful.
+          reloader.stakater.com/auto: "true"
+
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: false                      # flip on after kube-prometheus-stack
+                                              # selectors are confirmed compatible
+
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: authentik-media
+        - name: templates
+          persistentVolumeClaim:
+            claimName: authentik-templates
+      volumeMounts:
+        - name: media
+          mountPath: /media
+        - name: templates
+          mountPath: /templates
+
+      resources:
+        requests:
+          cpu: 100m
+          memory: 512Mi
+        limits:
+          memory: 1Gi
+
+    # -- Worker: background tasks (emails, scheduled syncs, expirations) --
+    worker:
+      replicas: 1
+      pod:
+        annotations:
+          reloader.stakater.com/auto: "true"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: authentik-media
+        - name: templates
+          persistentVolumeClaim:
+            claimName: authentik-templates
+      volumeMounts:
+        - name: media
+          mountPath: /media
+        - name: templates
+          mountPath: /templates
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+
+    # -- Subcharts: both disabled --
+    postgresql:
+      enabled: false
+    redis:
+      enabled: false

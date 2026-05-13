@@ -89,3 +89,14 @@ metadata:
 spec:
   interval: 1h
   url: https://vmware-tanzu.github.io/helm-charts
+
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: authentik                          # name we reference from HelmRelease
+  namespace: flux-system                   # source-controller lives here
+spec:
+  interval: 1h                             # how often to refresh the chart index
+  url: https://charts.goauthentik.io
+

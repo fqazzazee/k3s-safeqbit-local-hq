@@ -1,0 +1,51 @@
+# 06-shared-pvcs.yaml
+# Two RWX PVCs on nfs-truenas, mounted by both Authentik server and worker.
+#
+# Why nfs-truenas, not longhorn:
+#   - Longhorn is RWO; would force server and worker to co-schedule, which
+#     defeats the point of running them as separate Deployments.
+#   - The nfs-subdir-external-provisioner creates one subdirectory per PVC
+#     under /mnt/nvme2tb/k8s/pvs/ on the primary TrueNAS, browsable from the
+#     TrueNAS shell, snapshotted by the dataset's snapshot policy, and
+#     replicated to the secondary every 30 minutes.
+#
+# Velero backup behavior:
+#   - These are NFS volumes, not CSI snapshots, so Velero falls back to
+#     file-system backup (Kopia FSB), which uploads the file contents to the
+#     B2 bucket at backup time.
+#   - The Postgres PVC in 03 IS a CSI volume on Longhorn, so Velero takes a
+#     CSI snapshot for it instead. Different mechanism, same destination.
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: authentik-media
+  namespace: authentik
+  labels:
+    app.kubernetes.io/name: authentik
+    app.kubernetes.io/component: media
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: authentik-templates
+  namespace: authentik
+  labels:
+    app.kubernetes.io/name: authentik
+    app.kubernetes.io/component: templates
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 1Gi

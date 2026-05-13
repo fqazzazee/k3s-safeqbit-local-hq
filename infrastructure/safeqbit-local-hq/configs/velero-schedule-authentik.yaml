@@ -1,0 +1,23 @@
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: authentik-frequent
+  namespace: velero
+spec:
+  schedule: "0 3 * */1 4"   # “At 03:00 on Thursday in every month.”
+
+  template:
+    ttl: "4320"   # 6 months retention
+    includedNamespaces:
+      - authentik
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false

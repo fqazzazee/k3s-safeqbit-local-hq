@@ -1,0 +1,110 @@
+# 04-postgres-statefulset.yaml
+# Single-replica Postgres 16. Wraps a single Pod that mounts the persistent
+# claim from 03 at /var/lib/postgresql/data.
+#
+# Why StatefulSet rather than Deployment:
+#   - Stable Pod name (authentik-postgres-0) for kubectl exec / cp.
+#   - Stable per-pod DNS via the headless Service in 05.
+#   - Cleaner ordered restart semantics if we ever scale to read replicas.
+#
+# We pin the image tag explicitly. Major Postgres upgrades become deliberate
+# operations with a Git diff, not surprise events.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: authentik-postgres
+  namespace: authentik
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: authentik
+spec:
+  serviceName: authentik-postgres            # matches the headless Service in 05
+  replicas: 1                                # single-writer; Longhorn replicates the disk
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/part-of: authentik
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: authentik
+
+    spec:
+      # Soft preference for tier=primary (meatball). Longhorn keeps a replica
+      # on every node anyway, so if meatball is down the pod can land
+      # elsewhere and the data is still there.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          env:
+            - name: POSTGRES_DB
+              value: authentik
+            - name: POSTGRES_USER
+              value: authentik
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-credentials
+                  key: POSTGRES_PASSWORD
+
+            # Tell Postgres to put the data dir in a SUBDIRECTORY of the PVC
+            # mount, not the mount root. Avoids "directory not empty / lost+found"
+            # complaints that Postgres' initdb sometimes makes against block
+            # volume mount roots.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+
+          # pg_isready ships with the image. Readiness gates Service routing
+          # so Authentik startup correctly waits for Postgres.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "authentik", "-d", "authentik"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "authentik", "-d", "authentik"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: authentik-postgres-data
