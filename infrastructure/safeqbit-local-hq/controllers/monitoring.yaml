@@ -38,6 +38,9 @@ spec:
     # PodTemplateSpec). Helm errors out unless we recreate. Set this if you
     # see "field is immutable" on chart upgrades; safe to leave default until then.
     force: true
+    # Don't block on DaemonSet rollout — node-exporter on a NotReady node
+    # will stall the upgrade indefinitely otherwise.
+    disableWait: true
   # The Grafana admin password is sensitive. Reference a SealedSecret instead
   # of putting plaintext in values. The chart supports admin.existingSecret.
   values:
