@@ -60,4 +60,14 @@ spec:
       existingSecret: cloud-credentials
     snapshotsEnabled: true
     deployNodeAgent: true
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: tier
+                  operator: In
+                  values:
+                    - primary
     schedules: {}                          # populated by app-level schedules

@@ -42,6 +42,16 @@ spec:
         memory: 32Mi
       limits:
         memory: 128Mi
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: tier
+                  operator: In
+                  values:
+                    - primary
     webhook:
       resources:
         requests:
@@ -49,6 +59,16 @@ spec:
           memory: 32Mi
         limits:
           memory: 128Mi
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values:
+                      - primary
     cainjector:
       resources:
         requests:
@@ -56,8 +76,16 @@ spec:
           memory: 32Mi
         limits:
           memory: 128Mi
-    nodeSelector:
-      tier: primary
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values:
+                      - primary
     prometheus:
       enabled: true
       servicemonitor:
