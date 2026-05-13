@@ -39,7 +39,7 @@ spec:
 
           volumeMounts:
             - name: db
-              mountPath: /opt/PasswordPusher/db
+              mountPath: /opt/PasswordPusher/storage
 
           resources:
             requests:
