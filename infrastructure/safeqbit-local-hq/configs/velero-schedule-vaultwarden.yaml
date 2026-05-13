@@ -7,7 +7,7 @@ spec:
   schedule: "0 3 * */1 5"   # “At 03:00 on Friday in every month.”
 
   template:
-    ttl: "4320"   # 6 months retention
+    ttl: "4320h0m0s"   # 6 months retention
     includedNamespaces:
       - vaultwarden
     excludedResources:

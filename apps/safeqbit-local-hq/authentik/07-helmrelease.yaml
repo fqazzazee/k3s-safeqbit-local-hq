@@ -154,8 +154,8 @@ spec:
         limits:
           memory: 512Mi
 
-    # -- Subcharts: both disabled --
+    # -- Subcharts --
     postgresql:
-      enabled: false
+      enabled: false      # we manage our own in 04-postgres-statefulset.yaml
     redis:
-      enabled: false
+      enabled: true       # authentik requires Redis; use the subchart

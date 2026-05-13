@@ -21,6 +21,11 @@ spec:
   # the corresponding cluster resources. Useful but irreversible if mistaken.
   prune: false
 
+  # Ensure sealed-secrets controller and other infra is ready before applying
+  # app manifests — otherwise SealedSecrets won't be decrypted in time.
+  dependsOn:
+    - name: infrastructure-configs
+
   # Reference to the GitRepository source defined by bootstrap.
   # This is what tells Flux which Git repo to read from.
   sourceRef:
