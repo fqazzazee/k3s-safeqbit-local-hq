@@ -9,6 +9,5 @@ data:
   PWP__HOST_DOMAIN: "passzilla.safeqbit.com"
 
   # Disable user accounts — anonymous password sharing only.
-  PWP__ENABLE_LOGINS: "false"
-  PWP__REQUIRE_MFA: "true"
+  PWP__DISABLE_LOGINS: "true"
   PWP__THEME: "cyborg"
