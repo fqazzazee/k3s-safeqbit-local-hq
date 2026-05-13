@@ -10,3 +10,5 @@ data:
 
   # Disable user accounts — anonymous password sharing only.
   PWP__DISABLE_LOGINS: "true"
+  PWP__DISABLE_SIGNUPS: "true"
+  PWP__ALLOW_ANONYMOUS: "true"
