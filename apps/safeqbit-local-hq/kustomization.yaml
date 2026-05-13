@@ -8,6 +8,7 @@ kind: Kustomization
 
 resources:
   - vaultwarden
+  - authentik
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx

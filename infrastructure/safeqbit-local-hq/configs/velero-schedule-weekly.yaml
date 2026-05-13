@@ -21,6 +21,7 @@ spec:
     # Explicitly include namespaces. Add new ones here as you migrate apps.
     includedNamespaces:
       - vaultwarden
+      - authentik
 
     excludedResources:
       - events

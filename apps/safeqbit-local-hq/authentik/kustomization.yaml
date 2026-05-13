@@ -1,0 +1,19 @@
+# apps/safeqbit-local-hq/authentik/kustomization.yaml
+# Lists every YAML file Kustomize / Flux applies for Authentik.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 01-namespace.yaml
+  - 02-sealed-secrets.yaml
+  - 03-postgres-pvc.yaml
+  - 04-postgres-statefulset.yaml
+  - 05-postgres-service.yaml
+  - 06-shared-pvcs.yaml
+  - 07-helmrelease.yaml
+  - 08-ingress.yaml
+
+commonLabels:
+  cluster: safeqbit-local-hq
+  managed-by: flux
