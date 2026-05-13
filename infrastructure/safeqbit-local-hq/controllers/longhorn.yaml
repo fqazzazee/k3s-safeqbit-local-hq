@@ -44,7 +44,7 @@ spec:
       defaultClassReplicaCount: 3
       reclaimPolicy: Delete
     longhornUI:
-      replicas: 1
+      replicas: 2
     ingress:
       enabled: true
       ingressClassName: nginx

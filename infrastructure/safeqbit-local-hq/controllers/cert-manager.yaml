@@ -36,6 +36,7 @@ spec:
     # Match what's in ~/k3s-lab/cert-manager/values.yaml
     crds:
       enabled: true
+    replicaCount: 2
     resources:
       requests:
         cpu: 10m
@@ -52,7 +53,17 @@ spec:
                   operator: In
                   values:
                     - primary
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: cert-manager
+                  app.kubernetes.io/component: controller
+              topologyKey: kubernetes.io/hostname
     webhook:
+      replicaCount: 2
       resources:
         requests:
           cpu: 10m
@@ -69,7 +80,17 @@ spec:
                     operator: In
                     values:
                       - primary
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: cert-manager-webhook
+                    app.kubernetes.io/component: webhook
+                topologyKey: kubernetes.io/hostname
     cainjector:
+      replicaCount: 2
       resources:
         requests:
           cpu: 10m
@@ -86,6 +107,15 @@ spec:
                     operator: In
                     values:
                       - primary
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: cert-manager-cainjector
+                    app.kubernetes.io/component: cainjector
+                topologyKey: kubernetes.io/hostname
     prometheus:
       enabled: true
       servicemonitor:

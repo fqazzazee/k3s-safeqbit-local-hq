@@ -33,6 +33,7 @@ spec:
     remediation:
       retries: 3
   values:
+    replicaCount: 2
     nfs:
       server: 10.10.10.5                  # primary TrueNAS
       path: /mnt/nvme2tb/k8s/pvs
@@ -65,3 +66,11 @@ spec:
                   operator: In
                   values:
                     - primary
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: nfs-subdir-external-provisioner
+              topologyKey: kubernetes.io/hostname

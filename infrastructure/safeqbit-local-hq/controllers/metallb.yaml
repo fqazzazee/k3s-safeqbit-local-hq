@@ -34,5 +34,16 @@ spec:
     remediation:
       retries: 3
     crds: CreateReplace
-  # MetalLB has very few values to override
-  values: {}
+  values:
+    controller:
+      replicas: 2
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: metallb
+                    app.kubernetes.io/component: controller
+                topologyKey: kubernetes.io/hostname
