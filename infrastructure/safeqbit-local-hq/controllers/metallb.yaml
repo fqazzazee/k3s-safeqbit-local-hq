@@ -36,7 +36,6 @@ spec:
     crds: CreateReplace
   values:
     controller:
-      replicas: 2
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
