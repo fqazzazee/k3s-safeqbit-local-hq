@@ -23,6 +23,9 @@ spec:
                     operator: In
                     values: ["primary"]
 
+      securityContext:
+        fsGroup: 1000
+
       containers:
         - name: passzilla
           # Pin to a specific version tag instead of latest before going to prod.
@@ -39,7 +42,7 @@ spec:
 
           volumeMounts:
             - name: db
-              mountPath: /opt/PasswordPusher/storage
+              mountPath: /opt/PasswordPusher/storage/db
 
           resources:
             requests:
