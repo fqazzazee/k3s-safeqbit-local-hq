@@ -37,6 +37,10 @@ spec:
             - configMapRef:
                 name: passzilla-config
 
+          volumeMounts:
+            - name: db
+              mountPath: /opt/PasswordPusher/db
+
           resources:
             requests:
               cpu: 50m
@@ -59,3 +63,8 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 30
             failureThreshold: 5
+
+      volumes:
+        - name: db
+          persistentVolumeClaim:
+            claimName: passzilla-db

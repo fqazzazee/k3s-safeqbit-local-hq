@@ -2,3 +2,16 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: passzilla
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: passzilla-db
+  namespace: passzilla
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
