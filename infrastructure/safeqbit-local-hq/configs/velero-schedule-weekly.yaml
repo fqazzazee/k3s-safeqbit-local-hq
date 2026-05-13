@@ -16,7 +16,7 @@ spec:
   template:
     # 3 months. At weekly cadence this gives us ~13 restore points at steady
     # state. More than enough for our usage in a homelab.
-    ttl: "2160"
+    ttl: "2160h0m0s"
 
     # Explicitly include namespaces. Add new ones here as you migrate apps.
     includedNamespaces:
