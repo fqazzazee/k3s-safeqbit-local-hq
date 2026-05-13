@@ -68,7 +68,6 @@ spec:
               resources:
                 requests:
                   storage: 10Gi
-        nodeSelector: {}
         affinity:
           nodeAffinity:
             preferredDuringSchedulingIgnoredDuringExecution:
@@ -108,7 +107,6 @@ spec:
           memory: 128Mi
         limits:
           memory: 512Mi
-      nodeSelector: {}
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
