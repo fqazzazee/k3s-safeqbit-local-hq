@@ -69,6 +69,3 @@ spec:
       grafanaDashboard:
         create: true
         namespace: monitoring
-        # kube-prometheus-stack discovers dashboards by this label
-        labels:
-          grafana_dashboard: "1"
