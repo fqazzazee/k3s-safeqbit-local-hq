@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl get nodes *)",
+      "Bash(kubectl get pods *)",
+      "Bash(kubectl get helmrelease *)",
+      "Bash(kubectl get kustomization *)",
+      "Bash(kubectl get certificate *)",
+      "Bash(kubectl get pvc *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl logs *)",
+      "Bash(kubectl describe *)"
+    ]
+  }
+}

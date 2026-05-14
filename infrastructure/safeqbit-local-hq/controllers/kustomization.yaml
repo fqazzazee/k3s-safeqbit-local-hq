@@ -17,3 +17,4 @@ resources:
   - monitoring.yaml
   - longhorn.yaml
   - velero.yaml
+  - cnpg.yaml

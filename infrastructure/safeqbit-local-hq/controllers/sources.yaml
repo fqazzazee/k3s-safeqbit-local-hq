@@ -100,3 +100,13 @@ spec:
   interval: 1h                             # how often to refresh the chart index
   url: https://charts.goauthentik.io
 
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cloudnative-pg
+  namespace: flux-system
+spec:
+  interval: 1h
+  url: https://cloudnative-pg.io/charts
+

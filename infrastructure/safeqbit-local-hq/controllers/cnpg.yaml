@@ -1,0 +1,74 @@
+# cnpg.yaml
+# CloudNativePG operator. Platform-level service that owns the Cluster,
+# Backup, ScheduledBackup, and Pooler CRDs. Workloads (affine, netbox,
+# authentik, ...) declare their own Cluster CRs in their app namespaces;
+# this controller reconciles them all.
+#
+# The operator is namespaced to cnpg-system but watches all namespaces by
+# default, which is what we want for shared-platform use.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cnpg-system
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cnpg
+  namespace: cnpg-system
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: cloudnative-pg
+      version: 0.28.2                     # check `helm list -n cnpg-system`
+      sourceRef:
+        kind: HelmRepository
+        name: cloudnative-pg
+        namespace: flux-system
+      interval: 1h
+  releaseName: cnpg
+  install:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  upgrade:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  values:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: tier
+                  operator: In
+                  values:
+                    - primary
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: cloudnative-pg
+              topologyKey: kubernetes.io/hostname
+    monitoring:
+      podMonitorEnabled: true
+      grafanaDashboard:
+        create: true
+        namespace: monitoring
+        # kube-prometheus-stack discovers dashboards by this label
+        labels:
+          grafana_dashboard: "1"
