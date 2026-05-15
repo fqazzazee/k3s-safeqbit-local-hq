@@ -20,7 +20,7 @@ metadata:
   name: authentik-cnpg
   namespace: authentik
 spec:
-  instances: 1
+  instances: 2
 
   postgresql:
     parameters:
