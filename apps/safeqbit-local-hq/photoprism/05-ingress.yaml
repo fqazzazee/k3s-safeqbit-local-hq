@@ -1,0 +1,38 @@
+# 05-ingress.yaml
+# Ingress for PhotoPrism at https://photoprism.local.safeqbit.com
+#
+# proxy-body-size 0: PhotoPrism imports large photo and video files.
+# proxy-read-timeout 600s: indexing and transcoding responses can be slow.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: photoprism
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+
+  tls:
+    - hosts:
+        - photoprism.local.safeqbit.com
+      secretName: photoprism-tls
+
+  rules:
+    - host: photoprism.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: photoprism
+                port:
+                  number: 2342

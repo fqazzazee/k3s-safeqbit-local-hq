@@ -1,0 +1,112 @@
+# 09-resources.yaml
+# Resource requests/limits and optional node pinning for all Immich workloads.
+#
+# ── CPU UNITS ────────────────────────────────────────────────────────────────
+#   1000m = 1 core   |   500m = 0.5 cores   |   200m = 0.2 cores
+#   requests = guaranteed floor (scheduler uses this for placement)
+#   limits   = hard ceiling (process is throttled if it tries to exceed this)
+#   Tip: omit cpu limits entirely if you want bursting without throttle.
+#
+# ── NODE PINNING ─────────────────────────────────────────────────────────────
+#   Each deployment section below has a commented nodeSelector block.
+#   To pin a workload to a specific (beefed-up) node, uncomment the two
+#   lines and set the hostname. Leave commented to let the scheduler decide.
+#   Find node hostnames with: kubectl get nodes
+#   You can set different nodes per workload — e.g. pin ML to the GPU/RAM
+#   node but leave postgres floating.
+# ─────────────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-postgres
+  namespace: immich
+spec:
+  template:
+    spec:
+      # nodeSelector:
+      #   kubernetes.io/hostname: "<hostname>"   # e.g. k3s-worker-02
+      containers:
+        - name: postgres
+          resources:
+            requests:
+              cpu: 100m      # 0.1 cores
+              memory: 256Mi
+            limits:
+              cpu: 1000m     # 1 core
+              memory: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-redis
+  namespace: immich
+spec:
+  template:
+    spec:
+      # nodeSelector:
+      #   kubernetes.io/hostname: "<hostname>"
+      containers:
+        - name: redis
+          resources:
+            requests:
+              cpu: 25m       # 0.025 cores
+              memory: 64Mi
+            limits:
+              cpu: 200m      # 0.2 cores
+              memory: 256Mi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-server
+  namespace: immich
+spec:
+  template:
+    spec:
+      # nodeSelector:
+      #   kubernetes.io/hostname: "<hostname>"
+      initContainers:
+        - name: wait-for-db
+          resources:
+            requests:
+              cpu: 10m       # 0.01 cores
+              memory: 32Mi
+            limits:
+              cpu: 100m      # 0.1 cores
+              memory: 64Mi
+      containers:
+        - name: immich-server
+          resources:
+            requests:
+              cpu: 200m      # 0.2 cores
+              memory: 512Mi
+            limits:
+              cpu: 2000m     # 2 cores
+              memory: 2Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+spec:
+  template:
+    spec:
+      # nodeSelector:
+      #   kubernetes.io/hostname: "<hostname>"   # good candidate to pin to
+      #                                          # the beefiest node — CLIP
+      #                                          # inference is CPU-bound
+      containers:
+        - name: immich-machine-learning
+          resources:
+            requests:
+              cpu: 500m      # 0.5 cores
+              memory: 1Gi
+            limits:
+              cpu: 4000m     # 4 cores — raise if bulk indexing is slow
+              memory: 4Gi

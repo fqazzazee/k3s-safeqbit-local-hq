@@ -1,0 +1,124 @@
+# 04-photoprism.yaml
+# PhotoPrism — photo organization, indexing, and browsing.
+#
+# seccompProfile: Unconfined at pod level — PhotoPrism uses libraw and
+# ffmpeg with syscalls that trip the default seccomp policy.
+#
+# PHOTOPRISM_SITE_URL: updated from localhost to the k8s hostname.
+# PHOTOPRISM_DISABLE_TLS: TLS is terminated at the nginx ingress.
+# SQLite database lives inside /photoprism/storage (NFS-backed PVC),
+# so no separate database service is needed.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photoprism
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: photoprism
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: photoprism
+        app.kubernetes.io/component: server
+    spec:
+      securityContext:
+        seccompProfile:
+          type: Unconfined
+
+      containers:
+        - name: photoprism
+          image: photoprism/photoprism:latest
+          ports:
+            - containerPort: 2342
+          env:
+            - name: PHOTOPRISM_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: photoprism-credentials
+                  key: admin-password
+            - name: PHOTOPRISM_SITE_URL
+              value: "https://photoprism.local.safeqbit.com/"
+            - name: PHOTOPRISM_STORAGE_PATH
+              value: "/photoprism/storage"
+            - name: PHOTOPRISM_ORIGINALS_PATH
+              value: "/photoprism/originals"
+            - name: PHOTOPRISM_IMPORT_PATH
+              value: "/photoprism/import"
+            - name: PHOTOPRISM_IMPORT_BY_DATE
+              value: "true"
+            - name: PHOTOPRISM_READONLY
+              value: "false"
+            - name: PHOTOPRISM_DISABLE_TLS
+              value: "true"
+          volumeMounts:
+            - name: storage
+              mountPath: /photoprism/storage
+            - name: originals
+              mountPath: /photoprism/originals
+            - name: import
+              mountPath: /photoprism/import
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 2342
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 2342
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 5
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: photoprism-storage
+        - name: originals
+          persistentVolumeClaim:
+            claimName: photoprism-originals
+        - name: import
+          persistentVolumeClaim:
+            claimName: photoprism-import
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: photoprism
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: server
+spec:
+  selector:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: server
+  ports:
+    - port: 2342
+      targetPort: 2342

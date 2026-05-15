@@ -1,0 +1,103 @@
+# 03-postgres.yaml
+# Immich requires a custom Postgres image that bundles vectorchord (vector
+# similarity search) and pgvectors (face clustering). Standard CNPG images
+# do not include these extensions, so this is a plain Deployment.
+#
+# strategy: Recreate ensures the old pod is terminated before the new one
+# starts, preventing two pods from fighting over the RWO Longhorn PVC.
+#
+# Manual pg_dump:
+#   kubectl exec -n immich deploy/immich-postgres -- \
+#     pg_dump -U postgres-user immich > immich-$(date +%F).sql
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-postgres
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: immich
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: immich
+        app.kubernetes.io/component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: immich-credentials
+                  key: db-password
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: immich-credentials
+                  key: db-username
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: immich-credentials
+                  key: db-name
+            - name: POSTGRES_INITDB_ARGS
+              value: "--data-checksums"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: immich-postgres-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-postgres
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: postgres
+spec:
+  selector:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

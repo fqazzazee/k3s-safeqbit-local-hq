@@ -1,0 +1,62 @@
+# 04-redis.yaml
+# Valkey for Immich — job queue and session cache.
+# No password and no persistence: Immich reconnects automatically on
+# restart and nothing durable lives in Redis.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-redis
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: immich
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: immich
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: docker.io/valkey/valkey:8
+          ports:
+            - containerPort: 6379
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-redis
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: redis
+spec:
+  selector:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: redis
+  ports:
+    - port: 6379
+      targetPort: 6379

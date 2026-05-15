@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 01-namespace.yaml
+  - 02-sealed-secrets.yaml
+  - 03-pvcs.yaml
+  - 04-photoprism.yaml
+  - 05-ingress.yaml
+
+patchesStrategicMerge:
+  - 06-resources.yaml

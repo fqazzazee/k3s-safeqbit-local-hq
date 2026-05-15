@@ -1,0 +1,87 @@
+# 07-immich-ml.yaml
+# Immich machine learning service — CLIP embeddings, smart search,
+# face detection and clustering.
+#
+# Model cache on Longhorn (10Gi): models are downloaded on first use and
+# persisted across pod restarts. First-boot may take several minutes while
+# models are fetched.
+#
+# Memory limit 4Gi: CLIP models load entirely into RAM. 4Gi is sufficient
+# for the default ViT-B-32 model; raise to 6Gi if you switch to ViT-L-14.
+# MPLCONFIGDIR redirects matplotlib's config writes to the cache PVC.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: machine-learning
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: immich
+      app.kubernetes.io/component: machine-learning
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: immich
+        app.kubernetes.io/component: machine-learning
+    spec:
+      containers:
+        - name: immich-machine-learning
+          image: ghcr.io/immich-app/immich-machine-learning:release
+          ports:
+            - containerPort: 3003
+          env:
+            - name: MPLCONFIGDIR
+              value: /cache/matplotlib
+          volumeMounts:
+            - name: model-cache
+              mountPath: /cache
+          readinessProbe:
+            tcpSocket:
+              port: 3003
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 3003
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 5
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: immich-model-cache
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-machine-learning
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: machine-learning
+spec:
+  selector:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: machine-learning
+  ports:
+    - port: 3003
+      targetPort: 3003

@@ -1,0 +1,146 @@
+# 03-pvcs.yaml
+# Static NFS PVs for Photoprism — all three paths are pre-existing
+# directories on TrueNAS; no data migration needed.
+#
+# photoprism-originals-pv points to the same NFS path as immich-external-pv
+# (/mnt/mach2/mach2nas/Media/Memories/originals). Two separate PVs,
+# two PVCs — the NFS server handles concurrent access. Photoprism mounts
+# read-write to sort and import; Immich mounts that path read-only.
+#
+# SQLite database lives inside /photoprism/storage (photoprism-storage PVC),
+# so Photoprism needs no separate database service.
+
+---
+# Static PV: Memories/originals (shared with immich-external-pv; Photoprism is RW)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: photoprism-originals-pv
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: originals
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    name: photoprism-originals
+    namespace: photoprism
+  nfs:
+    server: 10.10.10.5
+    path: /mnt/mach2/mach2nas/Media/Memories/originals
+  mountOptions:
+    - nfsvers=4.2
+    - hard
+    - noatime
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: photoprism-originals
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: originals
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: photoprism-originals-pv
+  resources:
+    requests:
+      storage: 6Ti
+
+---
+# Static PV: Memories/storage (thumbnails, SQLite DB, sidecar metadata)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: photoprism-storage-pv
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: storage
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    name: photoprism-storage
+    namespace: photoprism
+  nfs:
+    server: 10.10.10.5
+    path: /mnt/mach2/mach2nas/Media/Memories/storage
+  mountOptions:
+    - nfsvers=4.2
+    - hard
+    - noatime
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: photoprism-storage
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: photoprism-storage-pv
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Static PV: Memories/import (drop folder for new photos)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: photoprism-import-pv
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: import
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    name: photoprism-import
+    namespace: photoprism
+  nfs:
+    server: 10.10.10.5
+    path: /mnt/mach2/mach2nas/Media/Memories/import
+  mountOptions:
+    - nfsvers=4.2
+    - hard
+    - noatime
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: photoprism-import
+  namespace: photoprism
+  labels:
+    app.kubernetes.io/name: photoprism
+    app.kubernetes.io/component: import
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: photoprism-import-pv
+  resources:
+    requests:
+      storage: 1Ti

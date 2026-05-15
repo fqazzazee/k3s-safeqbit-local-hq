@@ -1,0 +1,40 @@
+# 08-ingress.yaml
+# Ingress for Immich at https://immich.local.safeqbit.com
+#
+# proxy-body-size 0: disables nginx's 1m default limit; Immich uploads
+# large photos and videos and would fail silently otherwise.
+# proxy-read-timeout / proxy-send-timeout 600s: covers video uploads
+# and long-running transcoding responses.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: immich
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+
+  tls:
+    - hosts:
+        - immich.local.safeqbit.com
+      secretName: immich-tls
+
+  rules:
+    - host: immich.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: immich-server
+                port:
+                  number: 2283

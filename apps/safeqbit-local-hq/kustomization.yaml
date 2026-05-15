@@ -12,6 +12,8 @@ resources:
   - passzilla
   - netbox
   - affine
+  - immich
+  - photoprism
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx

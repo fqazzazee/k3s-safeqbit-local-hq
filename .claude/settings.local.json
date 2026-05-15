@@ -9,7 +9,9 @@
       "Bash(kubectl get pvc *)",
       "Bash(kubectl get *)",
       "Bash(kubectl logs *)",
-      "Bash(kubectl describe *)"
+      "Bash(kubectl describe *)",
+      "Read(//tmp/**)",
+      "Read(//home/tesla/**)"
     ]
   }
 }

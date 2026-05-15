@@ -1,0 +1,202 @@
+# 05-pvcs.yaml
+# Storage for Immich.
+#
+# Longhorn (replicated RWO):
+#   immich-postgres-data  10Gi  — Postgres 14 data directory
+#   immich-config          1Gi  — server runtime config
+#   immich-model-cache    10Gi  — ML model cache; CLIP/face models ~100–500MB each
+#
+# Static NFS PVs (storageClassName: "" + volumeName binding, no data migration):
+#   immich-data-pv      → /mnt/mach2/mach2nas/Media/immich            → /data
+#   immich-export-pv    → /mnt/mach2/mach2nas/Media/Immich-Export      → /export
+#   immich-external-pv  → /mnt/mach2/mach2nas/Media/Memories/originals → /external (readOnly)
+#
+# Note: immich-external-pv and photoprism-originals-pv (photoprism namespace)
+# both point to Memories/originals. Two separate PVs, two PVCs — the NFS
+# server handles concurrent access. Immich mounts read-only; Photoprism RW.
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-postgres-data
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-config
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-model-cache
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: machine-learning
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# Static PV: Immich library
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-data-pv
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: data
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    name: immich-data
+    namespace: immich
+  nfs:
+    server: 10.10.10.5
+    path: /mnt/mach2/mach2nas/Media/immich
+  mountOptions:
+    - nfsvers=4.2
+    - hard
+    - noatime
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-data
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: immich-data-pv
+  resources:
+    requests:
+      storage: 1Ti
+
+---
+# Static PV: Immich export
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-export-pv
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: export
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    name: immich-export
+    namespace: immich
+  nfs:
+    server: 10.10.10.5
+    path: /mnt/mach2/mach2nas/Media/Immich-Export
+  mountOptions:
+    - nfsvers=4.2
+    - hard
+    - noatime
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-export
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: export
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: immich-export-pv
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Static PV: Memories/originals (shared path; Immich mounts read-only)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-external-pv
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: external
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    name: immich-external
+    namespace: immich
+  nfs:
+    server: 10.10.10.5
+    path: /mnt/mach2/mach2nas/Media/Memories/originals
+  mountOptions:
+    - nfsvers=4.2
+    - hard
+    - noatime
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-external
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich
+    app.kubernetes.io/component: external
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: immich-external-pv
+  resources:
+    requests:
+      storage: 6Ti

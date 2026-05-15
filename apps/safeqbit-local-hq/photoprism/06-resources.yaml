@@ -1,0 +1,36 @@
+# 06-resources.yaml
+# Resource requests/limits and optional node pinning for PhotoPrism.
+#
+# ── CPU UNITS ────────────────────────────────────────────────────────────────
+#   1000m = 1 core   |   500m = 0.5 cores   |   200m = 0.2 cores
+#   requests = guaranteed floor (scheduler uses this for placement)
+#   limits   = hard ceiling (process is throttled if it tries to exceed this)
+#   Tip: omit cpu limits entirely if you want bursting without throttle.
+#
+# ── NODE PINNING ─────────────────────────────────────────────────────────────
+#   Uncomment the nodeSelector block and set the hostname to pin PhotoPrism
+#   to a specific node. Leave commented to let the scheduler decide.
+#   Find node hostnames with: kubectl get nodes
+# ─────────────────────────────────────────────────────────────────────────────
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photoprism
+  namespace: photoprism
+spec:
+  template:
+    spec:
+      # nodeSelector:
+      #   kubernetes.io/hostname: "<hostname>"   # e.g. k3s-worker-02
+      containers:
+        - name: photoprism
+          resources:
+            requests:
+              cpu: 200m      # 0.2 cores
+              memory: 512Mi
+            limits:
+              cpu: 4000m     # 4 cores — initial library scan and RAW
+              memory: 2Gi    # processing are very CPU-intensive; raise
+                             # cpu limit freely if the node can support it
