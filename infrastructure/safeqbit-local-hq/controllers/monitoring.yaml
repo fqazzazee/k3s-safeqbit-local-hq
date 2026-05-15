@@ -53,10 +53,11 @@ spec:
         etcd: true
     prometheus:
       prometheusSpec:
-        # Match all PodMonitors regardless of labels. The default selector
-        # (release: monitoring) blocks third-party operators like CNPG that
-        # create PodMonitors without that label and have no way to inject it.
-        podMonitorSelector: {}
+        # Disable the chart's default podMonitorSelector (matchLabels: release: monitoring).
+        # With this false, Prometheus gets no selector and matches ALL PodMonitors
+        # in any namespace. Required for third-party operators like CNPG that
+        # create PodMonitors without the release label and have no way to inject it.
+        podMonitorSelectorNilUsesHelmValues: false
         retention: 30d
         resources:
           requests:
