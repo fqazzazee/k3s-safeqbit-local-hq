@@ -8,6 +8,15 @@
 ![Let's Encrypt](https://img.shields.io/badge/Let's%20Encrypt-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)
 ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)
 ![Grafana](https://img.shields.io/badge/Grafana-F46800?style=for-the-badge&logo=grafana&logoColor=white)
+![CloudNativePG](https://img.shields.io/badge/CloudNativePG-336791?style=for-the-badge&logo=postgresql&logoColor=white)
+![Vaultwarden](https://img.shields.io/badge/Vaultwarden-175DDC?style=for-the-badge&logo=vaultwarden&logoColor=white)
+![Authentik](https://img.shields.io/badge/Authentik-FD4B2D?style=for-the-badge&logo=authentik&logoColor=white)
+![Immich](https://img.shields.io/badge/Immich-4250AF?style=for-the-badge&logo=immich&logoColor=white)
+![PhotoPrism](https://img.shields.io/badge/PhotoPrism-7B4FFF?style=for-the-badge&logo=photoprism&logoColor=white)
+![NetBox](https://img.shields.io/badge/NetBox-006F94?style=for-the-badge&logo=netbox&logoColor=white)
+![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-5CDD8B?style=for-the-badge&logo=uptimekuma&logoColor=black)
+![AFFiNE](https://img.shields.io/badge/AFFiNE-1E1E1E?style=for-the-badge&logo=affine&logoColor=white)
+![Passzilla](https://img.shields.io/badge/Passzilla-3D6EB4?style=for-the-badge&logoColor=white)
 
 A production-shaped homelab Kubernetes cluster running on three Proxmox-hosted nodes,
 managed entirely through GitOps. Built and operated by Fadi Qazzazee.
@@ -101,6 +110,14 @@ Dynamic provisioning is handled by `nfs-subdir-external-provisioner`. PVC creati
 automatically provisions a dedicated subdirectory on TrueNAS — no manual NFS export
 management per workload.
 
+### TrueNAS - bulk media storage
+
+A second NFS provisioner serves the bulk media library on a separate TrueNAS dataset
+backed by a spinning-disk array. Immich and Photoprism access their existing media
+directories via static PVs pointing directly to pre-existing paths on this share —
+no data migration required. New workloads that need bulk media capacity use dynamic
+provisioning via the `nfs-bulk-media` StorageClass (RWX, Retain policy).
+
 ### TrueNAS replication target
 
 A secondary TrueNAS server with 4 TB of capacity serves as the replication target for
@@ -180,6 +197,24 @@ using `kubeseal` and stored in the repository as `SealedSecret` objects. Decrypt
 happens exclusively in-cluster via the sealed-secrets controller. The master encryption
 key is stored offline in an encrypted password manager.
 
+### CloudNativePG - PostgreSQL operator
+
+Manages all PostgreSQL databases in the cluster. Deployed in `cnpg-system` with 2 replicas
+(pod anti-affinity across nodes) and watches all namespaces. Each workload that requires
+Postgres declares its own `Cluster` CR in its own namespace — CNPG reconciles them all.
+
+CNPG automatically provisions three Services per cluster (`-rw`, `-ro`, `-r`) for write,
+read-only, and round-robin-read access. Credentials are generated per cluster into a
+sealed secret. Backups use VolumeSnapshot via the Longhorn CSI interface, issuing a
+`CHECKPOINT` before snapshotting to guarantee a clean, application-consistent state.
+
+| Workload | Namespace | Instances | Notes |
+|---|---|---|---|
+| Authentik | `authentik` | 2 | SSO backend — hot standby for fast failover |
+| Grafana | `monitoring` | 1 | Migrated from SQLite/NFS (deadlock issue) |
+| NetBox | `netbox` | 1 | — |
+| AFFiNE | `affine` | 1 | — |
+
 ### kube-prometheus-stack - observability
 
 Full-stack cluster observability: Prometheus for metrics collection and Grafana for
@@ -250,7 +285,8 @@ Longhorn volume data (backed up to B2 via Velero), and TrueNAS NFS data
 | Uptime Kuma | Uptime and availability monitoring |
 | Grafana | Metrics dashboards and visualization |
 | Prometheus | Metrics collection and alerting |
-| Affine | Collaborative knowledge base |
+| AFFiNE | Collaborative knowledge base |
+| Passzilla | One-time secret and password sharing |
 
 ### Custom and development workloads
 
@@ -291,7 +327,9 @@ as production services, providing a realistic deployment environment for interna
 | Certificate management | cert-manager + Let's Encrypt (DNS-01 / Cloudflare) |
 | Secret management | Sealed Secrets (Bitnami) |
 | Primary storage | Longhorn (distributed block, CSI) |
-| Secondary storage | nfs-subdir-external-provisioner + TrueNAS NFS |
+| Secondary storage | nfs-subdir-external-provisioner + TrueNAS NFS (k8s workloads) |
+| Bulk media storage | nfs-subdir-external-provisioner + TrueNAS NFS (media library) |
+| Database operator | CloudNativePG (CNPG) |
 | NAS replication | TrueNAS to TrueNAS (SSH, 30-minute interval) |
 | Backup | Velero + Backblaze B2 |
 | Observability | kube-prometheus-stack (Prometheus + Grafana) |
