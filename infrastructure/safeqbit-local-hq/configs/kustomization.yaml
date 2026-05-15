@@ -19,3 +19,4 @@ resources:
   - velero-schedule-vaultwarden.yaml
   - velero-schedule-authentik.yaml
   - grafana-cnpg.yaml
+  - velero-schedule-netbox.yaml

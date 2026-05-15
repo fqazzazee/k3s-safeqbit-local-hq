@@ -1,0 +1,137 @@
+# 07-worker.yaml
+# Netbox RQ worker Deployment.
+#
+# Same image and env block as the web pod, but runs the rqworker management
+# command instead of gunicorn. Handles async tasks: webhooks, custom scripts,
+# background jobs triggered from the UI.
+#
+# Shares the same NFS PVCs as the web pod (media/reports/scripts) so that
+# script output and media uploads are accessible by both.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-worker
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netbox
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netbox
+        app.kubernetes.io/component: worker
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - until pg_isready -h netbox-cnpg-rw -p 5432 -U netbox; do sleep 2; done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-cnpg-app
+                  key: password
+      containers:
+        - name: worker
+          image: netboxcommunity/netbox:v4.2-3.2.0
+          command: ["/opt/netbox/venv/bin/python", "/opt/netbox/netbox/manage.py", "rqworker"]
+          env:
+            - name: DB_HOST
+              value: netbox-cnpg-rw
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: netbox
+            - name: DB_USER
+              value: netbox
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-cnpg-app
+                  key: password
+
+            - name: REDIS_HOST
+              value: netbox-redis-tasks
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_DATABASE
+              value: "0"
+            - name: REDIS_SSL
+              value: "false"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: redis-password
+
+            - name: REDIS_CACHE_HOST
+              value: netbox-redis-cache
+            - name: REDIS_CACHE_PORT
+              value: "6379"
+            - name: REDIS_CACHE_DATABASE
+              value: "1"
+            - name: REDIS_CACHE_SSL
+              value: "false"
+            - name: REDIS_CACHE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: redis-cache-password
+
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: secret-key
+            - name: ALLOWED_HOSTS
+              value: "netbox.local.safeqbit.com"
+            - name: TIME_ZONE
+              value: "America/New_York"
+
+            - name: SKIP_SUPERUSER
+              value: "true"
+
+          volumeMounts:
+            - name: media
+              mountPath: /opt/netbox/netbox/media
+            - name: reports
+              mountPath: /opt/netbox/netbox/reports
+            - name: scripts
+              mountPath: /opt/netbox/netbox/scripts
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: netbox-media
+        - name: reports
+          persistentVolumeClaim:
+            claimName: netbox-reports
+        - name: scripts
+          persistentVolumeClaim:
+            claimName: netbox-scripts

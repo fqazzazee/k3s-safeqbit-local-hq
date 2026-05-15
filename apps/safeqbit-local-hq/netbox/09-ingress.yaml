@@ -1,0 +1,34 @@
+# 09-ingress.yaml
+# Ingress for Netbox at https://netbox.local.safeqbit.com
+# cert-manager auto-issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: netbox
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+spec:
+  ingressClassName: nginx
+
+  tls:
+    - hosts:
+        - netbox.local.safeqbit.com
+      secretName: netbox-tls
+
+  rules:
+    - host: netbox.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: netbox
+                port:
+                  number: 8080

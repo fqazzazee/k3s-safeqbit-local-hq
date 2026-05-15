@@ -1,0 +1,60 @@
+# 05-pvcs.yaml
+# Shared RWX volumes for Netbox, mounted by both the web pod and worker pod.
+#
+# nfs-truenas (ReadWriteMany) is required here because the web Deployment
+# and worker Deployment are separate pods. Longhorn is RWO and would force
+# them to co-schedule on the same node, defeating the separation.
+#
+# Velero backs these up via filesystem backup (Kopia) to B2, since NFS
+# volumes don't support CSI snapshots.
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: netbox-media
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: media
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: netbox-reports
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: reports
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: netbox-scripts
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: scripts
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 1Gi

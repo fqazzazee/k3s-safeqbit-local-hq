@@ -1,0 +1,183 @@
+# 04-redis.yaml
+# Two Redis instances for Netbox:
+#
+#   netbox-redis-tasks  — persistent (Longhorn RWO 1Gi), database 0
+#     Used by the RQ task queue. Needs durability — a crashed task queue
+#     means background jobs (webhooks, scripts) are silently dropped.
+#
+#   netbox-redis-cache  — ephemeral, allkeys-lru, maxmemory 512mb, database 1
+#     Used as an object cache. Safe to lose; Netbox rebuilds it from Postgres.
+#
+# Passwords are injected via shell so the secret value lands in the Redis
+# process args without appearing in the manifest or pod spec env dump.
+
+---
+# PVC for the persistent task-queue Redis
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: netbox-redis-tasks
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-tasks
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-redis-tasks
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-tasks
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netbox
+      app.kubernetes.io/component: redis-tasks
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netbox
+        app.kubernetes.io/component: redis-tasks
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - redis-server --requirepass "$REDIS_PASSWORD" --appendonly yes
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: redis-password
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: netbox-redis-tasks
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netbox-redis-tasks
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-tasks
+spec:
+  selector:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-tasks
+  ports:
+    - port: 6379
+      targetPort: 6379
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-redis-cache
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netbox
+      app.kubernetes.io/component: redis-cache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netbox
+        app.kubernetes.io/component: redis-cache
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - redis-server --requirepass "$REDIS_CACHE_PASSWORD" --maxmemory 512mb --maxmemory-policy allkeys-lru
+          env:
+            - name: REDIS_CACHE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: redis-cache-password
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 640Mi
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netbox-redis-cache
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-cache
+spec:
+  selector:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: redis-cache
+  ports:
+    - port: 6379
+      targetPort: 6379

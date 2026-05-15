@@ -1,0 +1,47 @@
+# 03-cnpg-cluster.yaml
+# CNPG Cluster for Netbox's PostgreSQL database.
+#
+# The operator (in cnpg-system) creates:
+#   - netbox-cnpg-1 pod (Postgres 16)
+#   - Three services: netbox-cnpg-rw, netbox-cnpg-ro, netbox-cnpg-r
+#   - Secret netbox-cnpg-app with the app user credentials
+#
+# instances: 1 — Netbox is a homelab network inventory tool, not a dependency
+# for other services. 60s reschedule time on node failure is acceptable.
+# Longhorn replicates the PVC across 2 nodes, so data is safe.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: netbox-cnpg
+  namespace: netbox
+spec:
+  instances: 1
+
+  bootstrap:
+    initdb:
+      database: netbox
+      owner: netbox
+
+  storage:
+    storageClass: longhorn
+    size: 5Gi
+
+  backup:
+    volumeSnapshot:
+      className: longhorn-velero
+      snapshotOwnerReference: backup
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 80
+          preference:
+            matchExpressions:
+              - key: tier
+                operator: In
+                values: ["primary"]
+    topologyKey: kubernetes.io/hostname
+
+  monitoring:
+    enablePodMonitor: true

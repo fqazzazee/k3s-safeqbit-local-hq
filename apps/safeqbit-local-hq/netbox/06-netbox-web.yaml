@@ -1,0 +1,197 @@
+# 06-netbox-web.yaml
+# Netbox web (gunicorn) Deployment + ClusterIP Service.
+#
+# The container image is netboxcommunity/netbox which reads configuration
+# entirely from environment variables and generates configuration.py at
+# startup. No ConfigMap needed.
+#
+# DB_HOST points at netbox-cnpg-rw (CNPG primary service).
+# DB_PASSWORD comes from the netbox-cnpg-app Secret auto-created by CNPG.
+# REDIS_* / REDIS_CACHE_* point at the two Redis Deployments in 04-redis.yaml.
+# SECRET_KEY and the superuser credentials come from netbox-credentials (SealedSecret).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netbox
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netbox
+        app.kubernetes.io/component: web
+    spec:
+      initContainers:
+        # Wait for the CNPG primary to accept connections before starting.
+        - name: wait-for-db
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - until pg_isready -h netbox-cnpg-rw -p 5432 -U netbox; do sleep 2; done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-cnpg-app
+                  key: password
+      containers:
+        - name: netbox
+          image: netboxcommunity/netbox:v4.2-3.2.0
+          ports:
+            - containerPort: 8080
+          env:
+            # --- Database ---
+            - name: DB_HOST
+              value: netbox-cnpg-rw
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: netbox
+            - name: DB_USER
+              value: netbox
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-cnpg-app
+                  key: password
+
+            # --- Redis task queue ---
+            - name: REDIS_HOST
+              value: netbox-redis-tasks
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_DATABASE
+              value: "0"
+            - name: REDIS_SSL
+              value: "false"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: redis-password
+
+            # --- Redis cache ---
+            - name: REDIS_CACHE_HOST
+              value: netbox-redis-cache
+            - name: REDIS_CACHE_PORT
+              value: "6379"
+            - name: REDIS_CACHE_DATABASE
+              value: "1"
+            - name: REDIS_CACHE_SSL
+              value: "false"
+            - name: REDIS_CACHE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: redis-cache-password
+
+            # --- Netbox application ---
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: secret-key
+            - name: ALLOWED_HOSTS
+              value: "netbox.local.safeqbit.com"
+            - name: CSRF_TRUSTED_ORIGINS
+              value: "https://netbox.local.safeqbit.com"
+            - name: TIME_ZONE
+              value: "America/New_York"
+
+            # --- Superuser (idempotent — skipped if user already exists) ---
+            - name: SKIP_SUPERUSER
+              value: "false"
+            - name: SUPERUSER_NAME
+              value: admin
+            - name: SUPERUSER_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: superuser-email
+            - name: SUPERUSER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: superuser-password
+            - name: SUPERUSER_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-credentials
+                  key: superuser-api-token
+
+          volumeMounts:
+            - name: media
+              mountPath: /opt/netbox/netbox/media
+            - name: reports
+              mountPath: /opt/netbox/netbox/reports
+            - name: scripts
+              mountPath: /opt/netbox/netbox/scripts
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 5
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: netbox-media
+        - name: reports
+          persistentVolumeClaim:
+            claimName: netbox-reports
+        - name: scripts
+          persistentVolumeClaim:
+            claimName: netbox-scripts
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netbox
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: web
+spec:
+  selector:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: web
+  ports:
+    - port: 8080
+      targetPort: 8080

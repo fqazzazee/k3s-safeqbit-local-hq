@@ -1,0 +1,97 @@
+# 08-housekeeping.yaml
+# Netbox housekeeping CronJob.
+#
+# Runs /opt/netbox/housekeeping.sh daily at 00:30 UTC. The script:
+#   - Purges expired change log records (past changelogRetention days)
+#   - Removes stale sessions
+#   - Syncs object counts
+#
+# SKIP_SUPERUSER: true because this pod never needs to create a superuser.
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: netbox-housekeeping
+  namespace: netbox
+  labels:
+    app.kubernetes.io/name: netbox
+    app.kubernetes.io/component: housekeeping
+spec:
+  schedule: "30 0 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: netbox
+            app.kubernetes.io/component: housekeeping
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: housekeeping
+              image: netboxcommunity/netbox:v4.2-3.2.0
+              command: ["/opt/netbox/housekeeping.sh"]
+              env:
+                - name: DB_HOST
+                  value: netbox-cnpg-rw
+                - name: DB_PORT
+                  value: "5432"
+                - name: DB_NAME
+                  value: netbox
+                - name: DB_USER
+                  value: netbox
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: netbox-cnpg-app
+                      key: password
+
+                - name: REDIS_HOST
+                  value: netbox-redis-tasks
+                - name: REDIS_PORT
+                  value: "6379"
+                - name: REDIS_DATABASE
+                  value: "0"
+                - name: REDIS_SSL
+                  value: "false"
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: netbox-credentials
+                      key: redis-password
+
+                - name: REDIS_CACHE_HOST
+                  value: netbox-redis-cache
+                - name: REDIS_CACHE_PORT
+                  value: "6379"
+                - name: REDIS_CACHE_DATABASE
+                  value: "1"
+                - name: REDIS_CACHE_SSL
+                  value: "false"
+                - name: REDIS_CACHE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: netbox-credentials
+                      key: redis-cache-password
+
+                - name: SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: netbox-credentials
+                      key: secret-key
+                - name: ALLOWED_HOSTS
+                  value: "netbox.local.safeqbit.com"
+                - name: TIME_ZONE
+                  value: "America/New_York"
+                - name: SKIP_SUPERUSER
+                  value: "true"
+
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
