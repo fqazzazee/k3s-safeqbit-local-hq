@@ -4,7 +4,7 @@ metadata:
   name: authentik-frequent
   namespace: velero
 spec:
-  schedule: "0 3 * */1 4"   # “At 03:00 on Thursday in every month.”
+  schedule: “0 3 1,15 * *”   # “At 03:00 on the 1st and 15th of every month (biweekly).”
 
   template:
     ttl: "4320h0m0s"   # 6 months retention

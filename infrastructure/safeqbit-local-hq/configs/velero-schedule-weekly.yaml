@@ -9,9 +9,9 @@ metadata:
   name: weekly-everything
   namespace: velero
 spec:
-  schedule: "0 3 * * 0"     
-  # Sunday 03:00 UTC = Saturday 23:00 EDT. Off-peak, predictable.
-  # cron schedule is well explained here: https://crontab.guru/#0_3_*_*_0
+  schedule: "0 3 1,15 * *"
+  # 1st and 15th of the month at 03:00 UTC. Biweekly cadence keeps backup
+  # windows predictable and reduces B2 storage churn vs weekly.
 
   template:
     # 3 months. At weekly cadence this gives us ~13 restore points at steady
