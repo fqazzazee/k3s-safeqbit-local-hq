@@ -7,9 +7,8 @@ kind: Kustomization
 resources:
   - 01-namespace.yaml
   - 02-sealed-secrets.yaml
-  - 03-postgres-pvc.yaml
-  - 04-postgres-statefulset.yaml
-  - 05-postgres-service.yaml
+  - 03-cnpg-cluster.yaml
+  - 04-cnpg-scheduled-backup.yaml
   - 06-shared-pvcs.yaml
   - 07-helmrelease.yaml
   - 08-ingress.yaml

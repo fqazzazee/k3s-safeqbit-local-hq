@@ -1,0 +1,26 @@
+# 04-cnpg-scheduled-backup.yaml
+# Daily application-consistent snapshot backup for the Authentik CNPG cluster.
+#
+# CNPG checkpoints Postgres, takes a VolumeSnapshot via longhorn-velero, then
+# lets Postgres resume. This is more consistent than Velero snapshotting the
+# PVC without Postgres awareness.
+#
+# Velero's weekly-everything and authentik-frequent schedules will continue
+# to capture the rest of the authentik namespace (media PVC, templates PVC,
+# secrets). The CNPG ScheduledBackup owns only the database volumes.
+#
+# method: volumeSnapshot   — uses the VolumeSnapshotClass in the Cluster spec.
+# backupOwnerReference: self — the ScheduledBackup object owns generated Backup
+#                              objects so they are garbage-collected with it.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: authentik-cnpg-backup
+  namespace: authentik
+spec:
+  schedule: "0 1 * * *"          # 01:00 UTC daily — before Velero's 03:00 window
+  backupOwnerReference: self
+  method: volumeSnapshot
+  cluster:
+    name: authentik-cnpg
