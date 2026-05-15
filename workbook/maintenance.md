@@ -1,7 +1,7 @@
 # Cluster Maintenance Runbook
 
 **Cluster:** safeqbit-local-hq  
-**Last updated:** 2026-05-15
+**Last updated:** 2026-05-15 (node-shutdown procedure added)
 
 A living document. Add entries as new patterns emerge.
 
@@ -9,11 +9,243 @@ A living document. Add entries as new patterns emerge.
 
 ## Table of Contents
 
+- [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
 - [Grafana](#grafana)
 - [Flux](#flux)
 - [CNPG](#cnpg)
 - [Sealed Secrets](#sealed-secrets)
 - [General Pod Ops](#general-pod-ops)
+
+---
+
+## Node Shutdown (Hardware Maintenance)
+
+Use this procedure when taking a node offline for hardware changes — RAM, disk, NIC, BIOS update, etc.  
+**Estimated downtime per app:** 1–5 min for stateless pods, longer if Longhorn replicas must rebuild.
+
+### 1. Pre-flight checks
+
+Verify the cluster is healthy before touching anything:
+
+```bash
+# All nodes ready
+kubectl get nodes
+
+# All CNPG clusters healthy
+kubectl get cluster -A
+# Expected: STATUS = "Cluster in healthy state", READY = INSTANCES for all rows
+
+# All Longhorn volumes healthy (no degraded replicas)
+kubectl get volumes.longhorn.io -n longhorn-system \
+  -o custom-columns='NAME:.metadata.name,STATE:.status.state,ROBUSTNESS:.status.robustness'
+# Expected: state=attached or detached, robustness=healthy for all
+
+# Overall pod health
+kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded \
+  | grep -v Completed
+# Should return nothing (or only expected pending/init pods)
+```
+
+Do not proceed if any CNPG cluster is not ready or any Longhorn volume is `degraded` — fix those first or you risk data loss.
+
+---
+
+### 2. Handle Longhorn before draining
+
+Longhorn volumes with only one replica **on the target node** will block a drain and leave pods stuck. Check and fix replication first.
+
+**Identify under-replicated volumes on the target node:**
+```bash
+NODE=<node-name>   # e.g. k3s-worker-01
+
+kubectl get replicas.longhorn.io -n longhorn-system \
+  -o custom-columns='VOLUME:.spec.volumeName,NODE:.spec.nodeID,STATE:.status.currentState' \
+  | grep "$NODE"
+```
+
+For any volume that has its **only** replica on the target node, increase the replica count temporarily so Longhorn places a copy elsewhere:
+
+```bash
+# Patch replica count to 2 (from 1) — Longhorn will schedule a replica on another node
+kubectl patch volume.longhorn.io <volume-name> -n longhorn-system \
+  --type=merge -p '{"spec":{"numberOfReplicas":2}}'
+
+# Wait until the new replica is healthy before proceeding
+kubectl get replicas.longhorn.io -n longhorn-system \
+  -o custom-columns='VOLUME:.spec.volumeName,NODE:.spec.nodeID,STATE:.status.currentState' \
+  | grep <volume-name>
+# Wait for all replicas to show state=running
+```
+
+Repeat for each under-replicated volume. Only drain once all volumes show `robustness=healthy`.
+
+**Enable Longhorn node drain policy** (tells Longhorn to cooperate with the drain):
+```bash
+kubectl annotate node "$NODE" \
+  node.longhorn.io/default-disks-config='[{"allowScheduling":false}]' \
+  --overwrite
+```
+
+Or use the Longhorn UI: **Node** → select the node → **Edit** → toggle **Scheduling: Disabled**.
+
+---
+
+### 3. Suspend Flux (prevent reconcile fights during drain)
+
+```bash
+# Suspend all kustomizations so Flux doesn't fight pod evictions
+kubectl patch kustomization apps -n flux-system \
+  --type=merge -p '{"spec":{"suspend":true}}'
+kubectl patch kustomization infrastructure -n flux-system \
+  --type=merge -p '{"spec":{"suspend":true}}'
+
+# Confirm
+kubectl get kustomization -n flux-system
+```
+
+---
+
+### 4. Cordon and drain the node
+
+**Cordon** marks the node unschedulable (no new pods land on it):
+```bash
+NODE=<node-name>
+kubectl cordon "$NODE"
+kubectl get node "$NODE"   # Should show SchedulingDisabled
+```
+
+**Drain** evicts all running pods (except DaemonSets, which stay until node is gone):
+```bash
+kubectl drain "$NODE" \
+  --ignore-daemonsets \
+  --delete-emptydir-data \
+  --grace-period=60 \
+  --timeout=300s
+```
+
+- `--ignore-daemonsets`: DaemonSet pods (Longhorn engine, log collectors) are left — this is correct.
+- `--delete-emptydir-data`: Required for any pod using `emptyDir` volumes (e.g. AFFiNE Redis).
+- `--grace-period=60`: Gives each pod 60 s to flush/shutdown cleanly.
+- `--timeout=300s`: Abort if drain takes more than 5 min (investigate, don't leave hanging).
+
+**If drain is stuck** (common cause: a pod's PodDisruptionBudget blocks eviction):
+```bash
+# See which pods haven't evicted yet
+kubectl get pods -A --field-selector=spec.nodeName="$NODE"
+
+# Check for PDBs blocking eviction
+kubectl get pdb -A
+
+# Force eviction with a longer timeout or delete the blocking pod manually
+kubectl delete pod -n <namespace> <stuck-pod-name> --grace-period=30
+```
+
+---
+
+### 5. Verify workloads rescheduled
+
+After drain completes, all non-DaemonSet pods should have moved to other nodes:
+
+```bash
+# No non-DaemonSet pods should remain on the node
+kubectl get pods -A --field-selector=spec.nodeName="$NODE"
+
+# Check that critical workloads came back up elsewhere
+kubectl get pods -A | grep -E "0/[0-9]|Pending|CrashLoop|Error"
+
+# CNPG clusters should still be healthy (may take 1–2 min to elect new primary if applicable)
+kubectl get cluster -A
+```
+
+---
+
+### 6. Perform the hardware work
+
+The node is now safe to power off:
+
+```bash
+# SSH to the node and shut it down gracefully
+ssh <user>@<node-ip> "sudo shutdown -h now"
+```
+
+Do the hardware change. Power the node back on when done.
+
+---
+
+### 7. Bring the node back online
+
+Wait for the node to rejoin the cluster (watch with `-w`):
+
+```bash
+kubectl get nodes -w
+# Wait until <node-name> transitions to Ready
+```
+
+**Uncordon** to allow pods to schedule on it again:
+```bash
+kubectl uncordon "$NODE"
+```
+
+**Re-enable Longhorn disk scheduling on the node:**
+```bash
+# Remove the annotation set in step 2
+kubectl annotate node "$NODE" node.longhorn.io/default-disks-config- --overwrite
+```
+Or via Longhorn UI: **Node** → **Edit** → toggle **Scheduling: Enabled**.
+
+**Resume Flux:**
+```bash
+kubectl patch kustomization apps -n flux-system \
+  --type=merge -p '{"spec":{"suspend":false}}'
+kubectl patch kustomization infrastructure -n flux-system \
+  --type=merge -p '{"spec":{"suspend":false}}'
+```
+
+**Check Longhorn volume rebalancing:** Longhorn won't automatically move replicas back, but the node is now available for future replica placement. If you increased any volume's replica count in step 2, restore it:
+```bash
+kubectl patch volume.longhorn.io <volume-name> -n longhorn-system \
+  --type=merge -p '{"spec":{"numberOfReplicas":1}}'
+```
+
+---
+
+### 8. Post-maintenance health check
+
+```bash
+# All nodes ready
+kubectl get nodes
+
+# All pods healthy
+kubectl get pods -A | grep -E "0/[0-9]|Pending|CrashLoop|Error"
+
+# All CNPG clusters healthy
+kubectl get cluster -A
+
+# All Longhorn volumes healthy
+kubectl get volumes.longhorn.io -n longhorn-system \
+  -o custom-columns='NAME:.metadata.name,STATE:.status.state,ROBUSTNESS:.status.robustness'
+
+# All HelmReleases reconciled
+kubectl get helmrelease -A
+```
+
+---
+
+### Special cases
+
+#### CNPG single-instance clusters (instances: 1)
+
+Most CNPG clusters in this repo use `instances: 1`. When the node hosting the postgres pod is drained, the pod evicts and must reschedule on another node. The Longhorn PVC will follow only if the volume already has a replica on the destination node (see step 2). **If the PVC only has one replica on the drained node, the pod will stay `Pending` until the node comes back.**
+
+Mitigation: always run step 2 to ensure each CNPG PVC has at least one replica on a node that will survive the drain.
+
+After the node comes back and is uncordoned, CNPG will reschedule on any available node — it does not pin to the original node.
+
+#### Server (control plane) node vs. agent node
+
+If the node being shut down is a **k3s server** (control plane), the kube-apiserver and embedded etcd will be unavailable during the outage. `kubectl` will stop working from the moment the node goes down until it rejoins. Plan accordingly: complete all drain/cordon steps _before_ shutting the server node down, and accept that the cluster API is unreachable during the maintenance window.
+
+For a **single-server k3s cluster** (no HA), this means the entire cluster API is down while the server node is off. Agent nodes continue running their existing pods but no new scheduling happens.
 
 ---
 
