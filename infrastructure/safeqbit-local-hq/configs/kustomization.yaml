@@ -20,3 +20,4 @@ resources:
   - grafana-cnpg.yaml
   - velero-schedule-netbox.yaml
   - velero-schedule-authentik.yaml
+  - velero-schedule-affine.yaml
