@@ -4,7 +4,7 @@ metadata:
   name: affine-cnpg-backup
   namespace: affine
 spec:
-  schedule: "0 3 * * 0"          # 03:00 UTC Sundays — weekly (Velero runs at 04:00, same day)
+  schedule: "0 3 * * 7"          # 03:00 UTC Sundays — weekly (Velero runs at 04:00, same day)
   backupOwnerReference: self
   method: volumeSnapshot
   cluster:
