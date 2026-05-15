@@ -137,15 +137,13 @@ spec:
               mountPath: /opt/netbox/netbox/scripts
 
           readinessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: 8080
             initialDelaySeconds: 30
             periodSeconds: 10
             failureThreshold: 6
           livenessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 20
