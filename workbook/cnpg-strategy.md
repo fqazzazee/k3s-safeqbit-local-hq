@@ -30,6 +30,7 @@ keys (`username`, `password`, `host`, `uri`, `jdbc-uri`, etc.).
 | Workload | Namespace | DB Engine | Storage | CNPG | Notes |
 |---|---|---|---|---|---|
 | Authentik | `authentik` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | SSO backend — 2 instances for fast failover |
+| Authentik01 | `authentik01` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | Second Authentik node migrated from Docker host 10.10.12.29 |
 | Grafana | `monitoring` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from SQLite/NFS due to deadlock issue |
 | Netbox | `netbox` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15 |
 | Vaultwarden | `vaultwarden` | SQLite | Longhorn PVC | ⏳ future | See notes below |

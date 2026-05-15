@@ -1,0 +1,11 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: authentik01-cnpg-backup
+  namespace: authentik01
+spec:
+  schedule: "0 2 * * *"          # 02:00 UTC daily — staggered 1h after authentik-cnpg
+  backupOwnerReference: self
+  method: volumeSnapshot
+  cluster:
+    name: authentik01-cnpg

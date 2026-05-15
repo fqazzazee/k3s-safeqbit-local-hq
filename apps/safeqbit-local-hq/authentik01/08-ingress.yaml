@@ -1,0 +1,34 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: authentik01
+  namespace: authentik01
+  labels:
+    app.kubernetes.io/name: authentik01
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-body-size: "5m"
+
+spec:
+  ingressClassName: nginx
+
+  tls:
+    - hosts:
+        - authentik01.local.safeqbit.com
+      secretName: authentik01-tls
+
+  rules:
+    - host: authentik01.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # Release name is "authentik01" so the chart names the service "authentik01-server".
+                # Verify with `kubectl get svc -n authentik01` after first HelmRelease reconcile.
+                name: authentik01-server
+                port:
+                  number: 80

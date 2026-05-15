@@ -9,6 +9,7 @@ kind: Kustomization
 resources:
   - vaultwarden
   - authentik
+  - authentik01
   - passzilla
   - netbox
   # When you add Linkding or other apps later, append them here:

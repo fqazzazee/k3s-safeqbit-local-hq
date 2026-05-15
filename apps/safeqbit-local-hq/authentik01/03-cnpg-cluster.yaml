@@ -1,0 +1,40 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: authentik01-cnpg
+  namespace: authentik01
+spec:
+  instances: 2
+
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: "256MB"
+
+  bootstrap:
+    initdb:
+      database: authentik
+      owner: authentik
+
+  storage:
+    storageClass: longhorn
+    size: 10Gi
+
+  backup:
+    volumeSnapshot:
+      className: longhorn-velero
+      snapshotOwnerReference: backup
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 80
+          preference:
+            matchExpressions:
+              - key: tier
+                operator: In
+                values: ["primary"]
+    topologyKey: kubernetes.io/hostname
+
+  monitoring:
+    enablePodMonitor: true
