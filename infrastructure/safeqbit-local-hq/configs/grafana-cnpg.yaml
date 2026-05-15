@@ -1,0 +1,48 @@
+# grafana-cnpg.yaml
+# CNPG Cluster for Grafana's internal database.
+#
+# Grafana 13 ships with an embedded "unified storage" system that runs
+# background jobs against its database every 30s (dashboard cleanup, secret
+# lease management, resource sync). Combined with NFS-backed SQLite this
+# causes guaranteed SQLITE_BUSY deadlocks under any sustained load.
+# PostgreSQL handles concurrent connections without file-level locking.
+#
+# All dashboards and datasources are provisioned from ConfigMaps via the
+# grafana-sc sidecars, so no data migration from SQLite is needed — Grafana
+# initialises the schema on first boot.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: grafana-cnpg
+  namespace: monitoring
+spec:
+  instances: 1
+
+  bootstrap:
+    initdb:
+      database: grafana
+      owner: grafana
+
+  storage:
+    storageClass: longhorn
+    size: 5Gi
+
+  backup:
+    volumeSnapshot:
+      className: longhorn-velero
+      snapshotOwnerReference: backup
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 80
+          preference:
+            matchExpressions:
+              - key: tier
+                operator: In
+                values: ["primary"]
+    topologyKey: kubernetes.io/hostname
+
+  monitoring:
+    enablePodMonitor: true

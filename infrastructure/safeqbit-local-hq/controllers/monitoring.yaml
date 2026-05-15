@@ -95,6 +95,23 @@ spec:
         existingSecret: grafana-admin
         userKey: admin-user
         passwordKey: admin-password
+      # Use PostgreSQL (CNPG) instead of SQLite. Grafana 13's unified storage
+      # runs background jobs against the DB every 30s; SQLite over NFS deadlocks
+      # under any sustained query load. PostgreSQL handles concurrent connections
+      # without file-level locking. The CNPG cluster is in grafana-cnpg.yaml.
+      grafana.ini:
+        database:
+          type: postgres
+          host: grafana-cnpg-rw.monitoring:5432
+          name: grafana
+          user: grafana
+          ssl_mode: disable
+      # Inject the auto-generated CNPG password without putting it in plaintext.
+      envValueFrom:
+        GF_DATABASE_PASSWORD:
+          secretKeyRef:
+            name: grafana-cnpg-app
+            key: password
       ingress:
         enabled: true
         ingressClassName: nginx
