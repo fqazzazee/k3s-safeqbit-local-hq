@@ -29,8 +29,7 @@ keys (`username`, `password`, `host`, `uri`, `jdbc-uri`, etc.).
 
 | Workload | Namespace | DB Engine | Storage | CNPG | Notes |
 |---|---|---|---|---|---|
-| Authentik | `authentik` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | SSO backend — 2 instances for fast failover |
-| Authentik01 | `authentik01` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | Second Authentik node migrated from Docker host 10.10.12.29 |
+| Authentik01 | `authentik01` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | Main prod SSO — migrated from Docker host 10.10.12.29 on 2026-05-15 |
 | Grafana | `monitoring` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from SQLite/NFS due to deadlock issue |
 | Netbox | `netbox` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15 |
 | Vaultwarden | `vaultwarden` | SQLite | Longhorn PVC | ⏳ future | See notes below |
@@ -50,7 +49,7 @@ Add a hot standby when the workload is a dependency for other services. If its d
 goes down, do other things break too? If yes, the faster CNPG-managed promotion (~10–30s)
 is worth the extra storage.
 
-**Authentik is `instances: 2`** because it is the SSO backend for the entire cluster.
+**Authentik01 is `instances: 2`** because it is the SSO backend for the entire cluster.
 When Authentik's database was unavailable during the initial CNPG migration, Grafana
 cascaded into SQLite deadlock within minutes. A hot standby reduces that blast radius.
 
@@ -86,7 +85,7 @@ secrets, ConfigMaps) on the biweekly schedule.
 
 | Cluster | Schedule | Method |
 |---|---|---|
-| `authentik-cnpg` | Daily 01:00 UTC | VolumeSnapshot |
+| `authentik01-cnpg` | Daily 02:00 UTC | VolumeSnapshot |
 | `grafana-cnpg` | None (no ScheduledBackup) | Velero biweekly covers it |
 
 Grafana has no `ScheduledBackup` because all its dashboards and datasources are
@@ -151,9 +150,9 @@ window and have a Velero backup confirmed before starting.
 ## Key Files
 
 ```
-apps/safeqbit-local-hq/authentik/
+apps/safeqbit-local-hq/authentik01/
 ├── 03-cnpg-cluster.yaml           # Cluster CR, instances: 2, 10Gi
-└── 04-cnpg-scheduled-backup.yaml  # Daily 01:00 UTC VolumeSnapshot
+└── 04-cnpg-scheduled-backup.yaml  # Daily 02:00 UTC VolumeSnapshot
 
 apps/safeqbit-local-hq/netbox/
 └── 03-cnpg-cluster.yaml           # Cluster CR, instances: 1, 5Gi

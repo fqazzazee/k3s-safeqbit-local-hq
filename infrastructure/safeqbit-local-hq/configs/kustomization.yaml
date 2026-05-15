@@ -17,7 +17,6 @@ resources:
   - velero-volume-snapshot-class.yaml
   - velero-schedule-weekly.yaml
   - velero-schedule-vaultwarden.yaml
-  - velero-schedule-authentik.yaml
   - grafana-cnpg.yaml
   - velero-schedule-netbox.yaml
   - velero-schedule-authentik01.yaml

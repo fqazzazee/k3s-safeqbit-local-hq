@@ -2,7 +2,8 @@
 
 **Date:** 2026-05-15  
 **Cluster:** safeqbit-local-hq  
-**Source host:** authentik01.local.safeqbit.com (macvlan 10.10.12.29)
+**Source host:** authentik01.local.safeqbit.com (macvlan 10.10.12.29)  
+**Status:** ✅ Complete — authentik01 is prod, old `authentik` namespace decommissioned 2026-05-15
 
 ---
 
