@@ -1,0 +1,46 @@
+# 05-pvcs.yaml
+# Two PVCs for AFFiNE:
+#
+#   affine-storage (10Gi RWO) → /root/.affine/storage
+#     User-uploaded blobs, workspace attachments, exported files.
+#     Longhorn RWO — single-writer, replicated across 3 nodes.
+#     Expandable: kubectl patch pvc affine-storage -n affine \
+#       -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'
+#
+#   affine-config (1Gi RWO) → /root/.affine/config
+#     AFFiNE runtime config including the server private key.
+#     Small and unlikely to grow; 1Gi is generous.
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: affine-storage
+  namespace: affine
+  labels:
+    app.kubernetes.io/name: affine
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: affine-config
+  namespace: affine
+  labels:
+    app.kubernetes.io/name: affine
+    app.kubernetes.io/component: config
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

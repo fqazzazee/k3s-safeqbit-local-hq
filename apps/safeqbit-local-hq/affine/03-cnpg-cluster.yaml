@@ -1,0 +1,52 @@
+# 03-cnpg-cluster.yaml
+# CNPG Cluster for AFFiNE's PostgreSQL database.
+#
+# The operator (in cnpg-system) creates:
+#   - affine-cnpg-1 pod (Postgres 16)
+#   - Three services: affine-cnpg-rw, affine-cnpg-ro, affine-cnpg-r
+#   - Secret affine-cnpg-app with the app user credentials (including the
+#     ready-made 'uri' key used by DATABASE_URL in 07-affine.yaml)
+#
+# instances: 1 — AFFiNE is a personal note-taking tool, not a dependency for
+# other services. 60s reschedule time on node failure is acceptable.
+# Longhorn replicates the PVC across 3 nodes, so data is safe.
+#
+# pgvector: NOT needed while AFFINE_INDEXER_ENABLED=false. The migration
+# script skips the vector extension entirely when the indexer is off.
+# If the indexer is ever enabled, swap imageName to a pgvector-enabled build.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: affine-cnpg
+  namespace: affine
+spec:
+  instances: 1
+
+  bootstrap:
+    initdb:
+      database: affine
+      owner: affine
+
+  storage:
+    storageClass: longhorn
+    size: 5Gi
+
+  backup:
+    volumeSnapshot:
+      className: longhorn-velero
+      snapshotOwnerReference: backup
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 80
+          preference:
+            matchExpressions:
+              - key: tier
+                operator: In
+                values: ["primary"]
+    topologyKey: kubernetes.io/hostname
+
+  monitoring:
+    enablePodMonitor: true

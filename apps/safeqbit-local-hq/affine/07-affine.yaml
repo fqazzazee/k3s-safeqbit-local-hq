@@ -1,0 +1,168 @@
+# 07-affine.yaml
+# AFFiNE server Deployment + ClusterIP Service.
+#
+# Init containers (run in order before the main server starts):
+#
+#   wait-for-db — polls affine-cnpg-rw with pg_isready until the CNPG
+#     primary accepts connections. Prevents the migration script from
+#     failing on a cold-start race.
+#
+#   affine-migration — runs AFFiNE's self-host-predeploy.js, which applies
+#     schema migrations and seeds required data. Idempotent: safe to re-run
+#     on every pod restart. Matches what the Portainer stack's
+#     affine_migration service did, but as an initContainer so no separate
+#     Job or dependency coordination is needed.
+#
+# DATABASE_URL comes from the affine-cnpg-app Secret auto-created by CNPG
+# (the 'uri' key is the full postgresql://user:pass@host:port/db string).
+# REDIS_SERVER_PASSWORD comes from affine-credentials (SealedSecret).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: affine
+  namespace: affine
+  labels:
+    app.kubernetes.io/name: affine
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: affine
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: affine
+        app.kubernetes.io/component: server
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - until pg_isready -h affine-cnpg-rw -p 5432 -U affine; do sleep 2; done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: affine-cnpg-app
+                  key: password
+
+        - name: affine-migration
+          image: ghcr.io/toeverything/affine:stable
+          command: ["sh", "-c", "node ./scripts/self-host-predeploy.js"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: affine-cnpg-app
+                  key: uri
+            - name: REDIS_SERVER_HOST
+              value: affine-redis
+            - name: REDIS_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: affine-credentials
+                  key: redis-password
+            - name: AFFINE_INDEXER_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: storage
+              mountPath: /root/.affine/storage
+            - name: config
+              mountPath: /root/.affine/config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+
+      containers:
+        - name: affine
+          image: ghcr.io/toeverything/affine:stable
+          ports:
+            - containerPort: 3010
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: affine-cnpg-app
+                  key: uri
+            - name: REDIS_SERVER_HOST
+              value: affine-redis
+            - name: REDIS_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: affine-credentials
+                  key: redis-password
+            - name: AFFINE_INDEXER_ENABLED
+              value: "false"
+            - name: AFFINE_SERVER_EXTERNAL_URL
+              value: "https://affine.local.safeqbit.com"
+            - name: AFFINE_SERVER_HTTPS
+              value: "true"
+            - name: PORT
+              value: "3010"
+            - name: NODE_ENV
+              value: production
+          volumeMounts:
+            - name: storage
+              mountPath: /root/.affine/storage
+            - name: config
+              mountPath: /root/.affine/config
+          readinessProbe:
+            tcpSocket:
+              port: 3010
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 3010
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: affine-storage
+        - name: config
+          persistentVolumeClaim:
+            claimName: affine-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: affine
+  namespace: affine
+  labels:
+    app.kubernetes.io/name: affine
+    app.kubernetes.io/component: server
+spec:
+  selector:
+    app.kubernetes.io/name: affine
+    app.kubernetes.io/component: server
+  ports:
+    - port: 3010
+      targetPort: 3010

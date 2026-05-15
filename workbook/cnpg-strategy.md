@@ -32,6 +32,7 @@ keys (`username`, `password`, `host`, `uri`, `jdbc-uri`, etc.).
 | Authentik01 | `authentik01` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | Main prod SSO — migrated from Docker host 10.10.12.29 on 2026-05-15 |
 | Grafana | `monitoring` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from SQLite/NFS due to deadlock issue |
 | Netbox | `netbox` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15 |
+| AFFiNE | `affine` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15; indexer disabled, no pgvector needed |
 | Vaultwarden | `vaultwarden` | SQLite | Longhorn PVC | ⏳ future | See notes below |
 | Passzilla | `passzilla` | SQLite | Longhorn PVC | ❌ not planned | Ephemeral utility, no durability need |
 

@@ -1,0 +1,37 @@
+# 08-ingress.yaml
+# Ingress for AFFiNE at https://affine.local.safeqbit.com
+# cert-manager auto-issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+#
+# proxy-body-size 50m: AFFiNE allows uploading images, PDFs, and exported
+# workspace archives. 50m is generous for personal use without being unbounded.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: affine
+  namespace: affine
+  labels:
+    app.kubernetes.io/name: affine
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  ingressClassName: nginx
+
+  tls:
+    - hosts:
+        - affine.local.safeqbit.com
+      secretName: affine-tls
+
+  rules:
+    - host: affine.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: affine
+                port:
+                  number: 3010

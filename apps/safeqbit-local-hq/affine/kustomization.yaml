@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 01-namespace.yaml
+  - 02-sealed-secrets.yaml     # run kubeseal first — see workbook/affine-migration.md Step 1
+  - 03-cnpg-cluster.yaml
+  - 04-cnpg-scheduled-backup.yaml
+  - 05-pvcs.yaml
+  - 06-redis.yaml
+  - 07-affine.yaml
+  - 08-ingress.yaml
