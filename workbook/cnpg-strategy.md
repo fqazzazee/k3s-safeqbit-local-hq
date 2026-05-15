@@ -31,6 +31,7 @@ keys (`username`, `password`, `host`, `uri`, `jdbc-uri`, etc.).
 |---|---|---|---|---|---|
 | Authentik | `authentik` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | SSO backend — 2 instances for fast failover |
 | Grafana | `monitoring` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from SQLite/NFS due to deadlock issue |
+| Netbox | `netbox` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15 |
 | Vaultwarden | `vaultwarden` | SQLite | Longhorn PVC | ⏳ future | See notes below |
 | Passzilla | `passzilla` | SQLite | Longhorn PVC | ❌ not planned | Ephemeral utility, no durability need |
 
@@ -152,6 +153,9 @@ window and have a Velero backup confirmed before starting.
 apps/safeqbit-local-hq/authentik/
 ├── 03-cnpg-cluster.yaml           # Cluster CR, instances: 2, 10Gi
 └── 04-cnpg-scheduled-backup.yaml  # Daily 01:00 UTC VolumeSnapshot
+
+apps/safeqbit-local-hq/netbox/
+└── 03-cnpg-cluster.yaml           # Cluster CR, instances: 1, 5Gi
 
 infrastructure/safeqbit-local-hq/configs/
 └── grafana-cnpg.yaml              # Cluster CR, instances: 1, 5Gi
