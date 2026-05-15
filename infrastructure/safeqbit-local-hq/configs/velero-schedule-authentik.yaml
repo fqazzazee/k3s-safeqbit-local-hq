@@ -1,7 +1,7 @@
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: authentik01-biweekly
+  name: authentik-biweekly
   namespace: velero
 spec:
   schedule: "0 3 1,15 * *"   # At 03:00 on the 1st and 15th of every month
@@ -9,7 +9,7 @@ spec:
   template:
     ttl: "4320h0m0s"   # 6 months retention
     includedNamespaces:
-      - authentik01
+      - authentik
     excludedResources:
       - events
       - events.events.k8s.io

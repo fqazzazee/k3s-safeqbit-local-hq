@@ -1,8 +1,8 @@
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: authentik01
-  namespace: authentik01
+  name: authentik
+  namespace: authentik
 spec:
   interval: 30m
   chart:
@@ -31,12 +31,12 @@ spec:
         - name: AUTHENTIK_SECRET_KEY
           valueFrom:
             secretKeyRef:
-              name: authentik01-credentials
+              name: authentik-credentials
               key: AUTHENTIK_SECRET_KEY
         - name: AUTHENTIK_POSTGRESQL__PASSWORD
           valueFrom:
             secretKeyRef:
-              name: authentik01-cnpg-app   # auto-created by CNPG operator
+              name: authentik-cnpg-app   # auto-created by CNPG operator
               key: password
 
     authentik:
@@ -44,7 +44,7 @@ spec:
         enabled: false
 
       postgresql:
-        host: authentik01-cnpg-rw
+        host: authentik-cnpg-rw
         port: 5432
         name: authentik
         user: authentik
@@ -78,10 +78,10 @@ spec:
       volumes:
         - name: media
           persistentVolumeClaim:
-            claimName: authentik01-media
+            claimName: authentik-media
         - name: templates
           persistentVolumeClaim:
-            claimName: authentik01-templates
+            claimName: authentik-templates
       volumeMounts:
         - name: media
           mountPath: /media
@@ -112,10 +112,10 @@ spec:
       volumes:
         - name: media
           persistentVolumeClaim:
-            claimName: authentik01-media
+            claimName: authentik-media
         - name: templates
           persistentVolumeClaim:
-            claimName: authentik01-templates
+            claimName: authentik-templates
       volumeMounts:
         - name: media
           mountPath: /media
