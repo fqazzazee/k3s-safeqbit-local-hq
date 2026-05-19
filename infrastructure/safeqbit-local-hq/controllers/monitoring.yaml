@@ -106,6 +106,12 @@ spec:
           name: grafana
           user: grafana
           ssl_mode: disable
+        server:
+          # Grafana 13's embedded API server spawns internal self-calls that can
+          # pile up under load. Cap handler duration so a burst of slow requests
+          # doesn't stall /api/health and trigger liveness-probe kills.
+          read_timeout: 60
+          write_timeout: 60
       # Inject the auto-generated CNPG password without putting it in plaintext.
       envValueFrom:
         GF_DATABASE_PASSWORD:
@@ -126,9 +132,9 @@ spec:
       resources:
         requests:
           cpu: 50m
-          memory: 128Mi
+          memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: 1Gi
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
