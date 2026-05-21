@@ -1,0 +1,175 @@
+# apps/safeqbit-local-hq/cloudflared/tunnel-ghost-blog.yaml
+# All Kubernetes resources for the ghost-blog-cf-tunnel Cloudflare tunnel.
+# Routing rules live in the Cloudflare Zero Trust dashboard.
+#
+# Dashboard tip: set the service URL to the k8s internal name, not the local
+# DNS hostname — e.g. http://ghost.<namespace>.svc.cluster.local — to avoid
+# CNAME-chain DNS issues and unnecessary MetalLB roundtrips.
+
+---
+# ── 1 · SealedSecret ──────────────────────────────────────────────────────────
+# Token sealed on 2026-05-21 with kubeseal v0.36.6 against
+# sealed-secrets-controller v0.36.6 in kube-system.
+# To re-seal after a key rotation:
+#
+#   kubectl create secret generic ghost-blog-cf-tunnel-token #     --namespace cloudflared #     --from-literal=token='<TOKEN>' #     --dry-run=client -o yaml #   | kubeseal #       --controller-name  sealed-secrets-controller #       --controller-namespace kube-system #       --format yaml #   > /tmp/ghost-blog-sealed.yaml && grep "token:" /tmp/ghost-blog-sealed.yaml
+
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: ghost-blog-cf-tunnel-token
+  namespace: cloudflared
+spec:
+  encryptedData:
+    token: AgAuYT6ZxRkwPetM93LfN6d+mx2IJOqMjpGhelWAq22grGm4tKGvYdA0jvkmWikPu5t8gGXKr8j9gcvuuQaHOeQwUtTnsjMHr7/H51IXV6yBkIKKtxGfSPJ7lTC1EOh6IGJE6JyPEz77TuJo6n9LvPimsF4NWGJI0i8izXfMt31i2ilhrLXYFh5JrCBFOa+hb//+H5+BNZeufGp8lFShjKpX6yrY/QyCokvroOkt3rUl0dkWgipdXWa2WkGY226/GrhGgLIqibVwwbgPj2vNa1OVTU0AC3PvXPsCuByXzRH9jRE7uYoR6KpjsCxIHT1Ud9+nX0q+kz/stsA8QA7qiGddO2mogRyF5p9/DYmx/9OP/7mUf9hLUfJOTVmn/jqX7Vx15lxWA/yNTP/unf32WeKpEBihjb3KZIwjXiLFB7ku3Py6czNZvZbUGDkjJnRpkpufSu7CGWjcoIOmWLh0rQAqRX6V2BSMtHGPvKFSVCGVYv42FGoQ3y93yKQ60D+nERoBWkJGST7LwgMgBfHDUT3Jp31ttlNCtW9oBwXR6KmLhSnfe1FbmSeYaVU/azqkRe1xypJr9X/0hxPp2XsB3ewEaQ7+kS4vsNYhZydfkiDgDCWR/IdEXlr3UQ4IzK3PuMlIdco4LbZG0OFTl7tTgqoycS5IC18rVMNBBhRuqL063sOfWSosHN2rFLDGmcmC+Mev9OhhnWLnuR7UrPaVVitmfYOPqCrokEvkM4wnSPsPDGrtAnIPIimBdBqU0WOVgFANW/KW5CpK3QP5It7jwjiqdSevbGbErG2Z3ISll8v5Ksm2oJ0l8Fw3/4zBIlDwIwQahl6cgHpaq4pzKpryJ+iaUu6QfAT65b8UDCnV9RGO/F3pekGF+a/iRUdGISKbxqlggG45eM4zVB9vCEm4p8O/Gvlmv9QOM5x+GS/zuDCtwVmk+/C9OGYE
+  template:
+    metadata:
+      name: ghost-blog-cf-tunnel-token
+      namespace: cloudflared
+    type: Opaque
+
+---
+# ── 2 · Deployment ────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ghost-blog-cf-tunnel
+  namespace: cloudflared
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app: ghost-blog-cf-tunnel
+  template:
+    metadata:
+      labels:
+        app: ghost-blog-cf-tunnel
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ghost-blog-cf-tunnel
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2025.4.2
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ghost-blog-cf-tunnel-token
+                  key: token
+          ports:
+            - name: metrics
+              containerPort: 2000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+
+---
+# ── 3 · Service (metrics only) ────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ghost-blog-cf-tunnel-metrics
+  namespace: cloudflared
+  labels:
+    app: ghost-blog-cf-tunnel
+spec:
+  clusterIP: None
+  selector:
+    app: ghost-blog-cf-tunnel
+  ports:
+    - name: metrics
+      port: 2000
+      targetPort: metrics
+      protocol: TCP
+
+---
+# ── 4 · ServiceMonitor ────────────────────────────────────────────────────────
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ghost-blog-cf-tunnel
+  namespace: cloudflared
+  labels:
+    app: ghost-blog-cf-tunnel
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: ghost-blog-cf-tunnel
+  namespaceSelector:
+    matchNames:
+      - cloudflared
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+
+---
+# ── 5 · PodDisruptionBudget ───────────────────────────────────────────────────
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ghost-blog-cf-tunnel
+  namespace: cloudflared
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ghost-blog-cf-tunnel
