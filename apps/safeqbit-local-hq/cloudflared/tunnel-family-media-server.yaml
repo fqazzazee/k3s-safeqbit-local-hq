@@ -1,0 +1,169 @@
+# apps/safeqbit-local-hq/cloudflared/tunnel-family-media-server.yaml
+# All Kubernetes resources for the family-media-server-cf-tunnel Cloudflare tunnel.
+# Routing rules live in the Cloudflare Zero Trust dashboard.
+# Dashboard tip: use http://<svc>.<namespace>.svc.cluster.local as the origin.
+
+---
+# ── 1 · SealedSecret ──────────────────────────────────────────────────────────
+# Sealed on 2026-05-21 with kubeseal v0.36.6 / controller v0.36.6.
+# To re-seal: kubectl create secret generic family-media-server-cf-tunnel-token #   --namespace cloudflared --from-literal=token='<TOKEN>' #   --dry-run=client -o yaml | kubeseal #   --controller-name sealed-secrets-controller #   --controller-namespace kube-system --format yaml #   > /tmp/family-media-server-sealed.yaml && grep "token:" /tmp/family-media-server-sealed.yaml
+
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: family-media-server-cf-tunnel-token
+  namespace: cloudflared
+spec:
+  encryptedData:
+    token: AgAmpEr5REIv7x4L8SWsXFGpjWTNNYvFHRK+tpQpTAjCg4HXR3uMOSDBjspfz78q3W3zFK+oFh+R7lePTYG9Wf8NPOyfiTmEGVnl0Qr2LhJdv0zJTBEcq+ZTGnmgnF7x32e0A/6OKagDwaMTpoi+os6+9yNssrGNF+ecpLsR0bbMFt0TG7Ic5gHQUenfgum0692NoqIHaTYxNlle6s754JpBJiCjS6r9xmgnkC8BpnOWc0iEw6PTeI3MYeP5Pn6XyQV32qqmVJF9QNcR+O5khAq0mw6dVsDbuU4jY/5XfBlzanxcRrkZk40yJYDCH6DnO4mla166NnM8AXlCRBEQpBp7/n3yLQqxiAJ/kPITj1tsPi+ku7Ygmtc/Xdf2hPdGDopA+4EZrz7mOCqkmGDV4iMOA9ApnUfFc8FXYBs+vsrNHzBZSe72rPWUpI3/f1dEaGoAe1DvuNxki//JJjZ5E17twvfL1USaNEJCz91QkqFsVmcrMqlnkACq5Z1tAHcWhYTt1pQ4LbggMdg679o+XeX14BIZfIgx3gKOU6JtBJW6iSZctNDXNFOWBk9Pm0Oxga1wk7EacDs/lhShdIFMqAjvEOoT4HOf6p6ZUMmfv8wVSSPKmN+ieDTjoi6jhd4ZaLrbvVphAL0ivH6vFIBR3dPHzl35Do6KJsk92G0Ox30gojPLisaV/4rVu+IoF7NriS+r14j4/14FuFmUhrCH8+kFVy5j8cU883hNPEjjnxx709xpwYw0Ep6v/F9AjIFx9erYoeDYLpQvTitIeib4poE9lo1whQ+emm7C6dEs625Ph/gOc54EAmUzI2gHFfz1RDfrpukyuYDaU03cdB3JroQFg6Mbg1xckUYwbO3PTHQHMHoykv5alAoCh/b/emOCCHePJ5GO7jYN+LvkE4oGlPK3ZqUXpz357Ldvo+PNeGCPlHrFD0dlKsys
+  template:
+    metadata:
+      name: family-media-server-cf-tunnel-token
+      namespace: cloudflared
+    type: Opaque
+
+---
+# ── 2 · Deployment ────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: family-media-server-cf-tunnel
+  namespace: cloudflared
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app: family-media-server-cf-tunnel
+  template:
+    metadata:
+      labels:
+        app: family-media-server-cf-tunnel
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: family-media-server-cf-tunnel
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: tier
+                    operator: In
+                    values: ["primary"]
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2025.4.2
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: family-media-server-cf-tunnel-token
+                  key: token
+          ports:
+            - name: metrics
+              containerPort: 2000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+
+---
+# ── 3 · Service (metrics only) ────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: family-media-server-cf-tunnel-metrics
+  namespace: cloudflared
+  labels:
+    app: family-media-server-cf-tunnel
+spec:
+  clusterIP: None
+  selector:
+    app: family-media-server-cf-tunnel
+  ports:
+    - name: metrics
+      port: 2000
+      targetPort: metrics
+      protocol: TCP
+
+---
+# ── 4 · ServiceMonitor ────────────────────────────────────────────────────────
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: family-media-server-cf-tunnel
+  namespace: cloudflared
+  labels:
+    app: family-media-server-cf-tunnel
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: family-media-server-cf-tunnel
+  namespaceSelector:
+    matchNames:
+      - cloudflared
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+
+---
+# ── 5 · PodDisruptionBudget ───────────────────────────────────────────────────
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: family-media-server-cf-tunnel
+  namespace: cloudflared
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: family-media-server-cf-tunnel
