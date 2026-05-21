@@ -1,0 +1,96 @@
+# apps/safeqbit-local-hq/cloudflared/prometheusrule.yaml
+# Shared alerting rules for all cloudflared tunnel instances.
+# Rules match on namespace="cloudflared" so they automatically cover every
+# tunnel deployed there — no changes needed when adding new tunnels.
+#
+# release: monitoring is required — kube-prometheus-stack's ruleSelector
+# defaults to {release: monitoring} and silently skips rules without it.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cloudflared
+  namespace: cloudflared
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: cloudflared.availability
+      interval: 60s
+      rules:
+
+        # ── Tunnel completely down ────────────────────────────────────────────
+        # Fires when a tunnel Deployment has zero available (Ready) replicas.
+        # At this point the tunnel is fully offline and external traffic via
+        # that hostname is broken. Page immediately.
+        - alert: CloudflaredTunnelDown
+          expr: |
+            kube_deployment_status_replicas_available{namespace="cloudflared"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Cloudflare tunnel {{ $labels.deployment }} is down"
+            description: >-
+              Deployment {{ $labels.deployment }} in namespace cloudflared has
+              0 available replicas for more than 2 minutes. External traffic
+              routed through this tunnel is disrupted.
+
+        # ── Tunnel degraded (partial outage) ─────────────────────────────────
+        # Fires when fewer replicas are available than desired. The tunnel
+        # still works but has no redundancy — a second failure would take it
+        # fully offline.
+        - alert: CloudflaredTunnelDegraded
+          expr: |
+            kube_deployment_status_replicas_available{namespace="cloudflared"}
+              < kube_deployment_spec_replicas{namespace="cloudflared"}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cloudflare tunnel {{ $labels.deployment }} is running degraded"
+            description: >-
+              Deployment {{ $labels.deployment }} has
+              {{ $value }} available replica(s) but {{ printf "%.0f" (query "kube_deployment_spec_replicas{deployment=\"%s\",namespace=\"cloudflared\"}" | first | value) }} desired.
+              Tunnel is functional but has no connector redundancy.
+
+        # ── Metrics scrape failing ────────────────────────────────────────────
+        # Fires when Prometheus cannot reach a connector Pod's metrics endpoint.
+        # This can indicate the Pod is running but the tunnel process has crashed
+        # or the metrics port is unreachable, even though k8s hasn't restarted it yet.
+        - alert: CloudflaredMetricsMissing
+          expr: |
+            up{namespace="cloudflared"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cannot scrape metrics from cloudflared pod {{ $labels.pod }}"
+            description: >-
+              Prometheus has been unable to scrape {{ $labels.pod }} in namespace
+              cloudflared for 5 minutes. The connector may be running but unhealthy,
+              or the ServiceMonitor / Service configuration is broken.
+
+    - name: cloudflared.restarts
+      rules:
+
+        # ── Connector crash-looping ───────────────────────────────────────────
+        # Fires when a connector Pod has restarted more than 3 times in an hour.
+        # Common causes: bad token (invalid SealedSecret), DNS resolution failure,
+        # or upstream Cloudflare issues.
+        - alert: CloudflaredConnectorCrashLooping
+          expr: |
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="cloudflared",
+                container="cloudflared"
+              }[1h]
+            ) > 3
+          labels:
+            severity: warning
+          annotations:
+            summary: "cloudflared container in {{ $labels.pod }} is crash-looping"
+            description: >-
+              Container cloudflared in pod {{ $labels.pod }} has restarted
+              {{ printf "%.0f" $value }} times in the last hour.
+              Check logs: kubectl logs -n cloudflared {{ $labels.pod }} --previous

@@ -1,0 +1,9 @@
+# apps/safeqbit-local-hq/cloudflared/00-namespace.yaml
+# Single namespace shared by all cloudflared tunnel instances on this cluster.
+# Keeping all tunnels in one namespace simplifies RBAC, NetworkPolicy, and the
+# PrometheusRule selector (namespace="cloudflared" catches every tunnel at once).
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudflared

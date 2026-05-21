@@ -14,6 +14,7 @@ resources:
   - affine
   - immich
   - photoprism
+  - cloudflared
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx

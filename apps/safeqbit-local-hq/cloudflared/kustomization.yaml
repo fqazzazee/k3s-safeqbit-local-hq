@@ -1,0 +1,23 @@
+# apps/safeqbit-local-hq/cloudflared/kustomization.yaml
+# Entry point for Flux. The parent apps.yaml Kustomization already watches
+# apps/safeqbit-local-hq/, so adding cloudflared to the parent's resources
+# list is all that's needed for Flux to reconcile this directory.
+#
+# Adding a new tunnel:
+#   1. Copy any tunnel-*.yaml, rename it, replace the tunnel name throughout.
+#   2. Seal the new token (see the SealedSecret comment inside the file).
+#   3. Add the new filename to the resources list below.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - tunnel-passzilla.yaml
+  - prometheusrule.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      cluster: safeqbit-local-hq
+      managed-by: flux
