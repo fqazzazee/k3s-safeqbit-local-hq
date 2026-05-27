@@ -65,15 +65,6 @@ spec:
         serviceMonitor:
           enabled: false
 
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 50
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values: ["primary"]
 
       volumes:
         - name: media
@@ -100,15 +91,6 @@ spec:
       pod:
         annotations:
           reloader.stakater.com/auto: "true"
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 50
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values: ["primary"]
       volumes:
         - name: media
           persistentVolumeClaim:

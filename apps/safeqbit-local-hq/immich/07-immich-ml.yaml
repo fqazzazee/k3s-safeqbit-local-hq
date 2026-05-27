@@ -54,15 +54,6 @@ spec:
             initialDelaySeconds: 120
             periodSeconds: 20
             failureThreshold: 5
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 80
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values: ["primary"]
 
       volumes:
         - name: model-cache

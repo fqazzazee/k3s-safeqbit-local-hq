@@ -4,7 +4,9 @@ metadata:
   name: authentik-cnpg-backup
   namespace: authentik
 spec:
-  schedule: "0 2 * * *"          # 02:00 UTC daily — staggered 1h after authentik-cnpg
+  # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
+  # Previously "0 2 * * *" parsed as sec=0 min=2 hour=* — fired hourly at :02.
+  schedule: "0 0 2 * * *"        # 02:00:00 UTC daily — staggered 1h after authentik-cnpg
   backupOwnerReference: self
   method: volumeSnapshot
   cluster:

@@ -73,16 +73,6 @@ spec:
               resources:
                 requests:
                   storage: 30Gi
-        affinity:
-          nodeAffinity:
-            preferredDuringSchedulingIgnoredDuringExecution:
-              - weight: 100
-                preference:
-                  matchExpressions:
-                    - key: tier
-                      operator: In
-                      values:
-                        - primary
     grafana:
       enabled: true
       persistence:
@@ -135,16 +125,6 @@ spec:
           memory: 256Mi
         limits:
           memory: 1Gi
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values:
-                      - primary
     alertmanager:
       enabled: false
     prometheus-windows-exporter:

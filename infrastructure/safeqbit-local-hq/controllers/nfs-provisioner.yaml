@@ -57,15 +57,6 @@ spec:
       limits:
         memory: 128Mi
     affinity:
-      nodeAffinity:
-        preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-                - key: tier
-                  operator: In
-                  values:
-                    - primary
       podAntiAffinity:
         preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100

@@ -55,19 +55,13 @@ spec:
           provider: csi
       features: EnableCSI
       defaultVolumesToFsBackup: false
+      # Default kopia maintenance every 7 days (was hourly, which burnt B2 free-tier
+      # transaction cap). Each existing BackupRepository was also patched at runtime
+      # with maintenanceFrequency: 168h on 2026-05-27 so this matches new defaults.
+      defaultRepoMaintainFrequency: 168h0m0s
     credentials:
       useSecret: true
       existingSecret: cloud-credentials
     snapshotsEnabled: true
     deployNodeAgent: true
-    affinity:
-      nodeAffinity:
-        preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-                - key: tier
-                  operator: In
-                  values:
-                    - primary
     schedules: {}                          # populated by app-level schedules

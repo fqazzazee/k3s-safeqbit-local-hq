@@ -10,6 +10,7 @@ A living document. Add entries as new patterns emerge.
 ## Table of Contents
 
 - [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
+- [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Grafana](#grafana)
 - [Flux](#flux)
 - [CNPG](#cnpg)
@@ -246,6 +247,61 @@ After the node comes back and is uncordoned, CNPG will reschedule on any availab
 If the node being shut down is a **k3s server** (control plane), the kube-apiserver and embedded etcd will be unavailable during the outage. `kubectl` will stop working from the moment the node goes down until it rejoins. Plan accordingly: complete all drain/cordon steps _before_ shutting the server node down, and accept that the cluster API is unreachable during the maintenance window.
 
 For a **single-server k3s cluster** (no HA), this means the entire cluster API is down while the server node is off. Agent nodes continue running their existing pods but no new scheduling happens.
+
+---
+
+## Flannel VXLAN Checksum Offload (Post-Reboot)
+
+**Symptom seen on 2026-05-27 after rebooting k3s-server-02:**
+- Pods on the rebooted node can ping pod IPs across nodes via ICMP (≈0.3 ms), but every TCP/UDP connection to a ClusterIP or remote pod IP times out.
+- DNS from any pod on the affected node fails (`dig @10.43.0.10` times out).
+- `kubectl exec ... -- nc -zv 10.43.0.1 443` succeeds (kubernetes API uses host-network backend, no flannel crossing); `nc -zv 10.43.134.108 9500` (longhorn-backend, pod-network backend) times out.
+- Cluster-internal services backed by pods on **other** nodes are unreachable; services whose backend is local to the affected node, or backed by host-network pods, work fine.
+- `longhorn-csi-plugin` and `longhorn-manager` CrashLoopBackOff on the affected node because they cannot reach `longhorn-backend` / `longhorn-admission-webhook`.
+- `kubectl get events`: snapshot operations show `connect: connection refused` to `10.43.134.108:9500`.
+
+**Root cause:** On Proxmox `virtio_net` VMs, the `flannel.1` VXLAN interface comes up with `tx-checksum-ip-generic: on`. This corrupts the inner-packet checksums of TCP/UDP carried over VXLAN. Receiving nodes silently drop the bad-checksum packets. ICMP is not affected because of how kernel computes ICMP checksums.
+
+**Diagnosis:**
+```bash
+# Pick the affected node, e.g. k3s-server-02
+kubectl debug node/k3s-server-02 --image=nicolaka/netshoot --profile=sysadmin -- sh -c '
+  nsenter -t 1 -m -n -- ethtool -k flannel.1 | grep tx-checksum-ip-generic
+  nsenter -t 1 -m -n -- ip -s link show flannel.1 | tail -5
+'
+# A broken node shows tx-checksum-ip-generic: on AND extremely asymmetric RX vs TX
+# (e.g. RX 304 packets / TX 58k packets since the interface came up).
+```
+
+**Manual fix (volatile, reverts on next k3s restart / reboot):**
+```bash
+kubectl debug node/<node> --image=nicolaka/netshoot --profile=sysadmin -- \
+  sh -c 'nsenter -t 1 -m -n -- ethtool -K flannel.1 tx-checksum-ip-generic off'
+```
+
+**Persistent fix (already installed on all 3 nodes 2026-05-27):**
+
+`/etc/systemd/system/flannel-fix-offload.service`:
+```ini
+[Unit]
+Description=Disable tx-checksum-ip-generic on flannel.1 (Proxmox virtio_net VXLAN bug)
+After=k3s.service
+BindsTo=k3s.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for i in $(seq 1 120); do ip link show flannel.1 >/dev/null 2>&1 && /usr/sbin/ethtool -K flannel.1 tx-checksum-ip-generic off && exit 0; sleep 2; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`BindsTo=k3s.service` makes the unit re-run whenever k3s restarts (which recreates `flannel.1`). Verify after any node reboot:
+```bash
+systemctl status flannel-fix-offload.service
+ethtool -k flannel.1 | grep tx-checksum-ip-generic   # should be "off"
+```
 
 ---
 

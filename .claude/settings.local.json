@@ -13,7 +13,8 @@
       "Read(//tmp/**)",
       "Read(//home/tesla/**)",
       "Bash(flux reconcile *)",
-      "Bash(flux get *)"
+      "Bash(flux get *)",
+      "Bash(kubectl *)"
     ]
   }
 }

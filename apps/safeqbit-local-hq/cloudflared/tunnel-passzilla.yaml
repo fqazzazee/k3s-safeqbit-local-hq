@@ -55,15 +55,6 @@ spec:
           labelSelector:
             matchLabels:
               app: passzilla-cf-tunnel
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values: ["primary"]
       containers:
         - name: cloudflared
           image: cloudflare/cloudflared:2025.4.2

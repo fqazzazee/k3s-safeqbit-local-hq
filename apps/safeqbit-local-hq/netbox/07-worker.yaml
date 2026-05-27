@@ -115,16 +115,6 @@ spec:
             limits:
               memory: 512Mi
 
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 80
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values: ["primary"]
-
       volumes:
         - name: media
           persistentVolumeClaim:

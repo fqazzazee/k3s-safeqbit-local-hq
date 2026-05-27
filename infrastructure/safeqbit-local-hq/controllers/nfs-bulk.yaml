@@ -61,13 +61,3 @@ spec:
         memory: 32Mi
       limits:
         memory: 128Mi
-    affinity:
-      nodeAffinity:
-        preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-                - key: tier
-                  operator: In
-                  values:
-                    - primary

@@ -28,19 +28,6 @@ spec:
       labels:
         app: vaultwarden          # what the Service selector matches against
     spec:
-      # Soft preference for tier=primary (meatball). The Pod will land there
-      # if possible but won't refuse to schedule elsewhere if meatball is full
-      # or down.
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: tier
-                    operator: In
-                    values: ["primary"]
-
       # securityContext sets the UID/GID the container runs as. Vaultwarden's
       # official image runs as root by default, which is fine for our setup
       # because TrueNAS Maproot is configured to keep root as root server-side.

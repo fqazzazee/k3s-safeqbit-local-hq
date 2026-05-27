@@ -33,14 +33,6 @@ spec:
       snapshotOwnerReference: backup
 
   affinity:
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 80
-          preference:
-            matchExpressions:
-              - key: tier
-                operator: In
-                values: ["primary"]
     topologyKey: kubernetes.io/hostname
 
   monitoring:

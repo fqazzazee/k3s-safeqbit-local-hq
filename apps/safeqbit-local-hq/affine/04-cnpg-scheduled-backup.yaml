@@ -4,7 +4,9 @@ metadata:
   name: affine-cnpg-backup
   namespace: affine
 spec:
-  schedule: "0 3 * * 7"          # 03:00 UTC Sundays — weekly (Velero runs at 04:00, same day)
+  # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
+  # Previously "0 3 * * 7" parsed as sec=0 min=3 hour=* dom=* mon=* dow=7 (invalid dow).
+  schedule: "0 0 3 * * 0"        # 03:00:00 UTC Sundays — weekly (Velero runs at 04:00, same day)
   backupOwnerReference: self
   method: volumeSnapshot
   cluster:
