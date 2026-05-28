@@ -51,6 +51,21 @@ spec:
         kubeApiserverSlos: true
         nodeExporterAlerting: true
         etcd: true
+        # k3s embeds kube-proxy, scheduler, and controller-manager inside
+        # the single k3s server process. The default rules assume separate
+        # deployments and fire false-positive `*Down` alerts forever.
+        # Disable them at the rule-source level — cleaner than silencing.
+        kubeProxy: false
+        kubeScheduler: false
+        kubeControllerManager: false
+    # Disable the corresponding ServiceMonitors / scrape jobs too — they
+    # also fail and pollute target health.
+    kubeProxy:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+    kubeControllerManager:
+      enabled: false
     prometheus:
       prometheusSpec:
         # Disable the chart's default podMonitorSelector (matchLabels: release: monitoring).
@@ -131,7 +146,69 @@ spec:
         limits:
           memory: 1Gi
     alertmanager:
-      enabled: false
+      enabled: true
+      alertmanagerSpec:
+        # Modest storage — alert history only, not metrics. 1Gi is plenty.
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: longhorn
+              accessModes: [ReadWriteOnce]
+              resources:
+                requests:
+                  storage: 1Gi
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+      # Mount the Slack webhook from a SealedSecret so it never lands in git
+      # or Helm history. Referenced in alertmanager config below as `$(SLACK_WEBHOOK_URL)`.
+      # See configs/alertmanager-slack.yaml for the SealedSecret stub.
+      secrets:
+        - alertmanager-slack-webhook
+      # Inline Alertmanager configuration. The chart will template this into
+      # the `alertmanager-monitoring-kube-prometheus-alertmanager` Secret.
+      config:
+        global:
+          resolve_timeout: 5m
+          # Webhook URL is read at runtime from the mounted secret file.
+          # AM substitutes ${SLACK_WEBHOOK_URL} from the env when the
+          # `slack_api_url_file` field points at the mounted secret.
+          slack_api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/webhook-url
+        route:
+          group_by: ['alertname', 'severity', 'namespace']
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 12h
+          receiver: 'slack-default'
+          routes:
+            # Suppress the always-firing Watchdog (it's a heartbeat the chart ships)
+            - matchers:
+                - alertname = "Watchdog"
+              receiver: 'null'
+            # Critical → fire faster
+            - matchers:
+                - severity = "critical"
+              receiver: 'slack-default'
+              group_wait: 10s
+              repeat_interval: 1h
+        receivers:
+          - name: 'null'
+          - name: 'slack-default'
+            slack_configs:
+              - channel: '#k3s-alerts'                # change to your channel name
+                send_resolved: true
+                title: '{{ if eq .Status "firing" }}🔥{{ else }}✅{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+                text: |-
+                  {{ range .Alerts -}}
+                  *Severity:* {{ .Labels.severity }}
+                  *Namespace:* {{ .Labels.namespace }}
+                  *Summary:* {{ .Annotations.summary }}
+                  *Description:* {{ .Annotations.description }}
+                  {{ if .Annotations.runbook_url }}*Runbook:* {{ .Annotations.runbook_url }}{{ end }}
+                  {{ end }}
     prometheus-windows-exporter:
       enabled: false
     windowsMonitoring:

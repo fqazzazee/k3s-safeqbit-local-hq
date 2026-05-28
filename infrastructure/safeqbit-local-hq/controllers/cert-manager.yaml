@@ -37,6 +37,12 @@ spec:
     crds:
       enabled: true
     replicaCount: 2
+    # PDB: keep at least 1 controller pod up during voluntary disruptions
+    # (node drain, upgrade). With 2 replicas spread across hosts, draining
+    # any one node still leaves the other running.
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
     resources:
       requests:
         cpu: 10m
@@ -55,6 +61,9 @@ spec:
               topologyKey: kubernetes.io/hostname
     webhook:
       replicaCount: 2
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
       resources:
         requests:
           cpu: 10m
@@ -73,6 +82,9 @@ spec:
                 topologyKey: kubernetes.io/hostname
     cainjector:
       replicaCount: 2
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
       resources:
         requests:
           cpu: 10m

@@ -1,0 +1,55 @@
+# Standalone PodDisruptionBudgets for multi-replica services whose Helm chart
+# doesn't expose a `podDisruptionBudget` value (or where the workload is
+# managed outside Helm). These ensure node drains can't kill the last copy.
+#
+# Auto-generated PDBs already cover: CNPG cluster primaries, Longhorn instance-
+# managers + CSI-attacher/provisioner, cloudflared tunnels. Cert-manager
+# (controller + webhook + cainjector) is set via the chart values block in
+# `controllers/cert-manager.yaml`.
+
+---
+# CoreDNS — managed by k3s Addon, not a HelmChart. Scaled to 3 replicas in
+# 2026-05 (one per host) via direct edit of the source manifest on each
+# control-plane node. minAvailable: 2 keeps DNS resolving cluster-wide during
+# the drain of any single node.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+
+---
+# CloudNativePG operator — runs replicaCount: 2 (see controllers/cnpg.yaml).
+# Losing both at once means CNPG Cluster reconciliation pauses — no auto
+# failover, no backup scheduling, no new instance scale-up. Keep at least 1.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cnpg-cloudnative-pg
+  namespace: cnpg-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudnative-pg
+
+---
+# nfs-subdir-external-provisioner (nfs-provisioner ns) — provisions PVCs for
+# nfs-truenas storage class. Losing it doesn't disrupt existing PVCs but
+# blocks any new PVC creation in that StorageClass. Keep 1 of 2 during drains.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nfs-provisioner
+  namespace: nfs-provisioner
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nfs-subdir-external-provisioner
+      release: nfs-provisioner

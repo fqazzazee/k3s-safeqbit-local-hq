@@ -5,6 +5,7 @@ resources:
   - 01-namespace.yaml
   - 02-configmap.yaml
   - 03-deployment.yaml
+  - 04-sealed-secret.yaml
   - 04-service.yaml
   - 05-ingress.yaml
 

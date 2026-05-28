@@ -7,9 +7,9 @@
 #   - Secret affine-cnpg-app with the app user credentials (including the
 #     ready-made 'uri' key used by DATABASE_URL in 07-affine.yaml)
 #
-# instances: 1 — AFFiNE is a personal note-taking tool, not a dependency for
-# other services. 60s reschedule time on node failure is acceptable.
-# Longhorn replicates the PVC across 3 nodes, so data is safe.
+# instances: 2 — primary + 1 standby. Survives a single-node loss without
+# the multi-minute pg_basebackup window a single-instance cluster needs to
+# recover. Cost: a second 5Gi PVC (~15Gi after Longhorn replicas).
 #
 # pgvector: NOT needed while AFFINE_INDEXER_ENABLED=false. The migration
 # script skips the vector extension entirely when the indexer is off.
@@ -21,7 +21,7 @@ metadata:
   name: affine-cnpg
   namespace: affine
 spec:
-  instances: 1
+  instances: 2
 
   bootstrap:
     initdb:

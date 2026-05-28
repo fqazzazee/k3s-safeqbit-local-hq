@@ -22,8 +22,10 @@ spec:
 
       containers:
         - name: passzilla
-          # Pin to a specific version tag instead of latest before going to prod.
-          image: pglombardo/pwpush:latest
+          # Pinned to a specific tag — `:latest` would silently roll on every
+          # pod restart that triggered a pull, breaking reproducibility.
+          # Bump deliberately when you've reviewed the upstream changelog.
+          image: pglombardo/pwpush:2.7.0
 
           # PasswordPusher listens on 5100 by default.
           ports:
@@ -33,6 +35,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: passzilla-config
+            # SECRET_KEY_BASE persists Rails session cookies across restarts.
+            # Without it pwpush logs "SECRET_KEY_BASE not set; generating a
+            # random key for this boot" and every pod restart invalidates
+            # all active user sessions. Sealed in 04-sealed-secret.yaml.
+            - secretRef:
+                name: passzilla-secret
 
           volumeMounts:
             - name: db

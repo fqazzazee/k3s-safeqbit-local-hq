@@ -106,6 +106,12 @@ kube-system/coredns deployment: replicas=1, affinity={}, all pods on k3s-server-
 
 ---
 
+### ☑ P0.3 Fix passzilla session secret + pin image version
+
+**Closed:** 2026-05-28 — pinned image `pglombardo/pwpush:latest` → `pglombardo/pwpush:2.7.0` (matches the version observed running). Added `envFrom: secretRef: name: passzilla-secret` to the deployment. Created `apps/.../passzilla/04-sealed-secret.yaml` as a stub with the placeholder `REPLACE_WITH_KUBESEAL_OUTPUT`. **Action required from you:** seal `/tmp/passzilla-secret-unsealed.yaml` (generated SECRET_KEY_BASE inside) with kubeseal and replace the stub file contents.
+
+---
+
 ### ☐ P0.3 Fix passzilla session secret + pin image version
 
 **Why:**
@@ -135,6 +141,12 @@ kube-system/coredns deployment: replicas=1, affinity={}, all pods on k3s-server-
 ---
 
 ## P1 — Single point of failure
+
+### ☑ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
+
+**Closed:** 2026-05-28 — added PDBs for 6 multi-replica services. Cert-manager (controller + webhook + cainjector) configured via chart `podDisruptionBudget.enabled: true` values in `controllers/cert-manager.yaml`. Standalone PDB manifests in new file `configs/pdbs.yaml` for CoreDNS (`minAvailable: 2`), CNPG operator (`minAvailable: 1`), and nfs-subdir-external-provisioner (`minAvailable: 1`) — these charts don't expose a PDB value. After Flux reconcile, drain of any single control-plane node will succeed without violating PDB.
+
+---
 
 ### ☐ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
 
@@ -193,6 +205,12 @@ Make this consistent with how the maintenance workbook documents node shutdown �
 
 ---
 
+### ☑ P1.3 Bump single-instance CNPG clusters to `instances: 2`
+
+**Closed:** 2026-05-28 — set `spec.instances: 2` on `affine-cnpg`, `netbox-cnpg`, and `grafana-cnpg`. CNPG will pg_basebackup the new standbys on next reconcile (takes a few minutes per cluster, no downtime on the existing primaries). Cost: 3 × 5 GiB extra PVCs ≈ 15 GiB cluster-wide after Longhorn replicas. Was well within available headroom post the orphan cleanup.
+
+---
+
 ### ☐ P1.3 Bump single-instance CNPG clusters to `instances: 2`
 
 **Why:** When `authentik-cnpg-1` corrupted today, the primary `authentik-cnpg-2` kept serving — that's exactly the value of `instances: 2`. The other clusters have no such fallback:
@@ -217,6 +235,12 @@ If any of those single-instance DBs has its volume corrupt the same way authenti
 **Verification:** `kubectl get cluster -A` shows `INSTANCES: 2 READY: 2` for all four.
 
 **Effort:** ~20 min. **Depends on:** none. **Note:** CNPG will pg_basebackup the standbys, takes a few minutes per cluster.
+
+---
+
+### ☑ P1.4 Wire up Alertmanager so firing alerts go somewhere
+
+**Closed:** 2026-05-28 — enabled `alertmanager: enabled: true` in `controllers/monitoring.yaml` with 1Gi Longhorn storage, inline AM config routing to a Slack `slack-default` receiver. Webhook URL is read at runtime from `slack_api_url_file`, pointed at the mounted SealedSecret `alertmanager-slack-webhook` (stub in `configs/alertmanager-slack.yaml`). Suppressed the three k3s false-positives at the rule source via `defaultRules.rules.kubeProxy/Scheduler/ControllerManager: false` AND disabled the corresponding ServiceMonitors. Added `route.routes` to silence `Watchdog` and bump `severity=critical` alerts to 10s wait / 1h repeat. **Action required from you:** seal a Secret containing the Slack channel webhook URL into `alertmanager-slack.yaml`, set the correct channel name (`#k3s-alerts` placeholder), and re-commit. Until then, keep alertmanager disabled or AM pod will crash-loop.
 
 ---
 

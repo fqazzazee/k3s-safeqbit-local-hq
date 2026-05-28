@@ -17,7 +17,10 @@ metadata:
   name: grafana-cnpg
   namespace: monitoring
 spec:
-  instances: 1
+  # instances: 2 — primary + 1 standby. Grafana goes down without its DB; a
+  # second instance reduces recovery time from "minutes to pg_basebackup" to
+  # "seconds to failover". Cost: a second 5Gi PVC.
+  instances: 2
 
   bootstrap:
     initdb:
