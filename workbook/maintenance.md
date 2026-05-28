@@ -11,6 +11,7 @@ A living document. Add entries as new patterns emerge.
 
 - [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
+- [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
 - [Grafana](#grafana)
 - [Flux](#flux)
 - [CNPG](#cnpg)
@@ -302,6 +303,39 @@ WantedBy=multi-user.target
 systemctl status flannel-fix-offload.service
 ethtool -k flannel.1 | grep tx-checksum-ip-generic   # should be "off"
 ```
+
+---
+
+## Longhorn Orphan Replica Cleanup
+
+**Symptom:** A Longhorn volume stays `degraded` even though all nodes appear ready. Volume conditions show `Scheduled: False, ReplicaSchedulingFailure: precheck new replica failed: insufficient storage`. Disk usage in Longhorn (`storageScheduled`) on the affected node is well below the disk size, but `df -h /var/lib/longhorn` shows it nearly full. Cross-referencing `kubectl -n longhorn-system get replicas.longhorn.io --field-selector spec.nodeID=<node>` against `ls /var/lib/longhorn/replicas/` reveals more on-disk directories than Longhorn knows about.
+
+**Root cause:** When a replica fails or is rebuilt, the old directory is sometimes not deleted from disk — Longhorn drops the CR but the data sits there forever, consuming space the scheduler doesn't account for. These show up as `Orphan` CRs in `longhorn-system`. Hit on 2026-05-27 on `k3s-server-02`: 14 orphan dirs (~100 GiB) blocked the Prometheus PVC from gaining its 3rd replica.
+
+**Diagnosis:**
+```bash
+# How many Longhorn-known replicas vs how many on-disk?
+kubectl -n longhorn-system get replicas.longhorn.io --no-headers | awk '$4=="<node>"' | wc -l
+# vs
+kubectl debug node/<node> --image=busybox --profile=sysadmin -- \
+  sh -c 'nsenter -t 1 -m -n -- ls /var/lib/longhorn/replicas/ | wc -l'
+
+# Orphans Longhorn has already detected:
+kubectl -n longhorn-system get orphans.longhorn.io
+```
+
+**Fix (cluster-wide, in repo):** `infrastructure/safeqbit-local-hq/controllers/longhorn.yaml` sets `defaultSettings.orphanResourceAutoDeletion: replica-data` and `orphanResourceAutoDeletionGracePeriod: 300`. With these set, Longhorn auto-deletes orphan replica data 5 min after detection.
+
+**One-off fix (live cluster, if Helm value isn't applied yet):**
+```bash
+kubectl -n longhorn-system patch settings.longhorn.io orphan-resource-auto-deletion \
+  --type=merge -p '{"value":"replica-data"}'
+# Wait 5 min, then verify
+kubectl -n longhorn-system get orphans.longhorn.io      # should be empty
+kubectl -n longhorn-system get volumes.longhorn.io      # robustness=healthy after rebuild
+```
+
+After cleanup, Longhorn will auto-schedule the missing replica on the freed node and rebuild from existing healthy replicas (status will show `WO` mode during sync, then transition to `RW` when complete).
 
 ---
 

@@ -14,7 +14,13 @@
       "Read(//home/tesla/**)",
       "Bash(flux reconcile *)",
       "Bash(flux get *)",
-      "Bash(kubectl *)"
+      "Bash(kubectl *)",
+      "Bash(python3 -m json.tool)",
+      "Bash(helm -n velero get values velero -o yaml)",
+      "Bash(helm -n velero get manifest velero)",
+      "Bash(awk '/^kind: Deployment$/,/^---/')",
+      "Bash(helm -n nfs-provisioner get values nfs-provisioner -o yaml)",
+      "Bash(helm -n nfs-provisioner get manifest nfs-provisioner)"
     ]
   }
 }

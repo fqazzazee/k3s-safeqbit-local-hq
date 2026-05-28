@@ -39,6 +39,12 @@ spec:
       defaultReplicaCount: 3              # bump to 3 when third node lands
       storageOverProvisioningPercentage: 100
       storageMinimalAvailablePercentage: 15
+      # Auto-delete orphaned replica directories left over from failed/rebuilt
+      # replicas. Without this, the dirs accumulate and exhaust disk space —
+      # e.g. on 2026-05-27 server-02 had 14 orphan dirs taking 100 GiB,
+      # blocking the Prometheus volume from rebuilding to 3 replicas.
+      orphanResourceAutoDeletion: replica-data
+      orphanResourceAutoDeletionGracePeriod: 300
     persistence:
       defaultClass: true                  # longhorn IS the default StorageClass now
       defaultClassReplicaCount: 3
