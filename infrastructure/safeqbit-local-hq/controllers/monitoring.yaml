@@ -97,8 +97,13 @@ spec:
       # Recreate: the grafana PVC is RWO (NFS sub-dir provisioner forces
       # ReadWriteOnce). RollingUpdate would deadlock on Multi-Attach during
       # pod-template changes.
+      # Note: chart default has a rollingUpdate sub-block. Helm deep-merges
+      # values, so we must explicitly null that sub-block — Kubernetes
+      # rejects a Deployment with both `type: Recreate` AND a rollingUpdate
+      # field populated.
       deploymentStrategy:
         type: Recreate
+        rollingUpdate: null
       # Reference a Secret created by SealedSecret rather than embedding the
       # admin password in this manifest. See grafana-admin.yaml in configs/.
       admin:
