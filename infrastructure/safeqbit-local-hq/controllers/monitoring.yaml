@@ -79,6 +79,11 @@ spec:
         enabled: true
         storageClassName: nfs-truenas
         size: 5Gi
+      # Recreate: the grafana PVC is RWO (NFS sub-dir provisioner forces
+      # ReadWriteOnce). RollingUpdate would deadlock on Multi-Attach during
+      # pod-template changes.
+      deploymentStrategy:
+        type: Recreate
       # Reference a Secret created by SealedSecret rather than embedding the
       # admin password in this manifest. See grafana-admin.yaml in configs/.
       admin:

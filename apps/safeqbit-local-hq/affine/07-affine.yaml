@@ -27,6 +27,11 @@ metadata:
     app.kubernetes.io/component: server
 spec:
   replicas: 1
+  # Recreate: terminate old pod before starting new. Required because the
+  # storage/config PVCs are RWO Longhorn volumes — RollingUpdate would deadlock
+  # on Multi-Attach (new pod can't acquire the volume while old still holds it).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: affine

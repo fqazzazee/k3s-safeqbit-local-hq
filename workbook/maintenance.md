@@ -12,6 +12,7 @@ A living document. Add entries as new patterns emerge.
 - [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
+- [CoreDNS HA](#coredns-ha)
 - [Grafana](#grafana)
 - [Flux](#flux)
 - [CNPG](#cnpg)
@@ -336,6 +337,40 @@ kubectl -n longhorn-system get volumes.longhorn.io      # robustness=healthy aft
 ```
 
 After cleanup, Longhorn will auto-schedule the missing replica on the freed node and rebuild from existing healthy replicas (status will show `WO` mode during sync, then transition to `RW` when complete).
+
+---
+
+## CoreDNS HA
+
+k3s deploys CoreDNS as an **Addon** (CR `addons.k3s.cattle.io/coredns`), not as a HelmChart, so `HelmChartConfig` overrides don't apply. The source manifest lives at `/var/lib/rancher/k3s/server/manifests/coredns.yaml` on every control-plane node and the Addon controller watches that file's checksum — editing the file makes k3s re-apply the new content.
+
+**Current persistent config (set 2026-05-28):**
+- `replicas: 3` in the Deployment spec (injected on line 88, before `revisionHistoryLimit: 0`)
+- The file already ships with `topologySpreadConstraints` on `kubernetes.io/hostname` with `whenUnsatisfiable: DoNotSchedule`, which enforces one pod per host
+
+**Verify the edit is in place on each control-plane node:**
+```bash
+for n in k3s-server-01 k3s-server-02 k3s-server-03; do
+  kubectl debug node/$n --image=busybox --profile=sysadmin -- sh -c \
+    'nsenter -t 1 -m -n -- grep -nE "^  replicas:" /var/lib/rancher/k3s/server/manifests/coredns.yaml'
+done
+# Each line should print:  88:  replicas: 3
+```
+
+**If a node is missing the edit** (e.g., after a fresh node rebuild or k3s reinstall):
+```bash
+kubectl debug node/<node> --image=busybox --profile=sysadmin -- sh -c '
+  nsenter -t 1 -m -n -- sh -c "
+    F=/var/lib/rancher/k3s/server/manifests/coredns.yaml
+    grep -q \"^  replicas: 3$\" \$F && exit 0
+    cp \$F \${F}.bak.\$(date +%s)
+    sed -i \"/^  revisionHistoryLimit: 0$/i\\\\  replicas: 3\" \$F
+  "'
+```
+
+**After a k3s version upgrade:** k3s may regenerate `coredns.yaml` from its embedded template, wiping the edit. Re-check with the verify-loop above; re-inject if needed.
+
+**Long-term cleaner alternative (P3 in improvement-plan):** add `--disable=coredns` to k3s server config, deploy CoreDNS via Flux/Helm with our own values. Removes the need for node-local file edits entirely.
 
 ---
 

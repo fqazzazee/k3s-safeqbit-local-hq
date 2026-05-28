@@ -22,6 +22,10 @@ metadata:
     app.kubernetes.io/component: server
 spec:
   replicas: 1
+  # Recreate: old pod must release the RWO Longhorn PVC before new pod can
+  # attach. RollingUpdate would deadlock on Multi-Attach.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: immich
