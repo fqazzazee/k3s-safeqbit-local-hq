@@ -1,9 +1,14 @@
 # Cluster Maintenance Runbook
 
 **Cluster:** safeqbit-local-hq  
-**Last updated:** 2026-05-15 (node-shutdown procedure added)
+**Last updated:** 2026-05-28 (backup-strategy.md cross-link added)
 
 A living document. Add entries as new patterns emerge.
+
+**Related docs:**
+- [backup-strategy.md](backup-strategy.md) — full backup schedule + retention reference
+- [improvement-plan.md](improvement-plan.md) — prioritized tech-debt backlog
+- [cnpg-strategy.md](cnpg-strategy.md) — per-cluster CNPG sizing rationale
 
 ---
 

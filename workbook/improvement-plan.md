@@ -285,6 +285,12 @@ If any of those single-instance DBs has its volume corrupt the same way authenti
 
 ## P2 — Operational hygiene
 
+### ☑ P2.1 CNPG ScheduledBackup retention policy
+
+**Closed:** 2026-05-28 — added `cnpg-backup-retention` CronJob in `cnpg-system` (file `configs/cnpg-backup-retention.yaml`). Runs daily at 05:00 UTC, lists CNPG Backup CRs per cluster, deletes oldest beyond retention via `kubectl delete`. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup. Per-cluster retention: authentik 10 (weekly cadence ≈ 10 weeks), affine/netbox/grafana 30 each (daily ≈ 1 month). Also added missing ScheduledBackups for `netbox-cnpg` (daily 02:15) and `grafana-cnpg` (daily 02:30); changed `authentik-cnpg` from daily to weekly Sunday 02:45; `affine-cnpg` stays daily (now 02:00). Full layout in [backup-strategy.md](backup-strategy.md).
+
+---
+
 ### ☐ P2.1 CNPG ScheduledBackup retention policy
 
 **Why:** Today we manually deleted 119 old Backup CRs to get under the 250-snapshot-per-volume Longhorn cap. Without a retention policy, daily CNPG backups will accumulate indefinitely and hit the cap again. Even with the cron fix (daily instead of hourly), in ~6 months we'll be back at 180+ snapshots on the authentik volume.
@@ -313,6 +319,10 @@ If any of those single-instance DBs has its volume corrupt the same way authenti
 ---
 
 ### ☐ P2.2 Move Velero off Backblaze B2 (or reduce frequency)
+
+> **Partial progress 2026-05-28:** the "reduce frequency" half is done — Velero schedules were fully rewritten under P2.1. Killed `daily-everything` and `weekly-everything`, replaced with per-workload bi-monthly schedules staggered so only one runs per day (5th/7th/9th/11th/13th/20th/22nd/24th/26th/28th), plus weekly for high-churn workloads (affine Sunday, netbox Wednesday). TTL uniform 180d. See [backup-strategy.md](backup-strategy.md). The "move off B2" half (R2 or NFS) is still open.
+
+
 
 **Why:** Today the B2 free-tier transaction cap was exceeded by Velero's hourly kopia-maintain jobs across 6 workloads. We bandaged it to 168h, but the daily Velero backups themselves (`daily-everything` cron `0 3 * * *`) also write to B2 and will eventually hit the cap depending on data volume.
 
