@@ -15,11 +15,15 @@ resources:
   - grafana-admin.yaml
   - velero-cloud-credentials.yaml
   - velero-volume-snapshot-class.yaml
-  - velero-schedule-weekly.yaml
   - velero-schedule-vaultwarden.yaml
   - grafana-cnpg.yaml
+  - grafana-cnpg-scheduled-backup.yaml
   - velero-schedule-netbox.yaml
   - velero-schedule-authentik.yaml
   - velero-schedule-affine.yaml
+  - velero-schedule-monitoring.yaml
+  - velero-schedule-passzilla.yaml
+  - velero-schedule-photoprism.yaml
   - pdbs.yaml
   - alertmanager-slack.yaml
+  - cnpg-backup-retention.yaml

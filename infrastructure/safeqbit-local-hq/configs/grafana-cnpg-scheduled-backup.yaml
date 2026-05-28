@@ -1,0 +1,17 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: grafana-cnpg-backup
+  namespace: monitoring
+spec:
+  # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
+  # Daily 02:30 UTC — staggered: affine 02:00, netbox 02:15, grafana 02:30.
+  # Grafana DB is only ~15MB and most dashboards are provisioned from
+  # ConfigMaps, but users/sessions/alert state live in the DB. Snapshots
+  # are tiny (~MB deltas) so daily is cheap insurance.
+  # Retention controlled by cnpg-backup-retention.yaml (keep newest 30).
+  schedule: "0 30 2 * * *"
+  backupOwnerReference: self
+  method: volumeSnapshot
+  cluster:
+    name: grafana-cnpg

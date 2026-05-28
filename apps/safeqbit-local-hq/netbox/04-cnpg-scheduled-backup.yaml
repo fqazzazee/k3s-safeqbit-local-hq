@@ -1,16 +1,16 @@
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:
-  name: affine-cnpg-backup
-  namespace: affine
+  name: netbox-cnpg-backup
+  namespace: netbox
 spec:
   # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
-  # Daily 02:00 UTC — staggered: affine 02:00, netbox 02:15, grafana 02:30,
-  # authentik 02:45 (weekly Sunday). Affine has the most change velocity
-  # (notes app) so daily is appropriate.
+  # Daily 02:15 UTC — staggered: affine 02:00, netbox 02:15, grafana 02:30.
+  # Netbox is the source of truth for our network inventory — daily backups
+  # match the value of the data.
   # Retention controlled by configs/cnpg-backup-retention.yaml (keep newest 30).
-  schedule: "0 0 2 * * *"
+  schedule: "0 15 2 * * *"
   backupOwnerReference: self
   method: volumeSnapshot
   cluster:
-    name: affine-cnpg
+    name: netbox-cnpg

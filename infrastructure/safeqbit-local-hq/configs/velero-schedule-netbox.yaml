@@ -1,13 +1,24 @@
+# velero-schedule-netbox.yaml
+# Weekly Velero backup of the netbox namespace to B2.
+#
+# Covers: netbox-media + netbox-reports + netbox-scripts (RWX NFS), redis
+# task queue PVC, SealedSecrets, manifests. Postgres data handled separately
+# by CNPG ScheduledBackup (apps/.../netbox/04-cnpg-scheduled-backup.yaml).
+#
+# Schedule: Wednesdays 03:00 UTC (mid-week timing keeps it off the bi-monthly
+# day-stagger so at most one workload runs to B2 per day)
+# Retention: 180 days
+
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: netbox-biweekly
+  name: netbox-weekly
   namespace: velero
 spec:
-  schedule: "0 3 1,15 * *"   # At 03:00 on the 1st and 15th of every month
+  schedule: "0 3 * * 3"
 
   template:
-    ttl: "4320h0m0s"   # 6 months retention
+    ttl: "4320h0m0s"   # 180 days
     includedNamespaces:
       - netbox
     excludedResources:

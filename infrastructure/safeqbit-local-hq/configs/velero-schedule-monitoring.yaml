@@ -1,0 +1,34 @@
+# velero-schedule-monitoring.yaml
+# Bi-monthly Velero backup of the monitoring namespace to B2.
+#
+# Covers: Grafana PVC (NFS-backed, small), Prometheus PVC (30Gi Longhorn —
+# the bulk of the backup size). The grafana-cnpg primary PVC is excluded
+# (handled by CNPG ScheduledBackup separately).
+#
+# Schedule: 9th and 24th 03:00 UTC. Spread across the month with other
+# bi-monthly workloads.
+# Retention: 180 days
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: monitoring-bimonthly
+  namespace: velero
+spec:
+  schedule: "0 3 9,24 * *"
+
+  template:
+    ttl: "4320h0m0s"   # 180 days
+    includedNamespaces:
+      - monitoring
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false

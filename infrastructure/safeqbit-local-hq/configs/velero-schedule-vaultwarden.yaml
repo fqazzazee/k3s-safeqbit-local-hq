@@ -1,13 +1,24 @@
+# velero-schedule-vaultwarden.yaml
+# Bi-monthly Velero backup of the vaultwarden namespace to B2.
+#
+# Vaultwarden uses an embedded SQLite database in its data PVC, so this
+# single Velero backup captures both app state and password data in one
+# crash-consistent snapshot. No CNPG layer for this workload.
+#
+# Schedule: 7th and 22nd 03:00 UTC. Spread across the month with other
+# bi-monthly workloads.
+# Retention: 180 days
+
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: vaultwarden-frequent
+  name: vaultwarden-bimonthly
   namespace: velero
 spec:
-  schedule: "0 3 * */1 5"   # “At 03:00 on Friday in every month.”
+  schedule: "0 3 7,22 * *"
 
   template:
-    ttl: "4320h0m0s"   # 6 months retention
+    ttl: "4320h0m0s"   # 180 days
     includedNamespaces:
       - vaultwarden
     excludedResources:

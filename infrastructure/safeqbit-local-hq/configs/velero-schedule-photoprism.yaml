@@ -1,0 +1,36 @@
+# velero-schedule-photoprism.yaml
+# Bi-monthly Velero backup of the photoprism namespace to B2.
+#
+# Covers: photoprism's metadata PVCs and k8s objects. The actual photo
+# library lives on RWX NFS volumes pointing at TrueNAS (photoprism-import,
+# photoprism-originals, photoprism-storage) — those are static PVs and
+# Velero CAN snapshot them via the data mover, but the library is huge
+# and primary protection is TrueNAS's own snapshots/replication.
+#
+# Schedule: 13th and 28th 03:00 UTC. Spread across the month with other
+# bi-monthly workloads.
+# Retention: 180 days
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: photoprism-bimonthly
+  namespace: velero
+spec:
+  schedule: "0 3 13,28 * *"
+
+  template:
+    ttl: "4320h0m0s"   # 180 days
+    includedNamespaces:
+      - photoprism
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false

@@ -5,6 +5,7 @@ resources:
   - 01-namespace.yaml
   - 02-sealed-secrets.yaml
   - 03-cnpg-cluster.yaml
+  - 04-cnpg-scheduled-backup.yaml
   - 04-redis.yaml
   - 05-pvcs.yaml
   - 06-netbox-web.yaml

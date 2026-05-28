@@ -4,16 +4,13 @@
 # Covers: affine-storage PVC (blobs, avatars, 15MB+), affine-config PVC
 # (private.key), SealedSecret, PVC definitions, Ingress, Deployments.
 #
-# The Postgres data is NOT snapshotted here — CNPG handles that separately
-# via ScheduledBackup (04-cnpg-scheduled-backup.yaml), which issues a
-# CHECKPOINT before snapshotting. Velero's CSI snapshot of the CNPG PVC
-# would be crash-consistent only, so we exclude the cnpg PVC by excluding
-# the cnpg pod (pods are excluded globally). The affine-cnpg-1 PVC is not
-# a named claim in a Deployment, so Velero won't snapshot it unless it
-# finds a pod referencing it — which is excluded. Safe.
+# Postgres data is NOT in this backup — CNPG ScheduledBackup handles that
+# separately (apps/.../affine/04-cnpg-scheduled-backup.yaml). Velero excludes
+# pods globally and won't snapshot the cnpg PVC since no non-pod object
+# directly claims it.
 #
-# Schedule: Sundays 04:00 UTC (1h after CNPG snapshot at 03:00)
-# Retention: 3 months (gives ~13 weekly restore points at steady state)
+# Schedule: Sundays 03:00 UTC (1h after CNPG snapshot at 02:00)
+# Retention: 180 days (~26 weekly restore points at steady state)
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -21,10 +18,10 @@ metadata:
   name: affine-weekly
   namespace: velero
 spec:
-  schedule: "0 4 * * 0"
+  schedule: "0 3 * * 0"
 
   template:
-    ttl: "2160h0m0s"   # 90 days / 3 months
+    ttl: "4320h0m0s"   # 180 days
     includedNamespaces:
       - affine
     excludedResources:

@@ -1,13 +1,24 @@
+# velero-schedule-authentik.yaml
+# Bi-monthly Velero backup of the authentik namespace to B2.
+#
+# Postgres data handled separately by CNPG ScheduledBackup (weekly).
+# This catches authentik-media + authentik-templates RWX PVCs and the
+# k8s objects (Ingress, SealedSecret, HelmRelease state, etc).
+#
+# Schedule: 5th and 20th 03:00 UTC. Spread across the month with other
+# bi-monthly workloads so only one fires per day (avoids B2 cap spikes).
+# Retention: 180 days
+
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: authentik-biweekly
+  name: authentik-bimonthly
   namespace: velero
 spec:
-  schedule: "0 3 1,15 * *"   # At 03:00 on the 1st and 15th of every month
+  schedule: "0 3 5,20 * *"
 
   template:
-    ttl: "4320h0m0s"   # 6 months retention
+    ttl: "4320h0m0s"   # 180 days
     includedNamespaces:
       - authentik
     excludedResources:

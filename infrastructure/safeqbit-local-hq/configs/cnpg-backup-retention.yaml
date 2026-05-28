@@ -1,0 +1,110 @@
+# cnpg-backup-retention.yaml
+# Daily CronJob that prunes old CNPG Backup CRs to enforce retention
+# windows. CNPG's ScheduledBackup CRD has no built-in retention, so without
+# this Backup CRs accumulate forever and (since each owns a VolumeSnapshot
+# which owns a Longhorn snapshot) eventually hit the 250-snapshot per-volume
+# Longhorn cap. We hit exactly that on 2026-05-27 with authentik.
+#
+# How it works (per cluster entry below):
+#   1. List Backup CRs sorted by creationTimestamp
+#   2. Delete everything beyond the newest N
+#   3. Kubernetes owner-ref cascade deletes the VolumeSnapshot, which
+#      cascades to the Longhorn snapshot. No manual snapshot cleanup needed.
+#
+# To tune retention: edit the per-cluster sections in the script below.
+# Schedule: 05:00 UTC daily (3h after CNPG backups, 2h after Velero backups).
+
+---
+# ServiceAccount + Role + RoleBinding per namespace where we need to delete
+# backups. The CronJob runs in cnpg-system but kubectl delete needs perms
+# in each target ns. Simplest is cluster-wide RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cnpg-backup-retention
+  namespace: cnpg-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnpg-backup-retention
+rules:
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["backups"]
+    verbs: ["get", "list", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnpg-backup-retention
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cnpg-backup-retention
+subjects:
+  - kind: ServiceAccount
+    name: cnpg-backup-retention
+    namespace: cnpg-system
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cnpg-backup-retention
+  namespace: cnpg-system
+spec:
+  # 05:00 UTC daily. After CNPG (02:xx) and Velero (03:00) jobs complete.
+  schedule: "0 5 * * *"
+  timeZone: UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400      # auto-cleanup completed Job after 24h
+      template:
+        spec:
+          serviceAccountName: cnpg-backup-retention
+          restartPolicy: Never
+          containers:
+            - name: prune
+              image: bitnami/kubectl:1.34
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  prune() {
+                    local ns="$1" keep="$2"
+                    echo "--- $ns: retain newest $keep ---"
+                    local all_count
+                    all_count=$(kubectl -n "$ns" get backups.postgresql.cnpg.io --no-headers 2>/dev/null | wc -l)
+                    local to_delete
+                    to_delete=$(kubectl -n "$ns" get backups.postgresql.cnpg.io \
+                      --sort-by=.metadata.creationTimestamp -o name 2>/dev/null \
+                      | head -n -"$keep")
+                    if [ -z "$to_delete" ]; then
+                      echo "    $all_count backups present, nothing to prune"
+                      return
+                    fi
+                    local del_count
+                    del_count=$(printf '%s\n' "$to_delete" | wc -l)
+                    echo "    $all_count present, deleting $del_count oldest"
+                    printf '%s\n' "$to_delete" | xargs -r kubectl -n "$ns" delete
+                  }
+
+                  # Retention per cluster — adjust values here when needed.
+                  prune authentik   10    # weekly schedule × ~10 weeks
+                  prune affine      30    # daily × ~1 month
+                  prune netbox      30    # daily × ~1 month
+                  prune monitoring  30    # daily × ~1 month (grafana-cnpg)
+
+                  echo "done"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
