@@ -1,7 +1,7 @@
 # Cluster Maintenance Runbook
 
 **Cluster:** safeqbit-local-hq  
-**Last updated:** 2026-05-29 (added Monitoring & Alerting section)
+**Last updated:** 2026-05-29 (added Graceful Node Shutdown section)
 
 A living document. Add entries as new patterns emerge.
 
@@ -15,6 +15,7 @@ A living document. Add entries as new patterns emerge.
 ## Table of Contents
 
 - [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
+- [Graceful Node Shutdown (kubelet)](#graceful-node-shutdown-kubelet)
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
 - [CoreDNS HA](#coredns-ha)
@@ -250,11 +251,90 @@ Mitigation: always run step 2 to ensure each CNPG PVC has at least one replica o
 
 After the node comes back and is uncordoned, CNPG will reschedule on any available node — it does not pin to the original node.
 
-#### Server (control plane) node vs. agent node
+#### All three nodes are etcd members — drain ONE at a time
 
-If the node being shut down is a **k3s server** (control plane), the kube-apiserver and embedded etcd will be unavailable during the outage. `kubectl` will stop working from the moment the node goes down until it rejoins. Plan accordingly: complete all drain/cordon steps _before_ shutting the server node down, and accept that the cluster API is unreachable during the maintenance window.
+This cluster runs 3 k3s servers, all `control-plane,etcd` (no agent-only nodes). etcd needs a quorum of 2 of 3 to stay writable, so this is the single hardest constraint on node maintenance:
 
-For a **single-server k3s cluster** (no HA), this means the entire cluster API is down while the server node is off. Agent nodes continue running their existing pods but no new scheduling happens.
+- **Never take down more than one node at a time** for planned maintenance. With one server off, etcd still has 2/3 quorum and the kube-apiserver on the surviving two keeps `kubectl` working. Take a *second* server down before the first returns and you lose quorum → the API goes unavailable until a node rejoins.
+- Before shutting down the *next* node, confirm the previous one has fully rejoined:
+  ```bash
+  kubectl get nodes                          # all 3 Ready
+  kubectl get --raw='/healthz/etcd' ; echo   # returns: ok
+  ```
+- Complete all drain/cordon steps _before_ powering the node off.
+
+(For reference: a single-server k3s cluster has no quorum protection — the entire API is down whenever the server is off. Not applicable here, but noted for context.)
+
+---
+
+## Graceful Node Shutdown (kubelet)
+
+**What it is:** kubelet's built-in *Graceful Node Shutdown* (GA since k8s 1.21). When the OS begins a clean shutdown (systemd `poweroff`/`reboot`, Proxmox ACPI "Shutdown", a UPS-triggered halt), kubelet grabs a systemd inhibitor lock and terminates pods in order — regular pods first, then critical pods (CNI, Longhorn, kube-system) — respecting each pod's termination grace, *before* the OS powers off.
+
+**Why we want it:** Without it (the prior state — `shutdownGracePeriod: 0s`), a clean shutdown that *skips* the full drain runbook above (a forgotten step, an ACPI shutdown from Proxmox, a power event) hard-kills every pod the instant kubelet dies with the OS. Stateful pods (CNPG postgres, Longhorn engines) get no chance to flush. This is the **safety floor**: it does **not** cordon, migrate Longhorn replicas, or protect etcd quorum — for planned hardware maintenance you still run the full [Node Shutdown](#node-shutdown-hardware-maintenance) runbook. It just stops the worst-case hard-kill when the runbook isn't used.
+
+### The InhibitDelayMaxSec gotcha (mandatory companion setting)
+
+systemd-logind's default inhibitor cap (`InhibitDelayMaxSec`) is **5 seconds**. kubelet's graceful shutdown holds a logind inhibitor lock; if `shutdownGracePeriod` exceeds `InhibitDelayMaxSec`, logind preempts it after 5s and the grace window is silently useless. So `InhibitDelayMaxSec` **must** be raised to ≥ `shutdownGracePeriod`. This is not optional — it's the difference between the feature working and not.
+
+### Configuration (all 3 nodes)
+
+Chosen values: 120s total, of which the last 30s is reserved for critical pods (so regular pods get 90s). `InhibitDelayMaxSec` set a touch above total so logind never preempts kubelet.
+
+| Setting | Where | Value |
+|---|---|---|
+| `shutdown-grace-period` | `/etc/rancher/k3s/config.yaml` (kubelet-arg) | `120s` |
+| `shutdown-grace-period-critical-pods` | same | `30s` |
+| `InhibitDelayMaxSec` | `/etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf` | `130` |
+
+### Apply runbook — ONE node at a time (preserve etcd quorum)
+
+Run on each node in turn; do **not** start the next node until the current one is back `Ready` and `/healthz/etcd` returns `ok` (see [etcd quorum rule](#all-three-nodes-are-etcd-members--drain-one-at-a-time)).
+
+```bash
+# --- on the target node (ssh in) ---
+
+# 1. Add kubelet args. NOTE: if /etc/rancher/k3s/config.yaml already has a
+#    `kubelet-arg:` key (e.g. once P1.2 etcd-s3 lands), MERGE into that list
+#    by hand — do not append a second `kubelet-arg:` block (duplicate YAML key).
+sudo test -f /etc/rancher/k3s/config.yaml && grep -q kubelet-arg /etc/rancher/k3s/config.yaml \
+  && echo "EDIT BY HAND — kubelet-arg already present" \
+  || sudo tee -a /etc/rancher/k3s/config.yaml >/dev/null <<'EOF'
+kubelet-arg:
+  - "shutdown-grace-period=120s"
+  - "shutdown-grace-period-critical-pods=30s"
+EOF
+
+# 2. Raise the logind inhibitor cap (drop-in, leaves the stock logind.conf untouched)
+sudo mkdir -p /etc/systemd/logind.conf.d
+sudo tee /etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf >/dev/null <<'EOF'
+[Login]
+InhibitDelayMaxSec=130
+EOF
+sudo systemctl restart systemd-logind          # safe — does not kill existing sessions
+
+# 3. Apply the kubelet change by restarting k3s (brief apiserver blip on THIS node;
+#    HA covers it. flannel-fix-offload.service re-runs automatically via BindsTo=k3s.service)
+sudo systemctl restart k3s
+
+# --- from any working kubectl ---
+
+# 4. Verify the node came back and etcd is healthy BEFORE doing the next node
+kubectl get nodes                               # all 3 Ready
+kubectl get --raw='/healthz/etcd' ; echo        # ok
+
+# 5. Confirm the setting actually took on this node
+NODE=k3s-server-0X
+kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin)['kubeletconfig'];print('grace',d.get('shutdownGracePeriod'),'critical',d.get('shutdownGracePeriodCriticalPods'))"
+# Expect: grace 2m0s critical 30s
+```
+
+**Verify it actually fires** (optional, low-risk): on a maintenance window, `sudo systemctl reboot` one node and watch — pods should show a `Terminated` / node-shutdown status and the host should pause ~90s before going down, rather than dropping instantly.
+
+**Status:** Config documented here; applied per-node via the runbook above. Re-check after any k3s upgrade or if `config.yaml` is regenerated.
+
+> This covers Layer 0 of the node-shutdown plan. Layers 1 (orchestrated on-demand safe shutdown) and 2 (power-event / UPS-triggered) are tracked in [improvement-plan.md](improvement-plan.md) as P2.7 and P3.6.
 
 ---
 

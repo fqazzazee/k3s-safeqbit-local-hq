@@ -142,35 +142,6 @@ kube-system/coredns deployment: replicas=1, affinity={}, all pods on k3s-server-
 
 ## P1 — Single point of failure
 
-### ☑ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
-
-**Closed:** 2026-05-28 — added PDBs for 6 multi-replica services. Cert-manager (controller + webhook + cainjector) configured via chart `podDisruptionBudget.enabled: true` values in `controllers/cert-manager.yaml`. Standalone PDB manifests in new file `configs/pdbs.yaml` for CoreDNS (`minAvailable: 2`), CNPG operator (`minAvailable: 1`), and nfs-subdir-external-provisioner (`minAvailable: 1`) — these charts don't expose a PDB value. After Flux reconcile, drain of any single control-plane node will succeed without violating PDB.
-
----
-
-### ☐ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
-
-**Why:** During a node drain (for upgrades, hardware maintenance), kubelet kills pods on the draining node. Without a PDB, all replicas of a service on that node die simultaneously. CNPG primaries and Longhorn instance-managers already have auto-generated PDBs (good). But CoreDNS, longhorn-manager, sealed-secrets-controller, and most app deployments don't.
-
-**Current state:**
-- 13 PDBs exist, all auto-created by CNPG/Longhorn/cloudflared
-- Missing for: CoreDNS, longhorn-manager (DaemonSet, but still), sealed-secrets-controller, ingress-nginx (DaemonSet — has redundancy by virtue of running on every node), all app Deployments
-
-**Fix:** Add `PodDisruptionBudget` resources alongside each Deployment. For singletons (`replicas: 1`), use `minAvailable: 0` or skip (PDB on a singleton means the node can't be drained at all). For multi-replica services use `minAvailable: 1` or `maxUnavailable: 1`.
-
-Concrete additions (only where multi-replica):
-- `kube-system/coredns` (after P0.2): `minAvailable: 2` out of 3
-- `cert-manager/cert-manager` (already 2 replicas): `minAvailable: 1`
-- `cert-manager/cert-manager-webhook` (already 2 replicas): `minAvailable: 1`
-- `cert-manager/cert-manager-cainjector` (already 2 replicas): `minAvailable: 1`
-- `nfs-provisioner` (already 2 replicas): `minAvailable: 1`
-
-**Verification:** `kubectl get pdb -A` shows new PDBs; `kubectl drain k3s-server-01 --ignore-daemonsets --dry-run=client` would now succeed without violating any PDB.
-
-**Effort:** ~45 min. **Depends on:** P0.2 (coredns PDB needs >1 replica first).
-
----
-
 ### ☐ P1.2 Ship etcd snapshots off-cluster
 
 **Why:** k3s's default behavior is to take an etcd snapshot every 12 hours and keep 5, stored at `/var/lib/rancher/k3s/server/db/snapshots/` on each control-plane node. All snapshots are local. If the Proxmox host fire/corrupts/ransoms all 3 VMs simultaneously (shared storage, shared host, shared backup snapshot, shared malware), there's no off-cluster recovery point. Without etcd, the entire cluster config is gone — every Deployment, Service, Secret, PV must be reconstructed from the Flux repo, which doesn't include things like SealedSecret-decrypted state, in-cluster CRs etc.
@@ -202,6 +173,35 @@ Make this consistent with how the maintenance workbook documents node shutdown �
 **Verification:** After config change, `ls /var/lib/rancher/k3s/server/db/snapshots/ | wc -l` shows new snapshots with the new naming pattern; remote bucket lists them.
 
 **Effort:** ~1.5 hr (S3 option). **Depends on:** decision on backend storage (could use existing B2 bucket since cap concerns are different for etcd-sized files).
+
+---
+
+### ☑ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
+
+**Closed:** 2026-05-28 — added PDBs for 6 multi-replica services. Cert-manager (controller + webhook + cainjector) configured via chart `podDisruptionBudget.enabled: true` values in `controllers/cert-manager.yaml`. Standalone PDB manifests in new file `configs/pdbs.yaml` for CoreDNS (`minAvailable: 2`), CNPG operator (`minAvailable: 1`), and nfs-subdir-external-provisioner (`minAvailable: 1`) — these charts don't expose a PDB value. After Flux reconcile, drain of any single control-plane node will succeed without violating PDB.
+
+---
+
+### ☐ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
+
+**Why:** During a node drain (for upgrades, hardware maintenance), kubelet kills pods on the draining node. Without a PDB, all replicas of a service on that node die simultaneously. CNPG primaries and Longhorn instance-managers already have auto-generated PDBs (good). But CoreDNS, longhorn-manager, sealed-secrets-controller, and most app deployments don't.
+
+**Current state:**
+- 13 PDBs exist, all auto-created by CNPG/Longhorn/cloudflared
+- Missing for: CoreDNS, longhorn-manager (DaemonSet, but still), sealed-secrets-controller, ingress-nginx (DaemonSet — has redundancy by virtue of running on every node), all app Deployments
+
+**Fix:** Add `PodDisruptionBudget` resources alongside each Deployment. For singletons (`replicas: 1`), use `minAvailable: 0` or skip (PDB on a singleton means the node can't be drained at all). For multi-replica services use `minAvailable: 1` or `maxUnavailable: 1`.
+
+Concrete additions (only where multi-replica):
+- `kube-system/coredns` (after P0.2): `minAvailable: 2` out of 3
+- `cert-manager/cert-manager` (already 2 replicas): `minAvailable: 1`
+- `cert-manager/cert-manager-webhook` (already 2 replicas): `minAvailable: 1`
+- `cert-manager/cert-manager-cainjector` (already 2 replicas): `minAvailable: 1`
+- `nfs-provisioner` (already 2 replicas): `minAvailable: 1`
+
+**Verification:** `kubectl get pdb -A` shows new PDBs; `kubectl drain k3s-server-01 --ignore-daemonsets --dry-run=client` would now succeed without violating any PDB.
+
+**Effort:** ~45 min. **Depends on:** P0.2 (coredns PDB needs >1 replica first).
 
 ---
 
@@ -285,39 +285,6 @@ If any of those single-instance DBs has its volume corrupt the same way authenti
 
 ## P2 — Operational hygiene
 
-### ☑ P2.1 CNPG ScheduledBackup retention policy
-
-**Closed:** 2026-05-28 — added `cnpg-backup-retention` CronJob in `cnpg-system` (file `configs/cnpg-backup-retention.yaml`). Runs daily at 05:00 UTC, lists CNPG Backup CRs per cluster, deletes oldest beyond retention via `kubectl delete`. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup. Per-cluster retention: authentik 10 (weekly cadence ≈ 10 weeks), affine/netbox/grafana 30 each (daily ≈ 1 month). Also added missing ScheduledBackups for `netbox-cnpg` (daily 02:15) and `grafana-cnpg` (daily 02:30); changed `authentik-cnpg` from daily to weekly Sunday 02:45; `affine-cnpg` stays daily (now 02:00). Full layout in [backup-strategy.md](backup-strategy.md).
-
----
-
-### ☐ P2.1 CNPG ScheduledBackup retention policy
-
-**Why:** Today we manually deleted 119 old Backup CRs to get under the 250-snapshot-per-volume Longhorn cap. Without a retention policy, daily CNPG backups will accumulate indefinitely and hit the cap again. Even with the cron fix (daily instead of hourly), in ~6 months we'll be back at 180+ snapshots on the authentik volume.
-
-**Current state:**
-- `authentik/authentik-cnpg-backup`: daily at 02:00 UTC, no retention
-- `affine/affine-cnpg-backup`: weekly on Sunday 03:00 UTC, no retention
-- CNPG `ScheduledBackup` CRD doesn't have a built-in retention field
-
-**Fix options:**
-1. **Best:** Switch from `volumeSnapshot` method to CNPG's plugin-based backup (Barman) which has native retention. Requires moving backup target from Longhorn snapshots to S3-compatible storage. Bigger change.
-2. **Pragmatic:** A weekly CronJob that runs:
-   ```bash
-   kubectl -n <ns> get backups.postgresql.cnpg.io --sort-by=.metadata.creationTimestamp \
-     -o jsonpath='{.items[*].metadata.name}' \
-     | tr ' ' '\n' | head -n -30 \
-     | xargs -r kubectl -n <ns> delete backup.postgresql.cnpg.io
-   ```
-   Keeps newest 30 backups per cluster, deletes the rest. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup.
-3. Author this as a CronJob per CNPG namespace, or one CronJob with a list.
-
-**Verification:** A month after deployment, `kubectl get backups -A | wc -l` shows count plateauing at ~30 per cluster, not climbing.
-
-**Effort:** ~1 hr. **Depends on:** none.
-
----
-
 ### ☐ P2.2 Move Velero off Backblaze B2 (or reduce frequency)
 
 > **Partial progress 2026-05-28:** the "reduce frequency" half is done — Velero schedules were fully rewritten under P2.1. Killed `daily-everything` and `weekly-everything`, replaced with per-workload bi-monthly schedules staggered so only one runs per day (5th/7th/9th/11th/13th/20th/22nd/24th/26th/28th), plus weekly for high-churn workloads (affine Sunday, netbox Wednesday). TTL uniform 180d. See [backup-strategy.md](backup-strategy.md). The "move off B2" half (R2 or NFS) is still open.
@@ -361,6 +328,39 @@ If any of those single-instance DBs has its volume corrupt the same way authenti
 Then run one of these per quarter, log results, refine docs.
 
 **Effort:** ~4 hr (first drill including doc writing). **Depends on:** P2.2 if you're switching backends.
+
+---
+
+### ☑ P2.1 CNPG ScheduledBackup retention policy
+
+**Closed:** 2026-05-28 — added `cnpg-backup-retention` CronJob in `cnpg-system` (file `configs/cnpg-backup-retention.yaml`). Runs daily at 05:00 UTC, lists CNPG Backup CRs per cluster, deletes oldest beyond retention via `kubectl delete`. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup. Per-cluster retention: authentik 10 (weekly cadence ≈ 10 weeks), affine/netbox/grafana 30 each (daily ≈ 1 month). Also added missing ScheduledBackups for `netbox-cnpg` (daily 02:15) and `grafana-cnpg` (daily 02:30); changed `authentik-cnpg` from daily to weekly Sunday 02:45; `affine-cnpg` stays daily (now 02:00). Full layout in [backup-strategy.md](backup-strategy.md).
+
+---
+
+### ☐ P2.1 CNPG ScheduledBackup retention policy
+
+**Why:** Today we manually deleted 119 old Backup CRs to get under the 250-snapshot-per-volume Longhorn cap. Without a retention policy, daily CNPG backups will accumulate indefinitely and hit the cap again. Even with the cron fix (daily instead of hourly), in ~6 months we'll be back at 180+ snapshots on the authentik volume.
+
+**Current state:**
+- `authentik/authentik-cnpg-backup`: daily at 02:00 UTC, no retention
+- `affine/affine-cnpg-backup`: weekly on Sunday 03:00 UTC, no retention
+- CNPG `ScheduledBackup` CRD doesn't have a built-in retention field
+
+**Fix options:**
+1. **Best:** Switch from `volumeSnapshot` method to CNPG's plugin-based backup (Barman) which has native retention. Requires moving backup target from Longhorn snapshots to S3-compatible storage. Bigger change.
+2. **Pragmatic:** A weekly CronJob that runs:
+   ```bash
+   kubectl -n <ns> get backups.postgresql.cnpg.io --sort-by=.metadata.creationTimestamp \
+     -o jsonpath='{.items[*].metadata.name}' \
+     | tr ' ' '\n' | head -n -30 \
+     | xargs -r kubectl -n <ns> delete backup.postgresql.cnpg.io
+   ```
+   Keeps newest 30 backups per cluster, deletes the rest. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup.
+3. Author this as a CronJob per CNPG namespace, or one CronJob with a list.
+
+**Verification:** A month after deployment, `kubectl get backups -A | wc -l` shows count plateauing at ~30 per cluster, not climbing.
+
+**Effort:** ~1 hr. **Depends on:** none.
 
 ---
 
@@ -417,17 +417,11 @@ End state of P2.1 — proper native retention, point-in-time recovery via WAL ar
 
 The cluster runs everything as default-allow. Kube-router netpol is already enforcing what's there; just no policies are authored. Worth adding minimal deny-all + per-app allow rules eventually for blast-radius reduction.
 
-### ☐ P3.3 Cluster-wide image policy + SBOM
-
-GitOps repo could enforce: no `:latest`, no untagged, all images signed (cosign). Future-proof against supply-chain compromise. Tools: kyverno or OPA Gatekeeper.
-
 ### ☐ P3.4 Document on-call playbooks
 
 Per top-N alerts (degraded volume, CNPG failover, etcd quorum loss, ingress 5xx spike), write a one-page runbook each. Reference from the alert annotation `runbook_url`.
 
-### ☐ P3.5 GitOps drift / Flux reconciliation alerts
-
-Notify when any Kustomization or HelmRelease is `Ready=False` for >5m. Today this would have caught the velero/nfs-provisioner/sealed-secrets `nodeSelector` issue without us noticing manually.
+> P3.3 (image policy + SBOM) and P3.5 (Flux reconciliation alerts) were reviewed on 2026-05-29 and **deferred** rather than implemented. Full context + recommended approach moved to [Future considerations](#future-considerations) at the bottom of this page.
 
 ---
 
@@ -439,3 +433,77 @@ When picking an item up:
 3. Move closed items to the bottom of their section (don't delete — preserves history)
 
 For ad-hoc additions, just append to the relevant priority section. Renumber on a quiet day if it bugs you.
+
+---
+
+## Future considerations
+
+Items reviewed and consciously **deferred** — recommended approach is captured so they're a clean drop-in when picked up. These are not on any near-term track; revisit when there's appetite, not pressure.
+
+---
+
+### ☐ P3.3 Cluster-wide image policy + SBOM
+
+**Reviewed:** 2026-05-29 — deferred. No controller installed; recommendation below.
+
+**Original intent:** GitOps repo enforces no `:latest`, no untagged, optionally signed images (cosign). Future-proof against supply-chain compromise and accidental floating-tag drift. Candidate tools: Kyverno or OPA Gatekeeper.
+
+**Current state (2026-05-29):** No admission/policy engine is installed. P2.4 already removed the last `:latest` tags (passzilla → `2.7.0`, photoprism → `260523`), so the cluster is *currently* compliant with a "no `:latest`" rule — which makes this a good time to add a guardrail that prevents regression, not a cleanup.
+
+**Recommended approach when picked up:**
+
+1. **Engine: Kyverno.** YAML-native policies (no Rego), first-class with GitOps/Flux, lowest authoring/maintenance overhead for a homelab. Install as a Flux `HelmRelease` (`kyverno/kyverno` chart) in its own `kyverno` namespace; add the HelmRepository to `controllers/sources.yaml` and the release to `controllers/kustomization.yaml`. Note Kyverno installs a validating webhook — keep `failurePolicy: Ignore` initially so a Kyverno outage can't wedge the API server / Flux reconciles.
+
+2. **Mode: Audit first, then Enforce.** Roll out every `ClusterPolicy` with `validationFailureAction: Audit`. Watch `PolicyReport`/`ClusterPolicyReport` (and the Kyverno Prometheus metrics, which the existing kube-prometheus-stack can scrape via a ServiceMonitor) for a couple of weeks. Flip to `Enforce` only once reports are clean — flipping to Enforce blind risks a future chart bump or reconcile getting rejected and stalling Flux.
+
+3. **Rules, in priority order:**
+   - **`disallow-latest-tag`** (do first) — require an explicit, non-`:latest`, non-empty tag on every container/initContainer image. This is the literal "no `:latest`" goal and the cluster already passes it.
+   - **`restrict-registries`** (worth it) — allowlist trusted registries (`docker.io`, `ghcr.io`, `quay.io`, `registry.k8s.io`, plus the specific app registries in use). Cheap blast-radius reduction against typo-squat / unexpected sources.
+   - **`require-image-digest`** (stretch / likely skip) — pinning by `@sha256:` is the strongest reproducibility but **noisy**: nearly all current manifests and Helm charts reference tags, not digests, so expect a flood of audit findings and ongoing churn on every upstream bump. Not worth it without an image-automation workflow (Flux ImageUpdateAutomation or Renovate writing digests).
+
+4. **SBOM / cosign signature verification: treat as a separate follow-up, not part of this item's initial rollout.** Every workload here is a *third-party public image we don't build* (pwpush, photoprism, authentik, immich, etc.), so:
+   - **SBOM generation** doesn't apply — we're not the publisher. The relevant analogue is *consuming* upstream SBOM/provenance attestations, which most of these publishers don't provide consistently.
+   - **Signature verification** (Kyverno `verifyImages` + cosign) requires per-publisher trust config — a keyless identity (OIDC issuer + subject regex) or public key for *each* image source. High setup and ongoing-maintenance cost for marginal benefit on a single-tenant homelab. If desired later, scaffold it disabled/audit-only against the one or two images that actually publish keyless signatures, and grow from there.
+
+**Effort:** ~2–3 hr for Kyverno + the two recommended Audit policies; signature verification is a multi-hour project on its own. **Depends on:** none (but do it while the cluster is already `:latest`-clean so Audit starts green).
+
+---
+
+### ☐ P3.5 GitOps drift / Flux reconciliation alerts
+
+**Reviewed:** 2026-05-29 — deferred. Metric path fully scoped below; safe and low-effort whenever picked up.
+
+**Original intent:** Notify when any Kustomization or HelmRelease is `Ready=False` for an extended window. Would have caught the velero / nfs-provisioner / sealed-secrets `nodeSelector` issue automatically instead of by manual inspection.
+
+**Key finding (2026-05-29):** The old `gotk_reconcile_condition` metric **no longer exists** in our Flux (v2.8.6) — verified by curling `:8080/metrics` on `kustomize-controller` and `helm-controller`: only `gotk_reconcile_duration_seconds` and `gotk_token_*` are exposed. So any alert rule written against `gotk_reconcile_condition{status="False"}` (the pattern in most older blog posts / the legacy Flux docs) would silently never fire. Don't go down that path.
+
+**Recommended approach when picked up — kube-state-metrics Custom Resource State (CRS):**
+
+The modern Flux monitoring pattern exposes CR readiness through kube-state-metrics, emitting `gotk_resource_info{exported_namespace, name, ready="True|False", suspended, customresource_kind, ...} == 1` per Flux object. We already run a shared kube-state-metrics (`monitoring-kube-state-metrics`, from kube-prometheus-stack).
+
+1. **Feed KSM the Flux CRS config via the existing HelmRelease** (`controllers/monitoring.yaml`), under the chart's `kube-state-metrics:` values key:
+   - `rbac.extraRules` granting `list`/`watch` on the Flux API groups (`kustomize.toolkit.fluxcd.io`, `helm.toolkit.fluxcd.io`, `source.toolkit.fluxcd.io`, `notification.…`, `image.…`).
+   - `customResourceState.enabled: true` + `customResourceState.config` with the per-GVK `gotk_resource_info` definitions (canonical config: fluxcd `flux2-monitoring-example`, file `monitoring/controllers/kube-prometheus-stack/kube-state-metrics-config.yaml` — already retrieved and validated against our cluster on 2026-05-29).
+   - **CRITICAL caveat:** the upstream example also sets `collectors: []` and `extraArgs: ["--custom-resource-state-only=true"]` because it runs a *dedicated* KSM instance. **Do NOT copy those two lines** onto our shared instance — they would disable every standard `kube_*` metric and break the existing dashboards and most kube-prometheus-stack alerts. Add *only* `rbac.extraRules` + `customResourceState`.
+
+2. **Add a `PrometheusRule`** (new `configs/monitoring-flux-rules.yaml`, or a `flux` group appended to `configs/monitoring-alert-rules.yaml`), labelled `release: monitoring` so the Prometheus `ruleSelector` picks it up:
+   ```yaml
+   - alert: FluxReconciliationFailure
+     expr: |
+       max by (customresource_kind, exported_namespace, name) (
+         gotk_resource_info{ready="False", suspended!="true"}
+       ) == 1
+     for: 15m          # plan said >5m; 15m avoids flapping during legitimately long reconciles/installs
+     labels:
+       severity: warning
+     annotations:
+       summary: "Flux {{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} not ready"
+       description: "{{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} has been Ready=False for >15m. Run `flux get all -A` / check the controller logs."
+   ```
+   Optionally a second `FluxSuspended` info-level alert on `gotk_resource_info{suspended="true"}` so long-lived manual suspends don't get forgotten.
+
+3. **Routing is already done** — these flow through the Alertmanager → Slack `#k3s-alerts` receiver wired in P1.4. No notification plumbing needed.
+
+This naturally covers Kustomizations *and* HelmReleases (and GitRepository/HelmRepository/HelmChart), so it would catch both the Flux-layer and Helm-layer failures the original note worried about.
+
+**Effort:** ~45 min. **Risk:** low (additive metrics + one rule), provided the `collectors: []` / `custom-resource-state-only` trap is avoided. **Depends on:** P1.4 (Alertmanager → Slack — done).
