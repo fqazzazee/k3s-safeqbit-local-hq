@@ -364,53 +364,46 @@ Then run one of these per quarter, log results, refine docs.
 
 ---
 
-### ☐ P2.4 Replace `:latest` image tags
+### ☑ P2.4 Replace `:latest` image tags
 
-**Why:** Two app images in the repo use `:latest`:
-- `apps/safeqbit-local-hq/passzilla/03-deployment.yaml`: `pglombardo/pwpush:latest`
-- `apps/safeqbit-local-hq/photoprism/04-photoprism.yaml`: `photoprism/photoprism:latest`
-
-Either of these doing a breaking upstream push will silently roll out on the next pod restart. Cloudflared and other images in the repo are already pinned — these are the stragglers.
-
-**Fix:** Replace with specific tags. Check current upstream stable releases. Add to commit message what tag/digest was chosen so future-you knows what was last known-good.
-
-Optional bonus: pin to a digest (`pglombardo/pwpush@sha256:abc...`) for full reproducibility — but tags are usually enough.
-
-**Effort:** ~10 min per image. **Depends on:** P0.3 (which already addresses passzilla).
+**Closed:** 2026-05-29 — passzilla pinned to `pglombardo/pwpush:2.7.0` as part of P0.3. Photoprism pinned to `photoprism/photoprism:260523` — that's the YYMMDD-coded stable tag matching the currently-running digest (`sha256:ee3d15c…`). PhotoPrism uses date-coded immutable tags as their stable channel; future bumps mean picking a newer date. Both stragglers now have explicit, reproducible tags.
 
 ---
 
-### ☐ P2.5 Add Longhorn / CNPG / Velero Prometheus alert rules
+### ☑ P2.5 Add Longhorn / CNPG / Velero Prometheus alert rules
 
-**Why:** The kube-prometheus-stack has 243 rules but **zero of them cover Longhorn, CNPG, or Velero** — exactly the subsystems where today's incidents originated. Without alerts, we only learn about degraded volumes / failed backups / snapshot count overruns when something downstream breaks.
+**Closed:** 2026-05-29 — discovered Longhorn and Velero metric endpoints existed but had no ServiceMonitor pointing Prometheus at them (CNPG was already covered by operator-managed PodMonitors). Added two files in `configs/`:
 
-**Concrete alerts to author (PrometheusRule CR in `monitoring` ns):**
+- **`monitoring-servicemonitors.yaml`** — ServiceMonitor for `longhorn-backend.longhorn-system:9500` (port `manager`) and `velero.velero:8085` (port `http-monitoring`). Both labeled `release: monitoring` to match Prometheus operator selectors.
+- **`monitoring-alert-rules.yaml`** — PrometheusRule `safeqbit-storage-and-backup` with 8 alerts across three groups:
 
-| Alert | Expression | Severity |
-|---|---|---|
-| `LonghornVolumeDegraded` | `longhorn_volume_robustness{robustness="degraded"} == 1 for 10m` | warning |
-| `LonghornVolumeSnapshotCountHigh` | `longhorn_snapshot_actual_size_bytes count by (volume) > 200` | warning |
-| `LonghornNodeStorageLow` | `longhorn_node_storage_usage_bytes / longhorn_node_storage_capacity_bytes > 0.85` | warning |
-| `CNPGBackupFailed` | `cnpg_backup_status{status="failed"} == 1` | warning |
-| `CNPGReplicationLag` | `cnpg_pg_replication_lag > 300` | warning |
-| `VeleroBackupFailed` | `velero_backup_failure_total > 0` | warning |
-| `VeleroBSLUnavailable` | `velero_backup_storage_location_status{status="Unavailable"} == 1` | critical |
+| Group | Alert | Expression | Severity |
+|---|---|---|---|
+| longhorn | `LonghornVolumeDegraded` | `longhorn_volume_robustness{state="degraded"} == 1 for 10m` | warning |
+| longhorn | `LonghornVolumeFaulted` | `longhorn_volume_robustness{state="faulted"} == 1 for 1m` | critical |
+| longhorn | `LonghornVolumeSnapshotCountHigh` | `count by (volume) (longhorn_snapshot_actual_size_bytes) > 200 for 30m` | warning |
+| longhorn | `LonghornNodeStorageLow` | `usage/capacity > 0.85 for 30m` | warning |
+| cnpg | `CNPGReplicationLagHigh` | `cnpg_pg_replication_lag > 300 for 10m` | warning |
+| cnpg | `CNPGExporterDown` | `cnpg_collector_up == 0 for 5m` | warning |
+| velero | `VeleroBackupFailed` | `velero_backup_last_status{schedule!=""} == 0 for 5m` | warning |
+| velero | `VeleroBackupFailureRateHigh` | `increase(velero_backup_failure_total[24h]) > 2 for 5m` | warning |
 
-**Effort:** ~2 hr (look up exact metric names per chart, test each expression). **Depends on:** P1.4 (Alertmanager wired up).
+**Note:** label is `state=` (not `robustness=` as I'd written in the original plan); BSL unavailability has no native gauge metric in this Velero version — symptom is `velero_backup_failure_total` ticking up, so `VeleroBackupFailureRateHigh` covers it. CNPG `cnpg_backup_status` metric was researched but doesn't exist — Backup CR status isn't exporter-exposed; the cnpg-backup-retention CronJob's own success/fail surfacing is left as a future improvement.
 
 ---
 
-### ☐ P2.6 Workload balance — fewer pods land on server-03
+### ☑ P2.6 Workload balance — fewer pods land on server-03
 
-**Why:** Post-cleanup distribution is k3s-server-01: 23, server-02: 23, server-03: 9. Server-03 is significantly under-utilized. Cause is likely volume-aware scheduling pulling new pods toward nodes where Longhorn volumes already exist, plus server-03's zone label (`dumpling` vs others' `meatball`) potentially mattering somewhere.
+**Closed:** 2026-05-29 — investigation showed **no scheduling defect, no fix needed.** Findings on 2026-05-29:
 
-**Investigation needed:**
-- Are app PVCs disproportionately replica-located on servers 01/02 vs 03? `kubectl -n longhorn-system get replicas.longhorn.io | awk '{print $4}' | sort | uniq -c`
-- Are any deployments using `topology.kubernetes.io/zone` as a topologyKey? (We didn't see that in the affinity audit, but worth checking.)
+- Pod counts: server-01=23, server-02=25, server-03=13
+- **Longhorn replicas: 18/18/18 (perfectly balanced)** — original hypothesis (volume-affinity pulling new replicas to 01/02) was wrong.
+- **Non-PVC pods balance fine**: 24/21/29 — server-03 actually leads. Scheduler isn't avoiding it.
+- **PVC-consumer pods skew toward 01/02**: 9/12/5. This is volume *attachment* stickiness, not replica placement — when a Longhorn volume is attached to a node, the pod that uses it stays pinned to that node. New pods land wherever the scheduler picks; on restart they often re-land on the same node (volume already attached) instead of triggering detach/re-attach.
+- Only one workload uses zone-based topology (coredns, `whenUnsatisfiable: ScheduleAnyway`) — doesn't enforce, so doesn't exclude.
+- Resource allocatable differs (server-03 has less memory: 14.4 GiB vs 18.9/22.4) which is also why scheduler appropriately keeps load off it.
 
-**Fix:** Probably none required — distribution will rebalance organically as pods restart over time. But worth verifying server-03 isn't accidentally excluded from something. Could add `topologySpreadConstraints` with `topology.kubernetes.io/zone` to specific apps if we want zone-aware spreading.
-
-**Effort:** ~30 min investigation, maybe ~30 min fix if any found.
+No taints, no excluding affinity, no zone enforcement. The "imbalance" is just Longhorn attachment stickiness + resource-aware scheduling doing what they should. Finding captured here only — no repo PR required. If load on server-03 ever becomes a concern, the lever is `topologySpreadConstraints` on the higher-traffic apps; currently not worth the churn.
 
 ---
 

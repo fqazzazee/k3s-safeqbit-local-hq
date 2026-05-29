@@ -1,0 +1,54 @@
+# monitoring-servicemonitors.yaml
+# ServiceMonitors that point the kube-prometheus-stack Prometheus at the
+# Longhorn manager and Velero metrics endpoints.
+#
+# Prometheus operator selects ServiceMonitors via `release: monitoring`
+# (matches `serviceMonitorSelector.matchLabels.release` on the Prometheus CR).
+#
+# Endpoints confirmed exposing metrics:
+#   - longhorn-backend.longhorn-system:9500 (port name: manager)
+#   - velero.velero:8085                    (port name: http-monitoring)
+#
+# These pair with monitoring-alert-rules.yaml — without this file the rules
+# would never fire because the underlying metrics wouldn't be in Prometheus.
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: longhorn-manager
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - longhorn-system
+  selector:
+    matchLabels:
+      app: longhorn-manager
+  endpoints:
+    - port: manager
+      path: /metrics
+      interval: 30s
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: velero
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - velero
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: velero
+      app.kubernetes.io/instance: velero
+  endpoints:
+    - port: http-monitoring
+      path: /metrics
+      interval: 30s

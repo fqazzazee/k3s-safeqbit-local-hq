@@ -1,7 +1,7 @@
 # Cluster Maintenance Runbook
 
 **Cluster:** safeqbit-local-hq  
-**Last updated:** 2026-05-28 (backup-strategy.md cross-link added)
+**Last updated:** 2026-05-29 (added Monitoring & Alerting section)
 
 A living document. Add entries as new patterns emerge.
 
@@ -22,6 +22,7 @@ A living document. Add entries as new patterns emerge.
 - [Flux](#flux)
 - [CNPG](#cnpg)
 - [Sealed Secrets](#sealed-secrets)
+- [Monitoring & Alerting](#monitoring--alerting)
 - [General Pod Ops](#general-pod-ops)
 
 ---
@@ -587,6 +588,74 @@ kubectl create secret generic <name> \
 kubectl get secret -n <namespace> <name> \
   -o jsonpath='{.data.<key>}' | base64 -d
 ```
+
+---
+
+## Monitoring & Alerting
+
+The cluster is monitored by kube-prometheus-stack in the `monitoring` namespace. Prometheus picks up `ServiceMonitor` / `PodMonitor` / `PrometheusRule` resources labeled `release: monitoring` from any namespace. Alertmanager routes to Slack via the `alertmanager-slack-webhook` SealedSecret.
+
+### What's scraped
+
+| Source | Mechanism | File |
+|---|---|---|
+| kubelet, apiserver, node-exporter, coredns, etcd | chart defaults | upstream |
+| All CNPG clusters (per-pod postgres metrics) | PodMonitor auto-created by CNPG operator | `cnpg-system`/per-ns |
+| Longhorn manager (`longhorn-backend.longhorn-system:9500`) | ServiceMonitor `longhorn-manager` | `configs/monitoring-servicemonitors.yaml` |
+| Velero (`velero.velero:8085`) | ServiceMonitor `velero` | `configs/monitoring-servicemonitors.yaml` |
+| Cloudflared tunnels | per-app ServiceMonitor | `apps/.../cloudflared/` |
+
+### Custom alert rules
+
+`configs/monitoring-alert-rules.yaml` (PrometheusRule `safeqbit-storage-and-backup`) covers gaps in the upstream chart:
+
+- **Longhorn**: `LonghornVolumeDegraded`, `LonghornVolumeFaulted`, `LonghornVolumeSnapshotCountHigh` (>200, prevent hitting the 250 cap), `LonghornNodeStorageLow` (>85%)
+- **CNPG**: `CNPGReplicationLagHigh` (>5m lag), `CNPGExporterDown`
+- **Velero**: `VeleroBackupFailed` (last status = 0), `VeleroBackupFailureRateHigh` (>2 in 24h)
+
+### Suppressed false-positives
+
+Three default kube-prometheus alerts are hard-disabled (not just silenced) because they target k8s control-plane components that k3s embeds into the server binary, so the standalone metric endpoints don't exist:
+
+- `KubeProxyDown`, `KubeSchedulerDown`, `KubeControllerManagerDown`
+
+These are off via `controllers/monitoring.yaml`:
+```yaml
+defaultRules:
+  rules:
+    kubeProxy: false
+    kubeScheduler: false
+    kubeControllerManager: false
+kubeProxy:
+  enabled: false
+# ...same for the other two
+```
+
+### Verifying alerts
+
+```bash
+# Check Prometheus is scraping each target
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090
+# Browse to http://localhost:9090/targets — all should be UP
+
+# List active alerts
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-alertmanager 9093
+# Browse to http://localhost:9093/#/alerts
+
+# Trigger a known test alert (scale a deploy to 0)
+kubectl -n photoprism scale deploy photoprism --replicas=0
+# Wait 10m → KubePodNotReady/KubeDeploymentReplicasMismatch should fire to Slack
+kubectl -n photoprism scale deploy photoprism --replicas=1
+```
+
+### Common alert investigation
+
+| Alert | First thing to check |
+|---|---|
+| `LonghornVolumeDegraded` | `kubectl -n longhorn-system get volumes <vol> -o yaml` — which replica is missing? Often resolves on its own after node recovery. |
+| `LonghornVolumeSnapshotCountHigh` | `kubectl get backups.postgresql.cnpg.io -A` — old CNPG Backup CRs likely accumulating. Verify `cnpg-backup-retention` CronJob is running daily. |
+| `VeleroBackupFailed` | `velero backup describe <name> --details`; check `kubectl -n velero get backuprepository <ns>-<id>` for kopia maintenance errors. |
+| `CNPGReplicationLagHigh` | `kubectl -n <ns> exec -ti <primary> -- psql -c "SELECT * FROM pg_stat_replication;"` |
 
 ---
 

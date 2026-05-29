@@ -235,8 +235,10 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 - **No off-cluster CNPG backup target.** Layer 2 snapshots live on the same Longhorn volumes as the primary. Whole-Longhorn corruption loses both primary AND backups. Only Layer 3 (Velero → B2) protects against that scenario. See P3.1 in [improvement-plan.md](improvement-plan.md) for the future plan to switch CNPG to plugin-based Barman backups direct to S3.
 - **No off-site etcd snapshots.** k3s writes etcd snapshots locally only. See P1.2 in [improvement-plan.md](improvement-plan.md) (currently deferred).
 - **Single B2 backend.** B2 outage or transaction-cap exhaustion takes Layer 3 down. Cloudflare R2 was considered as an alternative (10M Class A ops free/month vs B2's 2,500/day) — see P2.2.
-- **No alerts on backup failures.** Alertmanager is wired (P1.4) but no Velero/CNPG-specific PrometheusRules yet — see P2.5.
 - **Restore drills not run.** See P2.3.
+
+> Closed gaps (kept for context):
+> - ~~No alerts on backup failures.~~ Closed 2026-05-29: P2.5 added `VeleroBackupFailed`, `VeleroBackupFailureRateHigh`, `LonghornVolumeSnapshotCountHigh`, plus CNPG replication/exporter alerts. See [maintenance.md](maintenance.md#monitoring--alerting).
 
 ---
 
@@ -246,3 +248,4 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 |---|---|
 | 2026-05-27 | CNPG ScheduledBackup cron bug fixed (5-field → 6-field). Velero kopia maintenance bumped from 1h → 168h. Manually pruned 119 stale authentik Backup CRs to dodge 250-snapshot cap. |
 | 2026-05-28 | P2.1 + P2.2 — full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
+| 2026-05-29 | P2.5 — alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |

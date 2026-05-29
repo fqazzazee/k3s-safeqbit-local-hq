@@ -36,7 +36,7 @@ spec:
 
       containers:
         - name: photoprism
-          image: photoprism/photoprism:latest
+          image: photoprism/photoprism:260523
           ports:
             - containerPort: 2342
           env:

@@ -27,3 +27,5 @@ resources:
   - pdbs.yaml
   - alertmanager-slack.yaml
   - cnpg-backup-retention.yaml
+  - monitoring-servicemonitors.yaml
+  - monitoring-alert-rules.yaml

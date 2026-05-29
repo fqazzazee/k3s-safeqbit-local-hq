@@ -1,0 +1,109 @@
+# monitoring-alert-rules.yaml
+# Custom PrometheusRule for the three subsystems where 2026-05-27 incidents
+# originated and where kube-prometheus-stack has zero default coverage:
+# Longhorn, CNPG, Velero.
+#
+# Prometheus picks this up via `release: monitoring` (Prometheus CR
+# ruleSelector). Alerts route through alertmanager-slack (configs/
+# alertmanager-slack.yaml) to the Slack channel webhook.
+#
+# Metric names verified against live Prometheus on 2026-05-29.
+# - longhorn_volume_robustness has labels: pvc, pvc_namespace, volume, node,
+#   state (one of healthy/degraded/faulted/unknown — only one is 1 at a time)
+# - longhorn_snapshot_actual_size_bytes — count() per volume gives snapshot count
+# - longhorn_node_storage_usage_bytes / longhorn_node_storage_capacity_bytes
+# - cnpg_pg_replication_lag — seconds, per-pod
+# - cnpg_collector_up — 1 if exporter scraping postgres OK
+# - velero_backup_last_status{schedule=...} — 1 success, 0 failed (per schedule)
+# - velero_backup_failure_total{schedule=...} — monotonic counter
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: safeqbit-storage-and-backup
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: longhorn
+      interval: 1m
+      rules:
+        - alert: LonghornVolumeDegraded
+          expr: longhorn_volume_robustness{state="degraded"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Longhorn volume {{ $labels.pvc }} degraded"
+            description: "Volume {{ $labels.volume }} ({{ $labels.pvc_namespace }}/{{ $labels.pvc }}) on node {{ $labels.node }} has been degraded for >10m. A replica is missing or rebuilding."
+
+        - alert: LonghornVolumeFaulted
+          expr: longhorn_volume_robustness{state="faulted"} == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Longhorn volume {{ $labels.pvc }} FAULTED"
+            description: "Volume {{ $labels.volume }} ({{ $labels.pvc_namespace }}/{{ $labels.pvc }}) is faulted — all replicas unavailable. Data access is broken until intervention."
+
+        - alert: LonghornVolumeSnapshotCountHigh
+          expr: count by (volume) (longhorn_snapshot_actual_size_bytes) > 200
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Longhorn volume {{ $labels.volume }} approaching snapshot cap"
+            description: "Volume {{ $labels.volume }} has {{ $value }} snapshots. Longhorn's per-volume cap is 250. Prune CNPG Backup CRs or Longhorn snapshots before hitting the limit (which blocks all new snapshots, including those Velero needs)."
+
+        - alert: LonghornNodeStorageLow
+          expr: longhorn_node_storage_usage_bytes / longhorn_node_storage_capacity_bytes > 0.85
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Longhorn node {{ $labels.node }} >85% full"
+            description: "Node {{ $labels.node }} Longhorn storage at {{ $value | humanizePercentage }}. Approaching the schedulable threshold — new replicas may fail to place."
+
+    - name: cnpg
+      interval: 1m
+      rules:
+        - alert: CNPGReplicationLagHigh
+          expr: cnpg_pg_replication_lag > 300
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CNPG replica {{ $labels.pod }} lagging"
+            description: "Replication lag on {{ $labels.namespace }}/{{ $labels.pod }} is {{ $value }}s (>5m). Standby may be falling behind primary; check for I/O bottleneck or network issue."
+
+        - alert: CNPGExporterDown
+          expr: cnpg_collector_up == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CNPG postgres exporter down on {{ $labels.pod }}"
+            description: "Cannot scrape postgres metrics from {{ $labels.namespace }}/{{ $labels.pod }} (cluster {{ $labels.cluster }}) for >5m. Postgres may be stopped or unreachable."
+
+    - name: velero
+      interval: 1m
+      rules:
+        - alert: VeleroBackupFailed
+          expr: velero_backup_last_status{schedule!=""} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Velero schedule {{ $labels.schedule }} latest backup failed"
+            description: "Latest backup for schedule {{ $labels.schedule }} reported FAILED. Check `velero backup describe <name>` and the corresponding BackupRepository in namespace velero."
+
+        - alert: VeleroBackupFailureRateHigh
+          expr: increase(velero_backup_failure_total{schedule!=""}[24h]) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Velero schedule {{ $labels.schedule }} has >2 failures in 24h"
+            description: "Schedule {{ $labels.schedule }} has accumulated {{ $value }} backup failures in the last 24h. Likely a persistent issue (BSL unreachable, B2 caps hit, or kopia maintain failing)."
