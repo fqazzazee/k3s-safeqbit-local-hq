@@ -6,7 +6,7 @@ Added 2026-05-29.
 - **Namespace:** `uptime-kuma`
 - **Hostname:** https://uptime.local.safeqbit.com (admin UI *and* status pages, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/uptime-kuma/`
-- **Image:** `louislam/uptime-kuma:1.23.16` (pinned; bump deliberately)
+- **Image:** `louislam/uptime-kuma:2.3.2` (pinned; bump deliberately)
 - **Storage:** `uptime-kuma-data` 2Gi Longhorn RWO at `/app/data` (SQLite — the *only* home for all monitor/status-page/login config)
 - **Backup:** `infrastructure/.../velero-schedule-uptime-kuma.yaml` — weekly to B2, 180d retention
 - **Deeper metrics:** Grafana/Prometheus handles resource/latency metrics. Uptime Kuma is intentionally scoped to **uptime only**, checked over public **FQDNs** (not cluster-internal IPs/service DNS).
