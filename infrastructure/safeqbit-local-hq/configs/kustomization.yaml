@@ -24,6 +24,7 @@ resources:
   - velero-schedule-monitoring.yaml
   - velero-schedule-passzilla.yaml
   - velero-schedule-photoprism.yaml
+  - velero-schedule-uptime-kuma.yaml
   - pdbs.yaml
   - alertmanager-slack.yaml
   - cnpg-backup-retention.yaml

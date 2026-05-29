@@ -1,0 +1,38 @@
+# velero-schedule-uptime-kuma.yaml
+# Weekly Velero backup of the uptime-kuma namespace to B2.
+#
+# Covers: uptime-kuma-data PVC (the SQLite DB holding ALL monitors,
+# notifications, status pages, and the admin login), plus the PVC definition,
+# Deployment, Service, and Ingress.
+#
+# There is no CNPG / external database for Uptime Kuma and no declarative
+# source for its monitor/status-page config — this PVC snapshot is the only
+# backup of that configuration. If the volume is lost without this, every
+# monitor and status page has to be recreated by hand.
+#
+# Schedule: Sundays 04:00 UTC (slots between the affine 03:00 and other
+# weekly jobs to spread snapshot load).
+# Retention: 180 days (~26 weekly restore points at steady state).
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: uptime-kuma-weekly
+  namespace: velero
+spec:
+  schedule: "0 4 * * 0"
+
+  template:
+    ttl: "4320h0m0s"   # 180 days
+    includedNamespaces:
+      - uptime-kuma
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false

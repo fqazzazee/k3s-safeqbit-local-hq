@@ -1,0 +1,28 @@
+# 02-pvc.yaml
+# uptime-kuma-data (2Gi RWO) → /app/data
+#
+# This single volume holds EVERYTHING that defines this monitoring stack:
+# the SQLite database with all monitors, notifications, status pages, and the
+# admin login. There is no declarative source for that config — it is created
+# in the web UI and lives only here. Treat this PVC as the source of truth and
+# make sure the Velero schedule (infrastructure/.../velero-schedule-uptime-kuma.yaml)
+# keeps backing it up.
+#
+# Longhorn RWO — single-writer, replicated across 3 nodes.
+# Expandable: kubectl patch pvc uptime-kuma-data -n uptime-kuma \
+#   -p '{"spec":{"resources":{"requests":{"storage":"4Gi"}}}}'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uptime-kuma-data
+  namespace: uptime-kuma
+  labels:
+    app.kubernetes.io/name: uptime-kuma
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
