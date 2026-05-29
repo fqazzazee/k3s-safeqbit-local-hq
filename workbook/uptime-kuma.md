@@ -90,6 +90,71 @@ For **every** monitor below:
 
 ---
 
+## Core infrastructure monitors (non-FQDN)
+
+The app checks above stay strictly FQDN-based. CoreDNS, etcd, the ingress
+controller, and the API server have **no ingress hostname**, so they need
+different monitor types pointed at the cluster's *stable* endpoints. These are
+not the ephemeral pod IPs that the FQDN-only rule was protecting against — they
+are fixed for the life of the cluster:
+
+| Endpoint | Value | Stability |
+|---|---|---|
+| Ingress VIP (MetalLB) | `10.10.13.50` | Pinned in `metallb-pools.yaml` (reserved-pool) |
+| API server | `k3s.local.safeqbit.com:6443` | FQDN, round-robins all 3 nodes |
+| kube-dns ClusterIP | `10.43.0.10` (verify) | Fixed Service VIP, not a pod IP |
+| Node IPs | `10.10.13.x` (look up) | Static VLAN addresses (10.10.13.0/24) |
+
+Look up the environment-specific ones once:
+
+```sh
+kubectl -n kube-system get svc kube-dns                 # -> kube-dns ClusterIP
+kubectl get nodes -o wide                               # -> the 3 node INTERNAL-IPs
+```
+
+> **Reality check on these checks:** Uptime Kuma can only prove "the port
+> answers" / "DNS resolves" / "the health URL says ok". Real quorum, scrape, and
+> saturation health come from Prometheus (it already scrapes `etcd`,
+> `kubeApiserver`, CoreDNS). Treat these as a fast, at-a-glance liveness layer
+> that complements Grafana — not a replacement for it.
+
+### Group: Infrastructure (add to the existing group)
+
+| Friendly name | Type | Target / settings |
+|---|---|---|
+| **Kubernetes API** | HTTP(s) - Keyword | URL `https://k3s.local.safeqbit.com:6443/readyz`, keyword `ok`, **Ignore TLS error: ON** (API serves its own cert, not Let's Encrypt). `/readyz`, `/livez`, `/healthz` allow anonymous access. |
+| **CoreDNS** | DNS | Resolve Server `10.43.0.10`, Port `53`, Resolve Type `A`, Hostname `kubernetes.default.svc.cluster.local` (in-cluster name — tests CoreDNS itself, no upstream dependency). |
+| **Ingress-nginx (TCP)** | TCP Port | Host `10.10.13.50`, Port `443`. Isolates "ingress data plane down" from "one app down". |
+| **Ingress-nginx (default backend)** | HTTP(s) | URL `http://10.10.13.50`, Accepted codes `404` (unknown Host hits the default backend → proves nginx is routing). **Ignore TLS error: ON** if you use `https`. Optional, complements the TCP check. |
+| **etcd — node 1** | TCP Port | Host `<node1-ip>`, Port `2379`. |
+| **etcd — node 2** | TCP Port | Host `<node2-ip>`, Port `2379`. |
+| **etcd — node 3** | TCP Port | Host `<node3-ip>`, Port `2379`. One monitor per node so a single-node failure (quorum intact) is visibly distinct from two (quorum lost). Port-open only — etcd needs mTLS, so Kuma can't query health; Grafana covers that. |
+| **Node reachability** (×3) | Ping | Host `<nodeN-ip>`. ICMP liveness for each Proxmox-hosted k3s VM. Combine with the per-node etcd checks to localize a node outage. |
+
+Use the same interval/retry settings as the app monitors (60s / 2 retries / 30s).
+
+### Other monitor types worth knowing
+
+Uptime Kuma's toolbox goes well beyond HTTP — useful ones for this cluster:
+
+- **Push (passive heartbeat)** — *the* gap-filler vs. Grafana. Create a Push
+  monitor, copy its `/api/push/<token>` URL, and append a `curl -fsS <url>` to
+  the end of a job. If the job stops running, Kuma alerts on the missed
+  heartbeat. Ideal for confirming the **CNPG ScheduledBackups**, **Velero
+  schedules**, and the **cnpg-backup-retention CronJob** actually run — "did the
+  backup happen?" is something uptime polling can't answer.
+- **HTTP(s) - Keyword** — assert the response body contains expected text
+  (e.g. a login-page title) so a 200-that-serves-an-error-page still trips.
+- **HTTP(s) - JSON query** — query a JSON endpoint and assert a field (e.g.
+  Longhorn's API for volume robustness, or an app's `/health` JSON).
+- **Postgres / Redis** — real connection checks against the stable
+  `*-cnpg-rw.<ns>.svc` / Redis service DNS names using the app secret creds.
+  Off by default here (deeper than uptime), but available if you ever want a
+  true DB-up signal beyond the app's own FQDN check.
+- **TCP Port / DNS / Ping / gRPC** — generic L4/L7 probes as used above.
+
+---
+
 ## Notifications (recommended)
 
 You already alert to Slack via Alertmanager. Mirror DOWN/UP events into the same
@@ -140,6 +205,15 @@ settings (or just bookmark the `/status/safeqbit` URL).
 - **Pod CrashLoop after image bump:** a minor upgrade may have migrated the
   SQLite schema. Roll the image tag back in `03-deployment.yaml`; restore the
   PVC from the Velero `uptime-kuma-weekly` backup if the DB was corrupted.
+- **Infra monitors (etcd/ping/CoreDNS) all red but apps green:** the pod can't
+  reach the LAN VLAN (`10.10.13.0/24`) from the pod network. Test egress from
+  the pod:
+  `kubectl -n uptime-kuma exec deploy/uptime-kuma -- nc -zv 10.10.13.50 443`
+  and `... -- nslookup -port=53 kubernetes.default.svc.cluster.local 10.43.0.10`.
+  If blocked, check for a NetworkPolicy or that pod→node-VLAN routing is allowed.
+- **Ping monitors stuck "Pending"/error:** ICMP from the container needs the raw
+  socket to work; the official image normally allows it. If your nodes block
+  ICMP, swap the Ping monitor for a TCP Port check (e.g. node `:6443`) instead.
 
 ## Restore (DR)
 
