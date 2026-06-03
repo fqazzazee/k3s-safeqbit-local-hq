@@ -491,3 +491,11 @@ AI as an assistant elsewhere in the project too. The architecture, decisions, ha
 running cluster are mine - AI helped me explain them more clearly and double-check the
 details, not invent them. Anything stated here reflects the actual setup; if you spot
 something that looks off, it's on me, so please open an issue.
+
+---
+
+## 🙏 Inspiration
+
+A lot of the patterns here were shaped by [Techno Tim](https://technotim.com), whose
+homelab and Kubernetes content got me started and kept me unstuck more than once. Highly
+recommended if you're building something like this yourself.
