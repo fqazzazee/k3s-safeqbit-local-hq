@@ -19,7 +19,7 @@
 
 **pgvector note:** The CNPG cluster uses standard PostgreSQL 16 (no pgvector).
 AFFiNE's migration script skips the vector extension when `AFFINE_INDEXER_ENABLED=false`.
-If you ever enable the indexer, you'll need to rebuild with a pgvector image — see the
+If you ever enable the indexer, you'll need to rebuild with a pgvector image - see the
 comment in `03-cnpg-cluster.yaml`.
 
 ---
@@ -35,7 +35,7 @@ Collect from the running Portainer stack on the Docker host:
 
 ---
 
-## Step 1 — Seal credentials
+## Step 1 - Seal credentials
 
 Generate a Redis password and seal it:
 
@@ -53,7 +53,7 @@ kubectl create secret generic affine-credentials \
 
 ---
 
-## Step 2 — Commit and push manifests
+## Step 2 - Commit and push manifests
 
 ```bash
 git add apps/safeqbit-local-hq/affine/ \
@@ -70,16 +70,16 @@ until kubectl get cluster affine-cnpg -n affine \
   -o jsonpath='{.status.readyInstances}' 2>/dev/null | grep -q "1"; do sleep 5; done
 echo "CNPG ready"
 
-# Wait for AFFiNE to pass readiness (boots against empty DB — expected)
+# Wait for AFFiNE to pass readiness (boots against empty DB - expected)
 kubectl rollout status deploy/affine -n affine --timeout=5m
 ```
 
 At this point AFFiNE has booted against an empty database and the migration
-initContainer has created the schema. This is expected — we wipe and restore next.
+initContainer has created the schema. This is expected - we wipe and restore next.
 
 ---
 
-## Step 3 — Scale to zero before data restore
+## Step 3 - Scale to zero before data restore
 
 ```bash
 kubectl scale deploy/affine -n affine --replicas=0
@@ -89,7 +89,7 @@ kubectl wait --for=delete pod -l app.kubernetes.io/name=affine \
 
 ---
 
-## Step 4 — Dump Postgres from Docker host
+## Step 4 - Dump Postgres from Docker host
 
 SSH to the Docker host and dump the database:
 
@@ -107,7 +107,7 @@ scp user@<docker-host-ip>:/tmp/affine.sql ./affine.sql
 
 ---
 
-## Step 5 — Restore Postgres into CNPG
+## Step 5 - Restore Postgres into CNPG
 
 Drop the empty schema that the migration initContainer created, then restore:
 
@@ -126,7 +126,7 @@ kubectl exec -i affine-cnpg-1 -n affine -- \
 
 ---
 
-## Step 6 — Copy storage and config volumes
+## Step 6 - Copy storage and config volumes
 
 Sync files from the Docker host to your local machine first:
 
@@ -173,7 +173,7 @@ kubectl delete pod affine-restore -n affine
 
 ---
 
-## Step 7 — Scale up and verify
+## Step 7 - Scale up and verify
 
 ```bash
 kubectl scale deploy/affine -n affine --replicas=1
@@ -192,7 +192,7 @@ Open `https://affine.local.safeqbit.com` and confirm:
 
 ---
 
-## Step 8 — Decommission Docker stack
+## Step 8 - Decommission Docker stack
 
 Once verified, stop the Portainer stack on the Docker host:
 
@@ -207,7 +207,7 @@ Remove the stack from Portainer and delete the old volumes at your convenience.
 
 ## Expanding storage later
 
-If `affine-storage` fills up, expand it online — no pod restart needed:
+If `affine-storage` fills up, expand it online - no pod restart needed:
 
 ```bash
 kubectl patch pvc affine-storage -n affine \

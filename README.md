@@ -1,4 +1,4 @@
-# safeqbit-local-hq — my self-hosted Kubernetes home cluster
+# safeqbit-local-hq - my self-hosted Kubernetes home cluster
 
 ![K3s](https://img.shields.io/badge/K3s-FFC61C?style=for-the-badge&logo=k3s&logoColor=black)
 ![Flux](https://img.shields.io/badge/Flux-5468FF?style=for-the-badge&logo=flux&logoColor=white)
@@ -18,7 +18,7 @@
 ![AFFiNE](https://img.shields.io/badge/AFFiNE-1E1E1E?style=for-the-badge&logo=affine&logoColor=white)
 ![Passzilla](https://img.shields.io/badge/Passzilla-3D6EB4?style=for-the-badge&logoColor=white)
 
-> A small private cloud running in my home — three computers working together to host
+> A small private cloud running in my home - three computers working together to host
 > my passwords, photos, notes, and a handful of other apps I'd rather not rent from a
 > big tech company. Everything here is defined in this repository, so the whole thing
 > can rebuild itself from scratch. Built and run by **Fadi Qazzazee**.
@@ -30,8 +30,8 @@
 I self-host. Instead of paying monthly for a password manager, a photo backup, a notes
 app, and so on, I run my own copies at home and keep control of my data.
 
-The challenge: if you run all of that on **one** computer and that computer dies — a
-failed disk, a bad reboot, a power blip — *everything* goes down at once, and you might
+The challenge: if you run all of that on **one** computer and that computer dies - a
+failed disk, a bad reboot, a power blip - *everything* goes down at once, and you might
 lose data you can't get back.
 
 So instead of one computer, I run **three**, wired together so they behave like a single
@@ -42,11 +42,11 @@ written here. Change a file, commit it, and the cluster updates itself. Lose a m
 fix it, and it rejoins automatically.
 
 And honestly, that's only half the reason this exists. The other half is **learning**.
-I could run all of these apps the easy way — one server, a handful of containers, done.
+I could run all of these apps the easy way - one server, a handful of containers, done.
 Instead I deliberately built it the hard way: real Kubernetes, real GitOps, real
 high-availability storage and databases, the same tools and patterns used in production
 environments at work. This repo is my hands-on classroom for Kubernetes, Flux, storage,
-networking, and operations — and keeping it documented well enough for a stranger to
+networking, and operations - and keeping it documented well enough for a stranger to
 follow is part of that exercise. If you're learning this stuff too, I hope it's useful.
 
 If some of the words below are new to you, here's the quick version:
@@ -55,7 +55,7 @@ If some of the words below are new to you, here's the quick version:
 |---|---|
 | **Cluster** | A group of computers that pool their resources and act as one. |
 | **Node** | A single computer in the cluster. I have three. |
-| **Kubernetes / K3s** | The "operating system" for the cluster — it decides which app runs on which node, restarts crashed apps, and moves work off a node that dies. K3s is a lightweight version of Kubernetes. |
+| **Kubernetes / K3s** | The "operating system" for the cluster - it decides which app runs on which node, restarts crashed apps, and moves work off a node that dies. K3s is a lightweight version of Kubernetes. |
 | **Container / Pod** | An app packaged up so it runs the same anywhere. A pod is one or more containers running together. |
 | **GitOps / Flux** | "Git is the single source of truth." Everything the cluster should run lives in this Git repo; Flux watches the repo and applies it. No clicking around, no undocumented changes. |
 
@@ -70,7 +70,7 @@ of apps run two ways:
 |---|---|---|
 | A machine reboots or crashes | **Everything is offline** until it's back | Apps **move to the other two nodes** and keep running |
 | A disk fails | Possible **permanent data loss** | Data is **replicated to other nodes**, plus off-site backups |
-| You want to do maintenance | You schedule downtime | Drain one node, work on it, others carry the load — **no downtime** |
+| You want to do maintenance | You schedule downtime | Drain one node, work on it, others carry the load - **no downtime** |
 | Need more capacity | Buy a bigger box, migrate everything | **Add another node** and the cluster spreads work onto it |
 | "Where is everything configured?" | In your head, and scattered config files | **In this Git repo**, all of it |
 
@@ -101,7 +101,7 @@ take everything down or destroy my data.**
                                    this repo               three nodes
 ```
 
-Everything the cluster runs — every app, every setting, every database — is written down
+Everything the cluster runs - every app, every setting, every database - is written down
 in this repository as plain text. **Flux** runs inside the cluster, watches this repo,
 and continuously reconciles reality against what's committed. I almost never run commands
 directly against the cluster; I change a file, and the cluster catches up.
@@ -125,7 +125,7 @@ Visitor ─► Cloudflare / my LAN ─► ingress (front door) ─► the app's 
 ## 🖥️ The hardware
 
 Three physical machines, each running [Proxmox](https://www.proxmox.com/) (a hypervisor)
-which in turn runs a K3s virtual machine. All three are full members — there are no
+which in turn runs a K3s virtual machine. All three are full members - there are no
 "lesser" worker-only nodes; every node both runs apps and takes part in the cluster's
 decision-making.
 
@@ -143,7 +143,7 @@ Everything else, Kubernetes places wherever it fits.
 
 ### Networking
 
-The three nodes don't just plug into the home router — they sit on a purpose-built
+The three nodes don't just plug into the home router - they sit on a purpose-built
 network designed the same way you'd lay one out in a small datacenter.
 
 | Gear | Role |
@@ -159,9 +159,9 @@ A few deliberate choices, and *why*:
   reach another. This is classic network micro-segmentation / least-privilege.
 - **Router-on-a-stick.** VLANs are trunked from the switch up to the UCG-MAX, which does
   the routing *between* them. All inter-VLAN traffic passes through one place where
-  firewall rules are enforced — east-west traffic isn't implicitly trusted.
-- **LACP link aggregation.** The two nodes with dual NICs — Meatball (dual 10G fiber) and
-  Dumpling (dual 2.5 GbE) — are bonded to the switch with LACP (IEEE 802.3ad). That gives
+  firewall rules are enforced - east-west traffic isn't implicitly trusted.
+- **LACP link aggregation.** The two nodes with dual NICs - Meatball (dual 10G fiber) and
+  Dumpling (dual 2.5 GbE) - are bonded to the switch with LACP (IEEE 802.3ad). That gives
   both more throughput *and* link-level redundancy: a cable or port can fail and the node
   stays connected. Omen runs a single 1 GbE link. The 10G fiber pair lands on the switch's
   SFP+ ports; the 2.5 GbE pair on the copper ports.
@@ -183,11 +183,11 @@ everything else by default.
 
 ---
 
-## 💾 Storage — where the data lives
+## 💾 Storage - where the data lives
 
 Different apps want different things from storage, so there are two tiers.
 
-### Longhorn — fast, replicated storage for apps
+### Longhorn: fast, replicated storage for apps
 
 [Longhorn](https://longhorn.io/) is the default storage for the cluster. When an app
 needs a disk, Longhorn carves one out of the nodes' local drives and **keeps replicated
@@ -198,7 +198,7 @@ is where databases and performance-sensitive apps live.
 - Point-in-time snapshots via the Longhorn UI or the CSI interface
 - Wired into Velero (the backup tool) for coordinated, cluster-wide backups
 
-### TrueNAS — shared and bulk storage over NFS
+### TrueNAS: shared and bulk storage over NFS
 
 For things that need a lot of space or shared access (like a media library), the cluster
 mounts storage from a [TrueNAS](https://www.truenas.com/) box over the network (NFS).
@@ -213,7 +213,7 @@ mounts storage from a [TrueNAS](https://www.truenas.com/) box over the network (
 | StorageClass | `nfs-truenas` |
 
 A provisioner (`nfs-subdir-external-provisioner`) hands out a dedicated folder on the NAS
-automatically whenever an app asks for one — no manual NFS export juggling.
+automatically whenever an app asks for one - no manual NFS export juggling.
 
 **Bulk media:** a second NFS tier serves a large spinning-disk array. Immich and
 PhotoPrism point straight at my existing photo/video folders there, so there was no data
@@ -225,7 +225,7 @@ over SSH, giving me a continuously-updated, ready-to-go second copy of all NAS d
 
 ---
 
-## 🛟 Backups — three copies, three failure modes
+## 🛟 Backups - three copies, three failure modes
 
 A backup is only useful for the disaster it was designed for, so I run three layers, each
 covering a different "what if."
@@ -248,44 +248,44 @@ A few details for the curious:
 
 ---
 
-## 🧩 The platform layer — the plumbing that makes it a "cloud"
+## 🧩 The platform layer - the plumbing that makes it a "cloud"
 
 These are the behind-the-scenes components. None of them are apps I use directly; they're
 the services that turn three computers into something that behaves like a cloud provider.
 
-### MetalLB — gives apps real network addresses
+### MetalLB: gives apps real network addresses
 
 In a real cloud, asking for a load balancer gets you a public IP. At home there's no cloud
 to ask, so [MetalLB](https://metallb.io/) hands out IPs from my LAN instead.
 
 | Pool | Range | Assignment |
 |---|---|---|
-| reserved-pool | 10.10.13.50–59 | Manual (by annotation) |
-| auto-pool | 10.10.13.60–100 | Automatic (default) |
+| reserved-pool | 10.10.13.50-59 | Manual (by annotation) |
+| auto-pool | 10.10.13.60-100 | Automatic (default) |
 
-### ingress-nginx — the front door
+### ingress-nginx: the front door
 
 All web traffic enters through a single address (`10.10.13.50`) and
 [ingress-nginx](https://kubernetes.github.io/ingress-nginx/) routes each request to the
 right app based on its hostname. It runs on every node and preserves the real visitor IP.
 
-### cert-manager — automatic HTTPS
+### cert-manager: automatic HTTPS
 
 [cert-manager](https://cert-manager.io/) gets and renews real
 [Let's Encrypt](https://letsencrypt.org/) TLS certificates automatically, even for
 internal-only hostnames, by proving domain ownership through Cloudflare's DNS API. No
 expired-certificate warnings, no manual renewals, no self-signed certs.
 
-### Sealed Secrets — how passwords live safely in a public repo
+### Sealed Secrets: how passwords live safely in a public repo
 
 Secrets (database passwords, API tokens) obviously can't sit in plain text in a public
 Git repo. [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) solves this: I
 encrypt each secret on my laptop with `kubeseal`, and only the controller *inside my
 cluster* can decrypt it. The encrypted blobs are safe to commit and useless to anyone
-else. The master key that could decrypt them never touches the repo — it lives offline in
+else. The master key that could decrypt them never touches the repo - it lives offline in
 my password manager.
 
-### CloudNativePG — managed databases
+### CloudNativePG: managed databases
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) runs the PostgreSQL databases. Each app
 that needs one gets its own database cluster, and the important ones run as a
@@ -303,7 +303,7 @@ All four pairs use anti-affinity so the primary and standby never share a node. 
 and PhotoPrism run their own tuned PostgreSQL; Vaultwarden uses a simple SQLite file on
 replicated storage.)
 
-### cloudflared — secure access from outside the house
+### cloudflared: secure access from outside the house
 
 A few apps need to be reachable from the public internet. Rather than opening ports on my
 router (and painting a target on my home network), I use
@@ -312,11 +312,11 @@ small connectors run *inside* the cluster and dial **outward** to Cloudflare. Tr
 back down that outbound connection. No open inbound ports, nothing exposed directly. Each
 tunnel runs two copies for redundancy.
 
-### kube-prometheus-stack — monitoring and alerts
+### kube-prometheus-stack: monitoring and alerts
 
 [Prometheus](https://prometheus.io/) collects metrics from everything;
-[Grafana](https://grafana.com/) draws the dashboards. If something breaks — a node, an app,
-or a tunnel — Alertmanager pings me on Slack. This is how I find out about problems before
+[Grafana](https://grafana.com/) draws the dashboards. If something breaks - a node, an app,
+or a tunnel - Alertmanager pings me on Slack. This is how I find out about problems before
 they become outages.
 
 ---
@@ -343,7 +343,7 @@ k3s-safeqbit-local-hq/
 ```
 
 The controllers/configs split lets Flux bring things up **in the right order** during a
-rebuild — operators first, then the things that depend on them — all in one pass.
+rebuild - operators first, then the things that depend on them - all in one pass.
 
 ### Rebuilding from nothing
 
@@ -364,20 +364,20 @@ The only things that live *outside* Git are: the master key (offline), Longhorn 
 ## 🔐 Security posture
 
 Each control below is a deliberate choice, not a default. I've noted *why* it's done that
-way and the recognised standard or framework it maps to — partly for anyone reading, and
+way and the recognised standard or framework it maps to - partly for anyone reading, and
 partly because reasoning from established guidance is itself one of the things I'm here to
 learn.
 
 - **No plaintext secrets, ever.** Every sensitive value is encrypted with `kubeseal` and
   committed as a `SealedSecret`; the only key that can decrypt them lives in-cluster.
-  *Why:* secrets stored in a Git repo are secrets exposed forever in history — encrypting
+  *Why:* secrets stored in a Git repo are secrets exposed forever in history - encrypting
   them at rest and separating the decryption key removes that exposure.
   *Maps to:* CIS Kubernetes Benchmark §5.4 (Secrets Management), NIST SP 800-57
   (key management), and the [Twelve-Factor App](https://12factor.net/config) config principle.
 - **The decryption key stays offline.** The single master key that could unseal every
-  secret never touches the repo — it lives in an encrypted password manager.
+  secret never touches the repo - it lives in an encrypted password manager.
   *Why:* the security of everything sealed reduces to protecting one root of trust, so it's
-  kept out-of-band and offline (defense in depth — no single online system can leak it).
+  kept out-of-band and offline (defense in depth - no single online system can leak it).
   *Maps to:* NIST SP 800-57 key-custody guidance; the principle of protecting the root key
   separately from the data it protects.
 - **Encryption in transit, everywhere.** Real Let's Encrypt certificates on every exposed
@@ -391,15 +391,15 @@ learn.
   firewalled gateway (the router-on-a-stick described above).
   *Why:* a flat network means one compromised device can reach everything. Segmenting
   contains blast radius and enforces least-privilege between zones.
-  *Maps to:* CIS Controls v8 — Control 4 (Secure Configuration) and Control 12 (Network
-  Infrastructure Management) — and NIST SP 800-207 (Zero Trust Architecture).
-- **No open inbound ports — reduced attack surface.** Public access is via *outbound-only*
+  *Maps to:* CIS Controls v8 - Control 4 (Secure Configuration) and Control 12 (Network
+  Infrastructure Management) - and NIST SP 800-207 (Zero Trust Architecture).
+- **No open inbound ports - reduced attack surface.** Public access is via *outbound-only*
   Cloudflare Tunnels; nothing on the home network listens for unsolicited inbound traffic.
   *Why:* every open inbound port is a potential entry point. Outbound-only tunnels remove
   the exposed listening surface entirely.
   *Maps to:* the attack-surface-reduction principle in NIST SP 800-207 (Zero Trust) and
   OWASP's minimize-attack-surface guidance.
-- **Pinned, provenanced images — supply-chain hygiene.** Containers come from public
+- **Pinned, provenanced images - supply-chain hygiene.** Containers come from public
   registries pinned to explicit tags or digests per workload.
   *Why:* pulling `:latest` means you can't reproduce what you ran, and a mutated upstream
   tag could swap code under you. Pinning makes deployments reproducible and auditable.
@@ -430,7 +430,7 @@ learn.
 | Component | Role |
 |---|---|
 | K3s + etcd | The cluster itself |
-| Flux v2 | GitOps — keeps the cluster matching this repo |
+| Flux v2 | GitOps - keeps the cluster matching this repo |
 | MetalLB | Hands out LAN IPs to services |
 | ingress-nginx | Routes incoming web traffic |
 | cert-manager | Automatic Let's Encrypt TLS |
@@ -449,7 +449,7 @@ learn.
 | [NetScan](https://github.com/fqazzazee/NetScan-WoL) | Network scanning & Wake-on-LAN management |
 
 I develop and run my own tools on the same cluster and through the same GitOps pipeline as
-everything else — a realistic place to test things in something close to production.
+everything else - a realistic place to test things in something close to production.
 
 ---
 
@@ -488,6 +488,6 @@ everything else — a realistic place to test things in something close to produ
 
 Parts of this documentation were drafted and refined with the help of AI tools, and I use
 AI as an assistant elsewhere in the project too. The architecture, decisions, hardware, and
-running cluster are mine — AI helped me explain them more clearly and double-check the
+running cluster are mine - AI helped me explain them more clearly and double-check the
 details, not invent them. Anything stated here reflects the actual setup; if you spot
 something that looks off, it's on me, so please open an issue.

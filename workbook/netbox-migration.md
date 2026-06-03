@@ -10,7 +10,7 @@
 Netbox was running on a dedicated Docker host (`10.10.12.34`) deployed as a Portainer stack. This meant:
 
 - A separate VM/host to maintain and keep patched
-- No GitOps — config lived in Portainer's UI, not in version control
+- No GitOps - config lived in Portainer's UI, not in version control
 - Hand-rolled `postgres:16-alpine` container with a plaintext password in the Portainer `.env` file
 - No application-consistent database backups
 - Two Redis containers configured by hand with no persistence guarantees on the cache vs queue split
@@ -79,7 +79,7 @@ Docker host: 10.10.12.34 (macvlan IP)
 │  │  • netbox-media   10Gi   │   ┌───────────────────────────┐   │
 │  │  • netbox-reports  1Gi   │   │  Ingress                  │   │
 │  │  • netbox-scripts  1Gi   │   │  netbox.local.safeqbit.com│   │
-│  │  (RWX — shared by web    │   │  cert-manager letsencrypt │   │
+│  │  (RWX - shared by web    │   │  cert-manager letsencrypt │   │
 │  │   and worker)            │   └───────────────────────────┘   │
 │  └───────────────────── ────┘                                   │
 └─────────────────────────────────────────────────────────────────┘
@@ -101,20 +101,20 @@ Netbox uses Redis for two fundamentally different purposes with different durabi
 
 | Instance | Service name | Purpose | Persistence | Memory |
 |---|---|---|---|---|
-| Task queue | `netbox-redis-tasks` | RQ job queue — webhooks, custom scripts | Yes (Longhorn 1Gi, `--appendonly yes`) | Default |
-| Cache | `netbox-redis-cache` | Object cache — safe to lose | No PVC | 512mb LRU cap |
+| Task queue | `netbox-redis-tasks` | RQ job queue - webhooks, custom scripts | Yes (Longhorn 1Gi, `--appendonly yes`) | Default |
+| Cache | `netbox-redis-cache` | Object cache - safe to lose | No PVC | 512mb LRU cap |
 
-If you used a single Redis for both and it restarted, you'd lose both cached objects (fine) **and** queued jobs (not fine — webhooks silently dropped). Keeping them separate means a cache restart is harmless.
+If you used a single Redis for both and it restarted, you'd lose both cached objects (fine) **and** queued jobs (not fine - webhooks silently dropped). Keeping them separate means a cache restart is harmless.
 
 ### Why NFS RWX for media/reports/scripts
 
-The web pod and the worker pod are separate Kubernetes Deployments — separate pods that can land on different nodes. Longhorn PVCs are `ReadWriteOnce` (one node at a time), which would force co-scheduling and defeat the purpose of having separate pods.
+The web pod and the worker pod are separate Kubernetes Deployments - separate pods that can land on different nodes. Longhorn PVCs are `ReadWriteOnce` (one node at a time), which would force co-scheduling and defeat the purpose of having separate pods.
 
 `nfs-truenas` provides `ReadWriteMany`, so both pods mount the same NFS share simultaneously. This matches the Docker Compose behavior where all three containers shared the same Docker volume.
 
 ### SKIP_SUPERUSER behavior
 
-The `netboxcommunity/netbox` image runs `create_superuser.py` at startup when `SKIP_SUPERUSER=false`. This script checks if the superuser already exists — if it does, it skips creation and does not overwrite the existing password. Setting `SKIP_SUPERUSER=false` on the web pod is safe even after restoring an existing database. The worker and housekeeping containers set `SKIP_SUPERUSER=true` because they have no business creating admin users.
+The `netboxcommunity/netbox` image runs `create_superuser.py` at startup when `SKIP_SUPERUSER=false`. This script checks if the superuser already exists - if it does, it skips creation and does not overwrite the existing password. Setting `SKIP_SUPERUSER=false` on the web pod is safe even after restoring an existing database. The worker and housekeeping containers set `SKIP_SUPERUSER=true` because they have no business creating admin users.
 
 ---
 
@@ -126,7 +126,7 @@ The `netboxcommunity/netbox` image runs `create_superuser.py` at startup when `S
 - `pg_dump` available inside the Docker postgres container
 - `kubeseal` binary at `/tmp/kubeseal` (v0.28.0 matching controller 0.36.6)
 
-### Step 1 — Seal the credentials
+### Step 1 - Seal the credentials
 
 Collect from the running Portainer stack:
 - Redis task queue password
@@ -153,7 +153,7 @@ kubectl create secret generic netbox-credentials \
 
 **Important:** `SECRET_KEY` must match the old instance exactly. Netbox uses it to sign session cookies and tokens. A changed `SECRET_KEY` invalidates all existing sessions on next login (not catastrophic, but disruptive).
 
-### Step 2 — Push and wait for initial boot
+### Step 2 - Push and wait for initial boot
 
 ```bash
 git add apps/safeqbit-local-hq/netbox/ \
@@ -176,17 +176,17 @@ echo "CNPG ready"
 kubectl rollout status deploy/netbox -n netbox --timeout=5m
 ```
 
-At this point Netbox has booted against an empty database and applied the full schema via Django migrations. This is expected — we will wipe and restore in the next step.
+At this point Netbox has booted against an empty database and applied the full schema via Django migrations. This is expected - we will wipe and restore in the next step.
 
-### Step 3 — Scale to zero before restore
+### Step 3 - Scale to zero before restore
 
 ```bash
 kubectl scale deploy netbox netbox-worker -n netbox --replicas=0
 ```
 
-This prevents Netbox from writing new sessions or changes to the database while we overwrite it. Always do this before a restore — active writes during a restore corrupt the data.
+This prevents Netbox from writing new sessions or changes to the database while we overwrite it. Always do this before a restore - active writes during a restore corrupt the data.
 
-### Step 4 — Dump from Docker host
+### Step 4 - Dump from Docker host
 
 On the Docker host, find the Postgres container name:
 
@@ -201,7 +201,7 @@ docker exec <postgres-container> \
   pg_dump -U netbox --clean --if-exists netbox > /tmp/netbox.sql
 ```
 
-**`--clean --if-exists`** — generates `DROP ... IF EXISTS` before every `CREATE`. This makes the restore idempotent: when applied on top of an existing schema (which Netbox already created during initial boot), each object is dropped and recreated cleanly instead of erroring on "already exists".
+**`--clean --if-exists`** - generates `DROP ... IF EXISTS` before every `CREATE`. This makes the restore idempotent: when applied on top of an existing schema (which Netbox already created during initial boot), each object is dropped and recreated cleanly instead of erroring on "already exists".
 
 Copy the dump to the k3s machine:
 
@@ -209,7 +209,7 @@ Copy the dump to the k3s machine:
 scp user@10.10.12.34:/tmp/netbox.sql /tmp/netbox.sql
 ```
 
-### Step 5 — Wipe the fresh schema and restore
+### Step 5 - Wipe the fresh schema and restore
 
 ```bash
 # Drop the schema created by Netbox's initial boot
@@ -220,11 +220,11 @@ kubectl exec -n netbox netbox-cnpg-1 -- psql -U postgres netbox \
 kubectl exec -i netbox-cnpg-1 -n netbox -- psql -U postgres netbox < /tmp/netbox.sql
 ```
 
-**Why drop the schema first?** The `--clean` flag in pg_dump emits `DROP` statements for every object, but it emits them in dependency order for individual objects — not as a single schema wipe. On a database that was initialised by Django migrations, there are circular dependencies and extension objects that `--clean` alone can't resolve cleanly. Dropping the whole public schema first gives pg_restore a clean slate.
+**Why drop the schema first?** The `--clean` flag in pg_dump emits `DROP` statements for every object, but it emits them in dependency order for individual objects - not as a single schema wipe. On a database that was initialised by Django migrations, there are circular dependencies and extension objects that `--clean` alone can't resolve cleanly. Dropping the whole public schema first gives pg_restore a clean slate.
 
 **Why `psql -U postgres` instead of `-U netbox`?** Inside the CNPG pod, the `postgres` superuser can connect via the Unix socket (`/controller/run/.s.PGSQL.5432`) using peer authentication. The `netbox` app user requires password authentication via TCP. Using `postgres` avoids needing to pass the password, and the CNPG pod doesn't expose psql to the `netbox` user via peer auth. For the `GRANT` statement, we need superuser privileges anyway.
 
-### Step 6 — Scale back up
+### Step 6 - Scale back up
 
 ```bash
 kubectl scale deploy netbox netbox-worker -n netbox --replicas=1
@@ -241,7 +241,7 @@ kubectl logs -n netbox -l app.kubernetes.io/component=web --tail=10
 # and:    "✅ Initialisation is done."
 ```
 
-### Step 7 — Sync media/reports/scripts (if applicable)
+### Step 7 - Sync media/reports/scripts (if applicable)
 
 The NFS PVCs mount to these paths inside the running pod:
 
@@ -251,7 +251,7 @@ The NFS PVCs mount to these paths inside the running pod:
 /opt/netbox/netbox/scripts  → 10.10.10.5:/mnt/nvme2tb/k8s/pvs/netbox-netbox-scripts-${.PV.name}
 ```
 
-**Note on `${.PV.name}` in the path:** The `nfs-subdir-external-provisioner` uses a `pathPattern` template to generate subdirectory names. The template variable `${.PV.name}` is not expanded in the PV spec or `df` output — it appears literally. But the NFS server created that directory with this exact literal name, and it works. It's a quirk of this provisioner version's metadata storage.
+**Note on `${.PV.name}` in the path:** The `nfs-subdir-external-provisioner` uses a `pathPattern` template to generate subdirectory names. The template variable `${.PV.name}` is not expanded in the PV spec or `df` output - it appears literally. But the NFS server created that directory with this exact literal name, and it works. It's a quirk of this provisioner version's metadata storage.
 
 If the Docker volumes had content, rsync from the Docker host to TrueNAS via SSH (single-quote the path to prevent shell expansion of `${...}`):
 
@@ -261,7 +261,7 @@ rsync -av /var/lib/docker/volumes/<media_volume>/_data/ \
   user@10.10.10.5:'/mnt/nvme2tb/k8s/pvs/netbox-netbox-media-${.PV.name}/'
 ```
 
-In this migration the Docker volumes were empty — no files to copy.
+In this migration the Docker volumes were empty - no files to copy.
 
 ---
 
@@ -276,13 +276,13 @@ readinessProbe:
     port: 8080
 ```
 
-This caused the pod to never become Ready. The kube-probe sends HTTP requests with a `kube-probe/1.x` User-Agent and no `Host` header matching `ALLOWED_HOSTS`. Django returns HTTP 400 (Bad Request) for any request whose `Host` header doesn't match — even health checks. The pod logs showed:
+This caused the pod to never become Ready. The kube-probe sends HTTP requests with a `kube-probe/1.x` User-Agent and no `Host` header matching `ALLOWED_HOSTS`. Django returns HTTP 400 (Bad Request) for any request whose `Host` header doesn't match - even health checks. The pod logs showed:
 
 ```
 GET / HTTP/1.1" 400 156 "-" "kube-probe/1.35"
 ```
 
-**Fix:** Switch to TCP socket probes. These just check that the port is accepting connections — they don't send an HTTP request at all, so Django's host validation is never triggered.
+**Fix:** Switch to TCP socket probes. These just check that the port is accepting connections - they don't send an HTTP request at all, so Django's host validation is never triggered.
 
 ```yaml
 readinessProbe:
@@ -307,7 +307,7 @@ livenessProbe:
     command: ["redis-cli", "ping"]
 ```
 
-But `redis-cli ping` against a password-protected Redis returns `-NOAUTH Authentication required` — not `PONG`. The probe would succeed (exit 0) or fail depending on the redis-cli version. TCP socket is the correct approach here too:
+But `redis-cli ping` against a password-protected Redis returns `-NOAUTH Authentication required` - not `PONG`. The probe would succeed (exit 0) or fail depending on the redis-cli version. TCP socket is the correct approach here too:
 
 ```yaml
 livenessProbe:
@@ -378,6 +378,6 @@ kubectl get schedule netbox-biweekly -n velero
 
 **Scale to zero before a database restore.** If the application is running while you restore, it will write new sessions or state entries concurrently with the restore, corrupting the result. Scale web and worker to 0 first, restore, then scale back up.
 
-**The Docker volumes were empty.** Netbox stores uploaded images (device photos, rack diagrams) in `media/`. If you actively use that feature, syncing `media/` is critical. In this deployment it was unused — the migration was DB-only.
+**The Docker volumes were empty.** Netbox stores uploaded images (device photos, rack diagrams) in `media/`. If you actively use that feature, syncing `media/` is critical. In this deployment it was unused - the migration was DB-only.
 
 **`POSTGRES_PASSWORD` from the Docker stack is not needed in k3s.** CNPG generates its own password and stores it in `netbox-cnpg-app`. The old Postgres password is only needed for the one-time pg_dump command on the Docker host. Do not commit it anywhere.

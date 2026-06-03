@@ -11,8 +11,8 @@
 
 Both apps were running as a single Portainer stack on a Docker host, sharing macvlan IPs on the LAN and mounting NFS paths directly from the host. Moving to k3s gives us:
 
-- GitOps — the full stack is in version control
-- Separate namespaces — Immich and Photoprism are independent apps that happen to share a photo library, not one monolithic stack
+- GitOps - the full stack is in version control
+- Separate namespaces - Immich and Photoprism are independent apps that happen to share a photo library, not one monolithic stack
 - Velero biweekly backups via the namespace `backup.policy/velero: biweekly` label
 - Ingress + cert-manager TLS instead of macvlan IPs
 - Resource allocation in a dedicated file (`09-resources.yaml` / `06-resources.yaml`) with an optional node-pinning escape hatch for when hardware is upgraded
@@ -28,11 +28,11 @@ A second NFS provisioner (`nfs-subdir-external-provisioner`) pointed at the True
 | StorageClass | Server | Base Path | Purpose |
 |---|---|---|---|
 | `nfs-truenas` | 10.10.10.5 | `/mnt/nvme2tb/k8s/pvs` | Fast NVMe-backed RWX storage for app data (Netbox media, etc.) |
-| `nfs-bulk-media` | 10.10.10.5 | `/mnt/mach2/mach2nas/Media` | Bulk media share — large, slow, for photo libraries |
+| `nfs-bulk-media` | 10.10.10.5 | `/mnt/mach2/mach2nas/Media` | Bulk media share - large, slow, for photo libraries |
 
 ### How it is used
 
-Immich and Photoprism do **not** use dynamic provisioning from `nfs-bulk-media`. Their photo library directories already exist on the TrueNAS Media share and contain live data, so moving them into subdir-provisioned paths would require copying TBs. Instead, they use **static PVs** (`storageClassName: ""`) that point directly to the existing NFS paths — zero data migration.
+Immich and Photoprism do **not** use dynamic provisioning from `nfs-bulk-media`. Their photo library directories already exist on the TrueNAS Media share and contain live data, so moving them into subdir-provisioned paths would require copying TBs. Instead, they use **static PVs** (`storageClassName: ""`) that point directly to the existing NFS paths - zero data migration.
 
 `nfs-bulk-media` exists for future workloads that need a new RWX directory on the bulk array. Requesting a PVC with `storageClassName: nfs-bulk-media` will dynamically create a new subdirectory under `/mnt/mach2/mach2nas/Media/`.
 
@@ -111,9 +111,9 @@ NFS mounts on Docker host (/mnt/nfs/Media/...):
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │  Deployment: photoprism                                   │   │
 │  │  seccompProfile: Unconfined (libraw + ffmpeg syscalls)    │   │
-│  │  → /originals (NFS static PV, RW — Photoprism sorts here)│   │
-│  │  → /storage   (NFS static PV — SQLite DB lives here)     │   │
-│  │  → /import    (NFS static PV — drop folder)              │   │
+│  │  → /originals (NFS static PV, RW - Photoprism sorts here)│   │
+│  │  → /storage   (NFS static PV - SQLite DB lives here)     │   │
+│  │  → /import    (NFS static PV - drop folder)              │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────┐   ┌────────────────────────────┐   │
@@ -130,11 +130,11 @@ NFS mounts on Docker host (/mnt/nfs/Media/...):
 
 ### Why Photoprism and Immich are separate apps (not one namespace)
 
-In Docker Compose they were a single stack for deployment convenience — one `docker compose down` stops everything. On k3s there is no benefit to coupling them. They have different update cadences, different resource profiles, and independent failure domains. Separating them means you can restart Photoprism without touching Immich and vice versa.
+In Docker Compose they were a single stack for deployment convenience - one `docker compose down` stops everything. On k3s there is no benefit to coupling them. They have different update cadences, different resource profiles, and independent failure domains. Separating them means you can restart Photoprism without touching Immich and vice versa.
 
 ### Why Immich uses a plain Deployment for Postgres instead of CNPG
 
-Immich requires `ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0` — a custom image that bundles the `vectorchord` and `pgvectors` extensions used for CLIP similarity search and face clustering. CNPG is incompatible with this image for two reasons:
+Immich requires `ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0` - a custom image that bundles the `vectorchord` and `pgvectors` extensions used for CLIP similarity search and face clustering. CNPG is incompatible with this image for two reasons:
 
 1. The CNPG operator expects its own Postgres images (or images built on its base) with specific UID conventions (UID 26) and the `barman-cloud-*` tools for backup automation.
 2. The Immich image is based on the upstream `postgres:14` which uses UID 999 and has no barman tooling.
@@ -151,7 +151,7 @@ kubectl exec -it -n immich deploy/immich-postgres -- \
 
 ### Why Immich Redis has no password and no persistence
 
-Immich's Redis holds ephemeral state: job queue entries, active WebSocket sessions, thumbnail generation tasks. On restart, the server reconnects and rebuilds the queue from the database. The original Compose stack also had no Redis password. Adding one would require `REDIS_PASSWORD` in the server env and the `requirepass` arg in the Valkey container — unnecessary complexity for an internal cluster service with no external exposure.
+Immich's Redis holds ephemeral state: job queue entries, active WebSocket sessions, thumbnail generation tasks. On restart, the server reconnects and rebuilds the queue from the database. The original Compose stack also had no Redis password. Adding one would require `REDIS_PASSWORD` in the server env and the `requirepass` arg in the Valkey container - unnecessary complexity for an internal cluster service with no external exposure.
 
 ### Why Photoprism needs `seccompProfile: Unconfined`
 
@@ -161,10 +161,10 @@ Photoprism runs `libraw` (for RAW photo processing) and `ffmpeg` (for video thum
 
 Both Immich and Photoprism mount `/mnt/mach2/mach2nas/Media/Memories/originals`:
 
-- **Photoprism** mounts it read-write — it organises and imports photos here
-- **Immich** mounts it read-only at `/external` — it reads the same library for its timeline view
+- **Photoprism** mounts it read-write - it organises and imports photos here
+- **Immich** mounts it read-only at `/external` - it reads the same library for its timeline view
 
-In Kubernetes, a single PV can only bind to one PVC. Two separate static PVs point to the same NFS path — one in each namespace. The NFS server (TrueNAS) handles concurrent multi-client access.
+In Kubernetes, a single PV can only bind to one PVC. Two separate static PVs point to the same NFS path - one in each namespace. The NFS server (TrueNAS) handles concurrent multi-client access.
 
 | PV | Namespace | Mount | Access |
 |---|---|---|---|
@@ -173,16 +173,16 @@ In Kubernetes, a single PV can only bind to one PVC. Two separate static PVs poi
 
 ### NFS PV capacity values are informational
 
-For NFS PVs the `capacity.storage` field has no enforcement — the actual quota is managed by TrueNAS, not Kubernetes. The values set here (6Ti for originals, 1Ti for import, 500Gi for storage/export) exist solely so that `kubectl get pv` shows meaningful output. They will not cause scheduling failures or prevent writes once the TrueNAS quota is reached.
+For NFS PVs the `capacity.storage` field has no enforcement - the actual quota is managed by TrueNAS, not Kubernetes. The values set here (6Ti for originals, 1Ti for import, 500Gi for storage/export) exist solely so that `kubectl get pv` shows meaningful output. They will not cause scheduling failures or prevent writes once the TrueNAS quota is reached.
 
 ### Resource allocation as a kustomize patch
 
 All `resources:` blocks are removed from the deployment manifests and live exclusively in:
 
-- `immich/09-resources.yaml` — postgres, redis, server (inc. init container), ML
-- `photoprism/06-resources.yaml` — photoprism
+- `immich/09-resources.yaml` - postgres, redis, server (inc. init container), ML
+- `photoprism/06-resources.yaml` - photoprism
 
-These files are strategic merge patches applied via `patchesStrategicMerge` in each `kustomization.yaml`. Each deployment section includes a commented-out `nodeSelector` block — uncomment and set `kubernetes.io/hostname` to pin that workload to a specific node when hardware is upgraded.
+These files are strategic merge patches applied via `patchesStrategicMerge` in each `kustomization.yaml`. Each deployment section includes a commented-out `nodeSelector` block - uncomment and set `kubernetes.io/hostname` to pin that workload to a specific node when hardware is upgraded.
 
 ```bash
 # Find node hostnames
@@ -213,9 +213,9 @@ Base: `/mnt/mach2/mach2nas/Media`
 
 Both apps were migrated with zero manual data movement.
 
-**Photoprism** required no DB migration — its SQLite database lives inside `/Memories/storage` on TrueNAS, which k3s already mounts via the static NFS PV. The pod came up and immediately had access to the full library.
+**Photoprism** required no DB migration - its SQLite database lives inside `/Memories/storage` on TrueNAS, which k3s already mounts via the static NFS PV. The pod came up and immediately had access to the full library.
 
-**Immich** was restored from Immich's own built-in backup (Administration → Jobs → Backup). The NFS photo library (`/immich`, `/Memories/originals`) was already accessible via the static NFS PVs — no file copying needed.
+**Immich** was restored from Immich's own built-in backup (Administration → Jobs → Backup). The NFS photo library (`/immich`, `/Memories/originals`) was already accessible via the static NFS PVs - no file copying needed.
 
 ### Sealing the secrets
 
@@ -265,11 +265,11 @@ spec.schedule: Invalid value: "0 3 * * 0":
 Beginning of range (0) below minimum (1)
 ```
 
-**Cause:** The CNPG admission webhook uses a cron parser that requires day-of-week values to be `1–7` (Monday = 1, Sunday = 7). Standard POSIX cron uses `0` for Sunday. The AFFiNE weekly backup schedule had `0 3 * * 0`.
+**Cause:** The CNPG admission webhook uses a cron parser that requires day-of-week values to be `1-7` (Monday = 1, Sunday = 7). Standard POSIX cron uses `0` for Sunday. The AFFiNE weekly backup schedule had `0 3 * * 0`.
 
 **Fix:** Change `* * 0` to `* * 7` in `apps/safeqbit-local-hq/affine/04-cnpg-scheduled-backup.yaml`.
 
-**Rule:** For any CNPG `ScheduledBackup`, never use `0` for Sunday — always use `7`.
+**Rule:** For any CNPG `ScheduledBackup`, never use `0` for Sunday - always use `7`.
 
 ### 2. Immich Postgres CrashLoopBackOff on first boot
 
@@ -291,7 +291,7 @@ env:
     value: /var/lib/postgresql/data/pgdata
 ```
 
-**Rule:** Every Postgres Deployment (not CNPG — CNPG handles this internally) on a Longhorn PVC needs `PGDATA` set to a subdirectory. See also the Vaultwarden and Netbox CNPG notes for why CNPG is preferred when the image allows it.
+**Rule:** Every Postgres Deployment (not CNPG - CNPG handles this internally) on a Longhorn PVC needs `PGDATA` set to a subdirectory. See also the Vaultwarden and Netbox CNPG notes for why CNPG is preferred when the image allows it.
 
 ---
 
@@ -383,9 +383,9 @@ kubectl get nodes   # → find the hostname to use
 
 ## Lessons Learned
 
-**CNPG rejects `0` for Sunday in cron expressions.** CNPG's webhook validates day-of-week as `1–7` only. Any `ScheduledBackup` using `* * 0` for Sunday will fail admission and block the entire apps kustomization from reconciling. Use `* * 7`.
+**CNPG rejects `0` for Sunday in cron expressions.** CNPG's webhook validates day-of-week as `1-7` only. Any `ScheduledBackup` using `* * 0` for Sunday will fail admission and block the entire apps kustomization from reconciling. Use `* * 7`.
 
-**Every Postgres Deployment on a Longhorn PVC needs `PGDATA` set to a subdirectory.** Longhorn creates a `lost+found` at the PVC root. Postgres `initdb` refuses a non-empty directory. Set `PGDATA=/var/lib/postgresql/data/pgdata`. CNPG handles this internally — it only affects plain Deployment-based Postgres like Immich's custom image.
+**Every Postgres Deployment on a Longhorn PVC needs `PGDATA` set to a subdirectory.** Longhorn creates a `lost+found` at the PVC root. Postgres `initdb` refuses a non-empty directory. Set `PGDATA=/var/lib/postgresql/data/pgdata`. CNPG handles this internally - it only affects plain Deployment-based Postgres like Immich's custom image.
 
 **Photoprism needs no DB migration when the storage path is NFS-backed.** The SQLite database lives inside the storage volume. As long as the NFS PVC points to the same existing directory, the pod boots with full history intact. No dump/restore needed.
 

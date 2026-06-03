@@ -56,11 +56,11 @@ apps/safeqbit-local-hq/cloudflared/
 
 ## Adding a New Tunnel
 
-### 1 — Get the token from Cloudflare Zero Trust dashboard
+### 1 - Get the token from Cloudflare Zero Trust dashboard
 
 Zero Trust → Tunnels → \<your tunnel\> → Configure → copy the token from the `docker run` command.
 
-### 2 — Seal the token
+### 2 - Seal the token
 
 ```bash
 kubectl create secret generic <name>-cf-tunnel-token \
@@ -77,7 +77,7 @@ kubectl create secret generic <name>-cf-tunnel-token \
 grep "token:" /tmp/<name>-sealed.yaml
 ```
 
-### 3 — Create the tunnel YAML
+### 3 - Create the tunnel YAML
 
 ```bash
 cp apps/safeqbit-local-hq/cloudflared/tunnel-passzilla.yaml \
@@ -89,7 +89,7 @@ sed -i 's/passzilla-cf-tunnel/<name>-cf-tunnel/g' \
 
 Paste the sealed token value into `spec.encryptedData.token`.
 
-### 4 — Register in kustomization
+### 4 - Register in kustomization
 
 ```yaml
 # apps/safeqbit-local-hq/cloudflared/kustomization.yaml
@@ -97,9 +97,9 @@ resources:
   - tunnel-<name>.yaml       # add this line
 ```
 
-### 5 — Configure origin in Cloudflare dashboard
+### 5 - Configure origin in Cloudflare dashboard
 
-Set the service URL to the **k8s internal service DNS** — not the `*.local.safeqbit.com` hostname:
+Set the service URL to the **k8s internal service DNS** - not the `*.local.safeqbit.com` hostname:
 
 ```
 http://<service-name>.<namespace>.svc.cluster.local
@@ -107,9 +107,9 @@ http://<service-name>.<namespace>.svc.cluster.local
 
 See below for how to find the right service name and port.
 
-### 6 — Check for stale DNS
+### 6 - Check for stale DNS
 
-After saving the public hostname in the dashboard, verify the DNS CNAME in `safeqbit.com` DNS points to the new tunnel's UUID — not a leftover record from a previous Docker-based tunnel. Delete the old record first if one exists.
+After saving the public hostname in the dashboard, verify the DNS CNAME in `safeqbit.com` DNS points to the new tunnel's UUID - not a leftover record from a previous Docker-based tunnel. Delete the old record first if one exists.
 
 ---
 
@@ -118,7 +118,7 @@ After saving the public hostname in the dashboard, verify the DNS CNAME in `safe
 When configuring a public hostname in the Cloudflare Zero Trust dashboard, use the app's ClusterIP service, not the ingress hostname. This avoids CNAME chain DNS failures and unnecessary MetalLB roundtrips.
 
 ```bash
-# List all services across all namespaces — find the app's service name and port
+# List all services across all namespaces - find the app's service name and port
 kubectl get svc -A
 
 # Filter to a specific app namespace
@@ -139,9 +139,9 @@ kubectl run reach-test --rm -it --restart=Never --image=busybox:1.36 \
 | Tunnel | Public hostname | Internal service URL |
 |---|---|---|
 | passzilla | passzilla.safeqbit.com | `http://passzilla.passzilla.svc.cluster.local` |
-| ghost-blog | — | `http://<svc>.<ns>.svc.cluster.local` |
-| csra | — | `http://<svc>.<ns>.svc.cluster.local` |
-| family-media-server | — | `http://<svc>.<ns>.svc.cluster.local` |
+| ghost-blog | - | `http://<svc>.<ns>.svc.cluster.local` |
+| csra | - | `http://<svc>.<ns>.svc.cluster.local` |
+| family-media-server | - | `http://<svc>.<ns>.svc.cluster.local` |
 
 ---
 
@@ -156,7 +156,7 @@ kubectl get pods -n cloudflared -o wide
 # Logs for a specific tunnel (shows edge connection status and config updates)
 kubectl logs -n cloudflared -l app=<name>-cf-tunnel --since=1h
 
-# Confirm edge connections — should show 4 registered connections per pod
+# Confirm edge connections - should show 4 registered connections per pod
 kubectl logs -n cloudflared -l app=<name>-cf-tunnel | grep "Registered tunnel"
 ```
 
@@ -198,7 +198,7 @@ Key metrics:
 
 ### Use k8s internal service DNS as the origin, not `*.local.safeqbit.com`
 
-The local domain goes through a CNAME chain (`passzilla.local.safeqbit.com → ingress.local.safeqbit.com → 10.10.13.50`) resolved by the router. Go's DNS resolver in cloudflared (with `ndots:5`) can fail on this chain intermittently. Internal service DNS (`*.svc.cluster.local`) is resolved natively by CoreDNS — no forwarding, no CNAME chain, always stable.
+The local domain goes through a CNAME chain (`passzilla.local.safeqbit.com → ingress.local.safeqbit.com → 10.10.13.50`) resolved by the router. Go's DNS resolver in cloudflared (with `ndots:5`) can fail on this chain intermittently. Internal service DNS (`*.svc.cluster.local`) is resolved natively by CoreDNS - no forwarding, no CNAME chain, always stable.
 
 ### Clean up old DNS records when migrating a tunnel from Docker
 

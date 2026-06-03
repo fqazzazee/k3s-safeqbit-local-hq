@@ -11,7 +11,7 @@ Single source of truth for what's backed up, where it goes, how long it's kept, 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Layer 3 — Velero schedules → Backblaze B2  (off-cluster, off-site)  │
+│ Layer 3 - Velero schedules → Backblaze B2  (off-cluster, off-site)  │
 │   Coverage: full namespace (manifests, secrets, PVCs via CSI/kopia) │
 │   Cadence: weekly for high-churn apps, bi-monthly for others        │
 │   Retention: 180 days (TTL on backups), 7d (kopia repo maintenance) │
@@ -20,7 +20,7 @@ Single source of truth for what's backed up, where it goes, how long it's kept, 
                                   │ data mover offloads snapshots
                                   │
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Layer 2 — CNPG ScheduledBackup → Longhorn VolumeSnapshot            │
+│ Layer 2 - CNPG ScheduledBackup → Longhorn VolumeSnapshot            │
 │   Coverage: PostgreSQL clusters only (affine, netbox, grafana,      │
 │             authentik). Triggered with pg CHECKPOINT for consistency │
 │   Cadence: daily (high-value) or weekly (low-churn)                 │
@@ -30,7 +30,7 @@ Single source of truth for what's backed up, where it goes, how long it's kept, 
                                   │ K8s VolumeSnapshot → CSI sidecar
                                   │
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Layer 1 — Longhorn snapshots (in-cluster, on the volume itself)     │
+│ Layer 1 - Longhorn snapshots (in-cluster, on the volume itself)     │
 │   Coverage: any volume that has a snapshot taken                    │
 │   Cadence: only when triggered (CNPG, Velero, or manual)            │
 │   Retention: limited to 250 per volume (Longhorn hard cap)          │
@@ -77,7 +77,7 @@ A=authentik, V=vaultwarden, M=monitoring, P=passzilla, Ph=photoprism
 
 ---
 
-## Layer 3 — Velero schedules to B2
+## Layer 3 - Velero schedules to B2
 
 All Velero schedules use `snapshotMoveData: true`, which:
 1. Takes a CSI snapshot via Longhorn
@@ -107,12 +107,12 @@ All Velero schedules use `snapshotMoveData: true`, which:
 
 | Namespace | Why skipped |
 |---|---|
-| `cloudflared` | Config only — no PVCs. Tunnels reconstruct from manifests + sealed-secrets via Flux. |
-| `longhorn-system`, `cnpg-system`, `cert-manager`, `ingress-nginx`, `sealed-secrets`, `kube-system`, `flux-system`, `nfs-provisioner`, `metallb-system`, `velero` | Platform components — reinstall from Flux + manifests in repo. State (CRs, secrets) lives in apps' namespaces. |
+| `cloudflared` | Config only - no PVCs. Tunnels reconstruct from manifests + sealed-secrets via Flux. |
+| `longhorn-system`, `cnpg-system`, `cert-manager`, `ingress-nginx`, `sealed-secrets`, `kube-system`, `flux-system`, `nfs-provisioner`, `metallb-system`, `velero` | Platform components - reinstall from Flux + manifests in repo. State (CRs, secrets) lives in apps' namespaces. |
 
 ---
 
-## Layer 2 — CNPG ScheduledBackups
+## Layer 2 - CNPG ScheduledBackups
 
 CNPG triggers a `pg_backup_start` CHECKPOINT and emits a Backup CR. The operator creates a K8s VolumeSnapshot, which the CSI sidecar passes to Longhorn for the actual point-in-time copy. **Owner-ref chain:**
 
@@ -142,7 +142,7 @@ Delete the **Backup CR** → garbage collection cascades all the way down. This 
 
 ---
 
-## Retention enforcement — `cnpg-backup-retention` CronJob
+## Retention enforcement - `cnpg-backup-retention` CronJob
 
 **File:** `infrastructure/safeqbit-local-hq/configs/cnpg-backup-retention.yaml`
 
@@ -165,7 +165,7 @@ kubectl -n cnpg-system logs -l job-name=manual-prune-... -f
 
 ---
 
-## Layer 1 — Longhorn snapshots (manual / ad-hoc)
+## Layer 1 - Longhorn snapshots (manual / ad-hoc)
 
 Not on any schedule directly; populated by:
 - Layer 2 (CNPG ScheduledBackups via VolumeSnapshot)
@@ -223,7 +223,7 @@ velero restore create --from-backup <backup-name> \
 ```
 
 ### Single CNPG cluster restore from a Backup CR
-The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. See CNPG docs — destroy the old Cluster first, then create a new one pointing at the desired Backup. For full procedure see `cnpg-strategy.md`.
+The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. See CNPG docs - destroy the old Cluster first, then create a new one pointing at the desired Backup. For full procedure see `cnpg-strategy.md`.
 
 ### Roll back a single PVC to a Longhorn snapshot
 Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "Revert". Requires the volume to be detached first (scale the owning Deployment to 0). Loses any data written since the snapshot.
@@ -234,7 +234,7 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 
 - **No off-cluster CNPG backup target.** Layer 2 snapshots live on the same Longhorn volumes as the primary. Whole-Longhorn corruption loses both primary AND backups. Only Layer 3 (Velero → B2) protects against that scenario. See P3.1 in [improvement-plan.md](improvement-plan.md) for the future plan to switch CNPG to plugin-based Barman backups direct to S3.
 - **No off-site etcd snapshots.** k3s writes etcd snapshots locally only. See P1.2 in [improvement-plan.md](improvement-plan.md) (currently deferred).
-- **Single B2 backend.** B2 outage or transaction-cap exhaustion takes Layer 3 down. Cloudflare R2 was considered as an alternative (10M Class A ops free/month vs B2's 2,500/day) — see P2.2.
+- **Single B2 backend.** B2 outage or transaction-cap exhaustion takes Layer 3 down. Cloudflare R2 was considered as an alternative (10M Class A ops free/month vs B2's 2,500/day) - see P2.2.
 - **Restore drills not run.** See P2.3.
 
 > Closed gaps (kept for context):
@@ -247,5 +247,5 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | Date | Change |
 |---|---|
 | 2026-05-27 | CNPG ScheduledBackup cron bug fixed (5-field → 6-field). Velero kopia maintenance bumped from 1h → 168h. Manually pruned 119 stale authentik Backup CRs to dodge 250-snapshot cap. |
-| 2026-05-28 | P2.1 + P2.2 — full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
-| 2026-05-29 | P2.5 — alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |
+| 2026-05-28 | P2.1 + P2.2 - full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
+| 2026-05-29 | P2.5 - alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |

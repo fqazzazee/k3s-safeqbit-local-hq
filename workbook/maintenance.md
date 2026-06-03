@@ -6,9 +6,9 @@
 A living document. Add entries as new patterns emerge.
 
 **Related docs:**
-- [backup-strategy.md](backup-strategy.md) — full backup schedule + retention reference
-- [improvement-plan.md](improvement-plan.md) — prioritized tech-debt backlog
-- [cnpg-strategy.md](cnpg-strategy.md) — per-cluster CNPG sizing rationale
+- [backup-strategy.md](backup-strategy.md) - full backup schedule + retention reference
+- [improvement-plan.md](improvement-plan.md) - prioritized tech-debt backlog
+- [cnpg-strategy.md](cnpg-strategy.md) - per-cluster CNPG sizing rationale
 
 ---
 
@@ -30,8 +30,8 @@ A living document. Add entries as new patterns emerge.
 
 ## Node Shutdown (Hardware Maintenance)
 
-Use this procedure when taking a node offline for hardware changes — RAM, disk, NIC, BIOS update, etc.  
-**Estimated downtime per app:** 1–5 min for stateless pods, longer if Longhorn replicas must rebuild.
+Use this procedure when taking a node offline for hardware changes - RAM, disk, NIC, BIOS update, etc.  
+**Estimated downtime per app:** 1-5 min for stateless pods, longer if Longhorn replicas must rebuild.
 
 ### 1. Pre-flight checks
 
@@ -56,7 +56,7 @@ kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeed
 # Should return nothing (or only expected pending/init pods)
 ```
 
-Do not proceed if any CNPG cluster is not ready or any Longhorn volume is `degraded` — fix those first or you risk data loss.
+Do not proceed if any CNPG cluster is not ready or any Longhorn volume is `degraded` - fix those first or you risk data loss.
 
 ---
 
@@ -76,7 +76,7 @@ kubectl get replicas.longhorn.io -n longhorn-system \
 For any volume that has its **only** replica on the target node, increase the replica count temporarily so Longhorn places a copy elsewhere:
 
 ```bash
-# Patch replica count to 2 (from 1) — Longhorn will schedule a replica on another node
+# Patch replica count to 2 (from 1) - Longhorn will schedule a replica on another node
 kubectl patch volume.longhorn.io <volume-name> -n longhorn-system \
   --type=merge -p '{"spec":{"numberOfReplicas":2}}'
 
@@ -133,7 +133,7 @@ kubectl drain "$NODE" \
   --timeout=300s
 ```
 
-- `--ignore-daemonsets`: DaemonSet pods (Longhorn engine, log collectors) are left — this is correct.
+- `--ignore-daemonsets`: DaemonSet pods (Longhorn engine, log collectors) are left - this is correct.
 - `--delete-emptydir-data`: Required for any pod using `emptyDir` volumes (e.g. AFFiNE Redis).
 - `--grace-period=60`: Gives each pod 60 s to flush/shutdown cleanly.
 - `--timeout=300s`: Abort if drain takes more than 5 min (investigate, don't leave hanging).
@@ -163,7 +163,7 @@ kubectl get pods -A --field-selector=spec.nodeName="$NODE"
 # Check that critical workloads came back up elsewhere
 kubectl get pods -A | grep -E "0/[0-9]|Pending|CrashLoop|Error"
 
-# CNPG clusters should still be healthy (may take 1–2 min to elect new primary if applicable)
+# CNPG clusters should still be healthy (may take 1-2 min to elect new primary if applicable)
 kubectl get cluster -A
 ```
 
@@ -249,9 +249,9 @@ Most CNPG clusters in this repo use `instances: 1`. When the node hosting the po
 
 Mitigation: always run step 2 to ensure each CNPG PVC has at least one replica on a node that will survive the drain.
 
-After the node comes back and is uncordoned, CNPG will reschedule on any available node — it does not pin to the original node.
+After the node comes back and is uncordoned, CNPG will reschedule on any available node - it does not pin to the original node.
 
-#### All three nodes are etcd members — drain ONE at a time
+#### All three nodes are etcd members - drain ONE at a time
 
 This cluster runs 3 k3s servers, all `control-plane,etcd` (no agent-only nodes). etcd needs a quorum of 2 of 3 to stay writable, so this is the single hardest constraint on node maintenance:
 
@@ -263,19 +263,19 @@ This cluster runs 3 k3s servers, all `control-plane,etcd` (no agent-only nodes).
   ```
 - Complete all drain/cordon steps _before_ powering the node off.
 
-(For reference: a single-server k3s cluster has no quorum protection — the entire API is down whenever the server is off. Not applicable here, but noted for context.)
+(For reference: a single-server k3s cluster has no quorum protection - the entire API is down whenever the server is off. Not applicable here, but noted for context.)
 
 ---
 
 ## Graceful Node Shutdown (kubelet)
 
-**What it is:** kubelet's built-in *Graceful Node Shutdown* (GA since k8s 1.21). When the OS begins a clean shutdown (systemd `poweroff`/`reboot`, Proxmox ACPI "Shutdown", a UPS-triggered halt), kubelet grabs a systemd inhibitor lock and terminates pods in order — regular pods first, then critical pods (CNI, Longhorn, kube-system) — respecting each pod's termination grace, *before* the OS powers off.
+**What it is:** kubelet's built-in *Graceful Node Shutdown* (GA since k8s 1.21). When the OS begins a clean shutdown (systemd `poweroff`/`reboot`, Proxmox ACPI "Shutdown", a UPS-triggered halt), kubelet grabs a systemd inhibitor lock and terminates pods in order - regular pods first, then critical pods (CNI, Longhorn, kube-system) - respecting each pod's termination grace, *before* the OS powers off.
 
-**Why we want it:** Without it (the prior state — `shutdownGracePeriod: 0s`), a clean shutdown that *skips* the full drain runbook above (a forgotten step, an ACPI shutdown from Proxmox, a power event) hard-kills every pod the instant kubelet dies with the OS. Stateful pods (CNPG postgres, Longhorn engines) get no chance to flush. This is the **safety floor**: it does **not** cordon, migrate Longhorn replicas, or protect etcd quorum — for planned hardware maintenance you still run the full [Node Shutdown](#node-shutdown-hardware-maintenance) runbook. It just stops the worst-case hard-kill when the runbook isn't used.
+**Why we want it:** Without it (the prior state - `shutdownGracePeriod: 0s`), a clean shutdown that *skips* the full drain runbook above (a forgotten step, an ACPI shutdown from Proxmox, a power event) hard-kills every pod the instant kubelet dies with the OS. Stateful pods (CNPG postgres, Longhorn engines) get no chance to flush. This is the **safety floor**: it does **not** cordon, migrate Longhorn replicas, or protect etcd quorum - for planned hardware maintenance you still run the full [Node Shutdown](#node-shutdown-hardware-maintenance) runbook. It just stops the worst-case hard-kill when the runbook isn't used.
 
 ### The InhibitDelayMaxSec gotcha (mandatory companion setting)
 
-systemd-logind's default inhibitor cap (`InhibitDelayMaxSec`) is **5 seconds**. kubelet's graceful shutdown holds a logind inhibitor lock; if `shutdownGracePeriod` exceeds `InhibitDelayMaxSec`, logind preempts it after 5s and the grace window is silently useless. So `InhibitDelayMaxSec` **must** be raised to ≥ `shutdownGracePeriod`. This is not optional — it's the difference between the feature working and not.
+systemd-logind's default inhibitor cap (`InhibitDelayMaxSec`) is **5 seconds**. kubelet's graceful shutdown holds a logind inhibitor lock; if `shutdownGracePeriod` exceeds `InhibitDelayMaxSec`, logind preempts it after 5s and the grace window is silently useless. So `InhibitDelayMaxSec` **must** be raised to ≥ `shutdownGracePeriod`. This is not optional - it's the difference between the feature working and not.
 
 ### Configuration (all 3 nodes)
 
@@ -287,7 +287,7 @@ Chosen values: 120s total, of which the last 30s is reserved for critical pods (
 | `shutdown-grace-period-critical-pods` | same | `30s` |
 | `InhibitDelayMaxSec` | `/etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf` | `130` |
 
-### Apply runbook — ONE node at a time (preserve etcd quorum)
+### Apply runbook - ONE node at a time (preserve etcd quorum)
 
 Run on each node in turn; do **not** start the next node until the current one is back `Ready` and `/healthz/etcd` returns `ok` (see [etcd quorum rule](#all-three-nodes-are-etcd-members--drain-one-at-a-time)).
 
@@ -296,9 +296,9 @@ Run on each node in turn; do **not** start the next node until the current one i
 
 # 1. Add kubelet args. NOTE: if /etc/rancher/k3s/config.yaml already has a
 #    `kubelet-arg:` key (e.g. once P1.2 etcd-s3 lands), MERGE into that list
-#    by hand — do not append a second `kubelet-arg:` block (duplicate YAML key).
+#    by hand - do not append a second `kubelet-arg:` block (duplicate YAML key).
 sudo test -f /etc/rancher/k3s/config.yaml && grep -q kubelet-arg /etc/rancher/k3s/config.yaml \
-  && echo "EDIT BY HAND — kubelet-arg already present" \
+  && echo "EDIT BY HAND - kubelet-arg already present" \
   || sudo tee -a /etc/rancher/k3s/config.yaml >/dev/null <<'EOF'
 kubelet-arg:
   - "shutdown-grace-period=120s"
@@ -311,7 +311,7 @@ sudo tee /etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf >/dev/null <<'
 [Login]
 InhibitDelayMaxSec=130
 EOF
-sudo systemctl restart systemd-logind          # safe — does not kill existing sessions
+sudo systemctl restart systemd-logind          # safe - does not kill existing sessions
 
 # 3. Apply the kubelet change by restarting k3s (brief apiserver blip on THIS node;
 #    HA covers it. flannel-fix-offload.service re-runs automatically via BindsTo=k3s.service)
@@ -330,7 +330,7 @@ kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" \
 # Expect: grace 2m0s critical 30s
 ```
 
-**Verify it actually fires** (optional, low-risk): on a maintenance window, `sudo systemctl reboot` one node and watch — pods should show a `Terminated` / node-shutdown status and the host should pause ~90s before going down, rather than dropping instantly.
+**Verify it actually fires** (optional, low-risk): on a maintenance window, `sudo systemctl reboot` one node and watch - pods should show a `Terminated` / node-shutdown status and the host should pause ~90s before going down, rather than dropping instantly.
 
 **Status:** Config documented here; applied per-node via the runbook above. Re-check after any k3s upgrade or if `config.yaml` is regenerated.
 
@@ -397,7 +397,7 @@ ethtool -k flannel.1 | grep tx-checksum-ip-generic   # should be "off"
 
 **Symptom:** A Longhorn volume stays `degraded` even though all nodes appear ready. Volume conditions show `Scheduled: False, ReplicaSchedulingFailure: precheck new replica failed: insufficient storage`. Disk usage in Longhorn (`storageScheduled`) on the affected node is well below the disk size, but `df -h /var/lib/longhorn` shows it nearly full. Cross-referencing `kubectl -n longhorn-system get replicas.longhorn.io --field-selector spec.nodeID=<node>` against `ls /var/lib/longhorn/replicas/` reveals more on-disk directories than Longhorn knows about.
 
-**Root cause:** When a replica fails or is rebuilt, the old directory is sometimes not deleted from disk — Longhorn drops the CR but the data sits there forever, consuming space the scheduler doesn't account for. These show up as `Orphan` CRs in `longhorn-system`. Hit on 2026-05-27 on `k3s-server-02`: 14 orphan dirs (~100 GiB) blocked the Prometheus PVC from gaining its 3rd replica.
+**Root cause:** When a replica fails or is rebuilt, the old directory is sometimes not deleted from disk - Longhorn drops the CR but the data sits there forever, consuming space the scheduler doesn't account for. These show up as `Orphan` CRs in `longhorn-system`. Hit on 2026-05-27 on `k3s-server-02`: 14 orphan dirs (~100 GiB) blocked the Prometheus PVC from gaining its 3rd replica.
 
 **Diagnosis:**
 ```bash
@@ -428,7 +428,7 @@ After cleanup, Longhorn will auto-schedule the missing replica on the freed node
 
 ## CoreDNS HA
 
-k3s deploys CoreDNS as an **Addon** (CR `addons.k3s.cattle.io/coredns`), not as a HelmChart, so `HelmChartConfig` overrides don't apply. The source manifest lives at `/var/lib/rancher/k3s/server/manifests/coredns.yaml` on every control-plane node and the Addon controller watches that file's checksum — editing the file makes k3s re-apply the new content.
+k3s deploys CoreDNS as an **Addon** (CR `addons.k3s.cattle.io/coredns`), not as a HelmChart, so `HelmChartConfig` overrides don't apply. The source manifest lives at `/var/lib/rancher/k3s/server/manifests/coredns.yaml` on every control-plane node and the Addon controller watches that file's checksum - editing the file makes k3s re-apply the new content.
 
 **Current persistent config (set 2026-05-28):**
 - `replicas: 3` in the Deployment spec (injected on line 88, before `revisionHistoryLimit: 0`)
@@ -476,7 +476,7 @@ kubectl logs -n monitoring -l app.kubernetes.io/name=grafana -c grafana --tail=3
 
 Look for: `database is locked (SQLITE_BUSY)`, `plugin not registered`, `context canceled`, liveness probe failures in events.
 
-**Fix — restart the pod:**
+**Fix - restart the pod:**
 ```bash
 kubectl rollout restart deployment -n monitoring monitoring-grafana
 kubectl rollout status deployment -n monitoring monitoring-grafana --timeout=120s
@@ -559,7 +559,7 @@ kubectl get helmrelease -A
 kubectl describe helmrelease <name> -n <namespace> | grep -A10 "Status:\|Message:\|Reason:"
 ```
 
-### Flux prune is off — manual resource cleanup required
+### Flux prune is off - manual resource cleanup required
 
 The apps Kustomization has `prune: false`. Removing a file from Git does **not** delete the cluster resource. You must delete it manually:
 
@@ -716,7 +716,7 @@ kubeProxy:
 ```bash
 # Check Prometheus is scraping each target
 kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090
-# Browse to http://localhost:9090/targets — all should be UP
+# Browse to http://localhost:9090/targets - all should be UP
 
 # List active alerts
 kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-alertmanager 9093
@@ -732,8 +732,8 @@ kubectl -n photoprism scale deploy photoprism --replicas=1
 
 | Alert | First thing to check |
 |---|---|
-| `LonghornVolumeDegraded` | `kubectl -n longhorn-system get volumes <vol> -o yaml` — which replica is missing? Often resolves on its own after node recovery. |
-| `LonghornVolumeSnapshotCountHigh` | `kubectl get backups.postgresql.cnpg.io -A` — old CNPG Backup CRs likely accumulating. Verify `cnpg-backup-retention` CronJob is running daily. |
+| `LonghornVolumeDegraded` | `kubectl -n longhorn-system get volumes <vol> -o yaml` - which replica is missing? Often resolves on its own after node recovery. |
+| `LonghornVolumeSnapshotCountHigh` | `kubectl get backups.postgresql.cnpg.io -A` - old CNPG Backup CRs likely accumulating. Verify `cnpg-backup-retention` CronJob is running daily. |
 | `VeleroBackupFailed` | `velero backup describe <name> --details`; check `kubectl -n velero get backuprepository <ns>-<id>` for kopia maintenance errors. |
 | `CNPGReplicationLagHigh` | `kubectl -n <ns> exec -ti <primary> -- psql -c "SELECT * FROM pg_stat_replication;"` |
 

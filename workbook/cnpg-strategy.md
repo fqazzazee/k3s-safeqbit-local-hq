@@ -9,7 +9,7 @@
 
 CloudNativePG (CNPG) is the cluster-wide Postgres operator, deployed in `cnpg-system`
 and watching all namespaces. Any workload that needs Postgres declares its own `Cluster`
-CR in its own namespace — the operator reconciles them all.
+CR in its own namespace - the operator reconciles them all.
 
 The operator itself runs 2 replicas (pod anti-affinity across nodes) for HA. It creates
 three Services per cluster automatically:
@@ -29,7 +29,7 @@ keys (`username`, `password`, `host`, `uri`, `jdbc-uri`, etc.).
 
 | Workload | Namespace | DB Engine | Storage | CNPG | Notes |
 |---|---|---|---|---|---|
-| Authentik01 | `authentik01` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | Main prod SSO — migrated from Docker host 10.10.12.29 on 2026-05-15 |
+| Authentik01 | `authentik01` | PostgreSQL | Longhorn 10Gi | ✅ `instances: 2` | Main prod SSO - migrated from Docker host 10.10.12.29 on 2026-05-15 |
 | Grafana | `monitoring` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from SQLite/NFS due to deadlock issue |
 | Netbox | `netbox` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15 |
 | AFFiNE | `affine` | PostgreSQL | Longhorn 5Gi | ✅ `instances: 1` | Migrated from Docker/Portainer 2026-05-15; indexer disabled, no pgvector needed |
@@ -42,12 +42,12 @@ keys (`username`, `password`, `host`, `uri`, `jdbc-uri`, etc.).
 
 All clusters start at `instances: 1` unless there is a specific reason to go higher.
 Longhorn already replicates volume data across 2 nodes, so data is safe even with a
-single CNPG instance — a node failure just means a ~60s pod reschedule.
+single CNPG instance - a node failure just means a ~60s pod reschedule.
 
 ### When to use `instances: 2`
 
 Add a hot standby when the workload is a dependency for other services. If its database
-goes down, do other things break too? If yes, the faster CNPG-managed promotion (~10–30s)
+goes down, do other things break too? If yes, the faster CNPG-managed promotion (~10-30s)
 is worth the extra storage.
 
 **Authentik01 is `instances: 2`** because it is the SSO backend for the entire cluster.
@@ -56,15 +56,15 @@ cascaded into SQLite deadlock within minutes. A hot standby reduces that blast r
 
 ### When `instances: 1` is fine
 
-- **Grafana** — UI tool. 60s downtime is acceptable.
-- **Vaultwarden** — Single-user personal vault. 60s downtime is acceptable.
-- **Passzilla** — Ephemeral utility. Not worth the storage overhead.
+- **Grafana** - UI tool. 60s downtime is acceptable.
+- **Vaultwarden** - Single-user personal vault. 60s downtime is acceptable.
+- **Passzilla** - Ephemeral utility. Not worth the storage overhead.
 
-### `instances: 3` — not used
+### `instances: 3` - not used
 
 Three instances gives you a primary + 2 standbys, which allows Postgres to elect a new
 primary by quorum without manual intervention. In a 3-node homelab this adds cost for
-little benefit — CNPG handles promotion without quorum anyway.
+little benefit - CNPG handles promotion without quorum anyway.
 
 ---
 
@@ -74,13 +74,13 @@ Every CNPG cluster is paired with a `ScheduledBackup` CR using the `volumeSnapsh
 method and the `longhorn-velero` VolumeSnapshotClass.
 
 **How CNPG VolumeSnapshot backups work:**
-1. CNPG issues a `CHECKPOINT` to Postgres — all dirty pages flushed to disk
+1. CNPG issues a `CHECKPOINT` to Postgres - all dirty pages flushed to disk
 2. Postgres confirms checkpoint complete
 3. CNPG triggers a VolumeSnapshot via the CSI API (Longhorn)
 4. The snapshot represents a guaranteed-clean, crash-consistent state
 5. A `Backup` object is created; it owns the `VolumeSnapshot` via `snapshotOwnerReference: backup`
 
-This is application-aware — unlike Velero snapshotting the raw PVC without Postgres
+This is application-aware - unlike Velero snapshotting the raw PVC without Postgres
 knowing. Velero continues to back up everything else in each namespace (media PVCs,
 secrets, ConfigMaps) on the biweekly schedule.
 
@@ -90,14 +90,14 @@ secrets, ConfigMaps) on the biweekly schedule.
 | `grafana-cnpg` | None (no ScheduledBackup) | Velero biweekly covers it |
 
 Grafana has no `ScheduledBackup` because all its dashboards and datasources are
-provisioned from GitOps ConfigMaps — if the database were lost, Grafana reinitialises
+provisioned from GitOps ConfigMaps - if the database were lost, Grafana reinitialises
 cleanly from scratch. No point snapshotting it.
 
 ---
 
 ## Grafana: Why SQLite/NFS Failed
 
-Grafana 13 introduced "unified storage" — an embedded Kubernetes-like API server that
+Grafana 13 introduced "unified storage" - an embedded Kubernetes-like API server that
 manages dashboards, playlists, and other resources as K8s objects. This runs several
 background jobs against the database every 30 seconds:
 
@@ -143,7 +143,7 @@ deployment comment already flags this as the path to HA. Migration steps when re
 5. Verify data in PostgreSQL, then remove the `DATABASE_URL` reference to SQLite
    and the old PVC
 
-**Do not do this casually** — this is someone's password manager. Plan a maintenance
+**Do not do this casually** - this is someone's password manager. Plan a maintenance
 window and have a Velero backup confirmed before starting.
 
 ---

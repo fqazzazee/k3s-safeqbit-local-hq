@@ -17,17 +17,17 @@ Namespace: authentik
 │   ├── authentik-cnpg-1  (primary)
 │   └── authentik-cnpg-2  (hot standby)
 ├── HelmRelease: authentik (chart: authentik 2025.10.3, redis subchart enabled)
-├── NFS PVCs: authentik-media (5Gi), authentik-templates (1Gi) — nfs-truenas RWX
+├── NFS PVCs: authentik-media (5Gi), authentik-templates (1Gi) - nfs-truenas RWX
 └── Ingress: authentik01.local.safeqbit.com → authentik-server:80 (letsencrypt-prod)
 ```
 
 ---
 
-## Phase 1 — StatefulSet Postgres → CloudNativePG (2026-05-14)
+## Phase 1 - StatefulSet Postgres → CloudNativePG (2026-05-14)
 
 ### What changed and why
 
-Authentik's database was a hand-rolled Postgres 16 StatefulSet — a single pod mounting a
+Authentik's database was a hand-rolled Postgres 16 StatefulSet - a single pod mounting a
 Longhorn PVC. It worked but had three problems:
 
 1. **Crash-inconsistent backups.** Velero snapshotted the PVC while Postgres was running.
@@ -50,9 +50,9 @@ When you create one, the operator:
 2. Creates a Longhorn PVC for each pod (`<cluster-name>-<n>`)
 3. Runs `initdb` with the configured database and owner
 4. Creates three Services kept up to date as primaries change:
-   - `authentik-cnpg-rw` — current primary (all writes go here)
-   - `authentik-cnpg-ro` — hot standbys only
-   - `authentik-cnpg-r` — any instance
+   - `authentik-cnpg-rw` - current primary (all writes go here)
+   - `authentik-cnpg-ro` - hot standbys only
+   - `authentik-cnpg-r` - any instance
 5. Auto-generates `authentik-cnpg-app` secret with 11 keys (`username`, `password`,
    `host`, `uri`, `jdbc-uri`, etc.)
 
@@ -83,7 +83,7 @@ templates PVC, sealed secret). Use the CNPG ScheduledBackup for database-specifi
 ### Phase 1 runbook (what was done)
 
 1. Deployed CNPG Cluster CR (`authentik-cnpg`, instances: 1 at the time)
-2. Suspended the HelmRelease before the push — **critical lesson below**
+2. Suspended the HelmRelease before the push - **critical lesson below**
 3. Waited for CNPG to initialise (`authentik-cnpg-app` secret created)
 4. Wiped the empty schema CNPG created on first boot
 5. Streamed `pg_dump` from the old StatefulSet pod directly into CNPG via a single piped
@@ -96,7 +96,7 @@ templates PVC, sealed secret). Use the CNPG ScheduledBackup for database-specifi
 
 ---
 
-## Phase 2 — Docker Host → k3s (2026-05-15)
+## Phase 2 - Docker Host → k3s (2026-05-15)
 
 ### What changed and why
 
@@ -120,7 +120,7 @@ The k3s migration landed everything under the existing `authentik` namespace pat
 
 ### Phase 2 runbook (what was done)
 
-**Step 1 — Sealed the credential**
+**Step 1 - Sealed the credential**
 
 Retrieved `AUTHENTIK_SECRET_KEY` from `stack.env` on the Docker host and sealed it
 for the target namespace:
@@ -137,10 +137,10 @@ kubectl create secret generic authentik-credentials \
   -o yaml > apps/safeqbit-local-hq/authentik/02-sealed-secrets.yaml
 ```
 
-`AUTHENTIK_SECRET_KEY` must match the Docker stack exactly — Authentik uses it to sign
+`AUTHENTIK_SECRET_KEY` must match the Docker stack exactly - Authentik uses it to sign
 sessions and tokens. Changing it invalidates all active sessions.
 
-**Step 2 — Pushed manifests and waited for initial boot**
+**Step 2 - Pushed manifests and waited for initial boot**
 
 ```bash
 git add apps/safeqbit-local-hq/authentik/ \
@@ -160,9 +160,9 @@ kubectl rollout status deploy/authentik-server -n authentik --timeout=10m
 ```
 
 At this point Authentik booted against a fresh database (ran schema migrations). This is
-expected — the restore in Step 4 overwrites it.
+expected - the restore in Step 4 overwrites it.
 
-**Step 3 — Scaled to zero**
+**Step 3 - Scaled to zero**
 
 ```bash
 kubectl scale deploy authentik-server authentik-worker -n authentik --replicas=0
@@ -170,7 +170,7 @@ kubectl scale deploy authentik-server authentik-worker -n authentik --replicas=0
 
 Always scale to zero before a restore. Active writes during a restore corrupt the result.
 
-**Step 4 — Dumped from Docker host and restored**
+**Step 4 - Dumped from Docker host and restored**
 
 ```bash
 # On Docker host
@@ -178,7 +178,7 @@ docker exec authentik-postgres \
   pg_dump -U authentik --clean --if-exists authentik > /tmp/authentik.sql
 scp user@10.10.12.29:/tmp/authentik.sql /tmp/authentik.sql
 
-# On k3s machine — wipe the fresh schema first
+# On k3s machine - wipe the fresh schema first
 kubectl exec -n authentik authentik-cnpg-1 -- psql -U postgres authentik \
   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO authentik;"
 
@@ -191,7 +191,7 @@ kubectl exec -i authentik-cnpg-1 -n authentik -- psql -U postgres authentik \
 idempotent. Dropping the whole public schema first handles circular dependencies that
 `--clean` alone can't resolve on a Django-migrated database.
 
-**Step 5 — Scaled back up and cut over DNS**
+**Step 5 - Scaled back up and cut over DNS**
 
 ```bash
 kubectl scale deploy authentik-server authentik-worker -n authentik --replicas=1
@@ -251,28 +251,28 @@ kubectl annotate gitrepository flux-system -n flux-system \
 
 **Suspend the HelmRelease before pushing DB-breaking changes.** Flux reconciles within
 seconds of a push. If the new HelmRelease points at a fresh database, Authentik will
-immediately run schema migrations and seed default data — contaminating the restore target.
+immediately run schema migrations and seed default data - contaminating the restore target.
 The safe pattern is always:
 
 ```
 suspend HelmRelease → push → wait for CNPG → dump/restore → resume HelmRelease
 ```
 
-**`prune: false` means manual cleanup.** The apps Kustomization has `prune: false` — Flux
+**`prune: false` means manual cleanup.** The apps Kustomization has `prune: false` - Flux
 never deletes cluster resources when their manifests are removed from Git. Old StatefulSets,
 namespaces, and Velero schedules must be deleted manually after removing them from Git.
 
 **Sealed secrets are namespace-scoped.** A SealedSecret encrypted for namespace `foo`
-cannot be decrypted in namespace `bar`. When renaming a namespace, always re-run `kubeseal`
-— a `sed` rename of the metadata field leaves the ciphertext scoped to the old namespace
+cannot be decrypted in namespace `bar`. When renaming a namespace, always re-run `kubeseal` -
+a `sed` rename of the metadata field leaves the ciphertext scoped to the old namespace
 and the controller will silently fail to decrypt it.
 
 **Scale to zero before any database restore.** If the application is writing new sessions
 or state while you restore, the result is corrupted. Scale web and worker to 0 first,
 restore, then scale back up.
 
-**`kubectl exec -i ... < file` restore throughput is ~20–30 MB/s.** A 113MB dump takes
-4–5 minutes through the kubectl API pipe. Check completion via `pg_stat_activity` (no
+**`kubectl exec -i ... < file` restore throughput is ~20-30 MB/s.** A 113MB dump takes
+4-5 minutes through the kubectl API pipe. Check completion via `pg_stat_activity` (no
 active restore connection) or `SELECT count(*) FROM pg_tables` (187 tables = full restore).
 
 **`--clean --if-exists` + schema wipe is the reliable restore pattern.** `--clean` alone
