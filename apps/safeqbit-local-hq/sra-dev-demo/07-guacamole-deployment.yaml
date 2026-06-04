@@ -47,7 +47,7 @@ data:
   OPENID_AUTHORIZATION_ENDPOINT: "https://authentik01.local.safeqbit.com/application/o/authorize/"
   OPENID_JWKS_ENDPOINT: "https://authentik01.local.safeqbit.com/application/o/guacamole/jwks/"
   OPENID_ISSUER: "https://authentik01.local.safeqbit.com/application/o/guacamole/"
-  OPENID_CLIENT_ID: "REPLACE_WITH_AUTHENTIK_CLIENT_ID"
+  OPENID_CLIENT_ID: "8WN4yb6HxLQ3ep4Nh04FUMGe39HG37SyHqlEsHs1"
   OPENID_REDIRECT_URI: "https://sra-demo.local.safeqbit.com/"
   OPENID_USERNAME_CLAIM_TYPE: "preferred_username"
   OPENID_GROUPS_CLAIM_TYPE: "groups"
