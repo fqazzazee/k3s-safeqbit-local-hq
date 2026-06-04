@@ -1,0 +1,138 @@
+# Guacamole web application (Tomcat).
+#
+# Serves the HTML5 client UI, holds the JDBC auth layer (RBAC + the credential
+# store), the OpenID Connect integration with Authentik, and the in-browser
+# session-recording player. It talks to guacd over 4822 and to Postgres over 5432.
+#
+# Config is entirely env-driven (the image generates guacamole.properties from
+# these). OIDC values live in the ConfigMap below; the only secret — the Postgres
+# password — is pulled from the CNPG-managed secret. Because we use the OpenID
+# *implicit* flow there is no OIDC client secret to store.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guacamole-config
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacamole
+data:
+  # --- Serve at root so URLs are https://sra.local.safeqbit.com/ ---
+  WEBAPP_CONTEXT: "ROOT"
+
+  # --- guacd proxy ---
+  GUACD_HOSTNAME: "guacd"
+  GUACD_PORT: "4822"
+
+  # --- Postgres (JDBC auth + credential store) ---
+  POSTGRESQL_HOSTNAME: "guacamole-cnpg-rw"
+  POSTGRESQL_PORT: "5432"
+  POSTGRESQL_DATABASE: "guacamole"
+  POSTGRESQL_USERNAME: "guacamole"
+  POSTGRESQL_AUTO_CREATE_ACCOUNTS: "true"   # auto-provision OIDC users into the DB
+
+  # --- Session recording replay (history-recording-storage extension) ---
+  # Auto-installed when this is set. Connections must write recordings here too
+  # (set recording-path=/recordings, recording-name=${HISTORY_UUID} per connection).
+  RECORDING_SEARCH_PATH: "/recordings"
+
+  # --- Behind the nginx ingress: trust X-Forwarded-* for correct client IPs ---
+  REMOTE_IP_VALVE_ENABLED: "true"
+
+  # --- OpenID Connect → Authentik (identity-aware access) ---
+  # Implicit flow: response is an id_token, so no client secret is required.
+  # NOTE: fill OPENID_CLIENT_ID after creating the provider in Authentik, and
+  # confirm the application slug used in the JWKS/issuer URLs (default: guacamole).
+  # See workbook/sra-dev-demo.md for the exact Authentik steps.
+  OPENID_AUTHORIZATION_ENDPOINT: "https://authentik01.local.safeqbit.com/application/o/authorize/"
+  OPENID_JWKS_ENDPOINT: "https://authentik01.local.safeqbit.com/application/o/guacamole/jwks/"
+  OPENID_ISSUER: "https://authentik01.local.safeqbit.com/application/o/guacamole/"
+  OPENID_CLIENT_ID: "REPLACE_WITH_AUTHENTIK_CLIENT_ID"
+  OPENID_REDIRECT_URI: "https://sra-demo.local.safeqbit.com/"
+  OPENID_USERNAME_CLAIM_TYPE: "preferred_username"
+  OPENID_GROUPS_CLAIM_TYPE: "groups"
+  OPENID_SCOPE: "openid email profile"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guacamole
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacamole
+    app.kubernetes.io/component: webapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: guacamole
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guacamole
+        app.kubernetes.io/component: webapp
+      annotations:
+        # restart on ConfigMap change (e.g. once you fill in the OIDC client id)
+        reloader.stakater.com/auto: "true"
+    spec:
+      containers:
+        - name: guacamole
+          image: guacamole/guacamole:1.6.0
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: guacamole-config
+          env:
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: guacamole-cnpg-app   # auto-created by the CNPG operator
+                  key: password
+          volumeMounts:
+            - name: recordings
+              mountPath: /recordings
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 30      # allow up to ~2.5 min for Tomcat to come up
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 20
+      volumes:
+        - name: recordings
+          persistentVolumeClaim:
+            claimName: guacamole-recordings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guacamole
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacamole
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: guacamole
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

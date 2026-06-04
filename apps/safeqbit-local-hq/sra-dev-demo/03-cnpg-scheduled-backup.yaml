@@ -1,0 +1,15 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: guacamole-cnpg-backup
+  namespace: sra-dev-demo
+spec:
+  # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
+  # Weekly Sunday 03:00 UTC — staggered after the other weekly/daily snapshots.
+  # Demo workload, low change velocity, so weekly is plenty.
+  # Retention controlled by configs/cnpg-backup-retention.yaml (keep newest 10).
+  schedule: "0 0 3 * * 0"
+  backupOwnerReference: self
+  method: volumeSnapshot
+  cluster:
+    name: guacamole-cnpg

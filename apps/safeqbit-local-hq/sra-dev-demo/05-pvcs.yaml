@@ -1,0 +1,21 @@
+# Session-recording storage.
+#
+# guacd WRITES recordings here (RDP/VNC/SSH session capture), and the Guacamole
+# webapp READS them back for in-browser replay via the history-recording-storage
+# extension. Both pods therefore mount this same volume, so it must be RWX —
+# nfs-truenas, the same shared class authentik uses for its media/templates.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: guacamole-recordings
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacamole
+    app.kubernetes.io/component: recordings
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 20Gi

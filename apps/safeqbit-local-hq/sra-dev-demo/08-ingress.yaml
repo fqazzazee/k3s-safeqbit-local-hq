@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sra
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacamole
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Guacamole tunnels each remote session over a long-lived WebSocket; without
+    # generous timeouts nginx will drop idle-but-open sessions.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+spec:
+  ingressClassName: nginx
+
+  tls:
+    - hosts:
+        - sra-demo.local.safeqbit.com
+      secretName: sra-tls
+
+  rules:
+    - host: sra-demo.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: guacamole
+                port:
+                  number: 80

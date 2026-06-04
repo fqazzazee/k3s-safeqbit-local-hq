@@ -1,0 +1,77 @@
+# guacd — the Guacamole proxy daemon.
+#
+# This is the component that actually speaks the remote protocols (RDP, VNC, SSH)
+# to the target OT/IT hosts and translates them to the Guacamole protocol for the
+# browser. It is also what performs CREDENTIAL INJECTION (credentials come from
+# the DB via the webapp and are fed to the target — the end user never sees them)
+# and SESSION RECORDING (written to the shared recordings volume).
+#
+# Egress: guacd initiates outbound connections to targets on 3389/5900/22, so the
+# OT network must be routable from the cluster pod network.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guacd
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacd
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # RWX recordings volume; avoid two pods racing on it
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: guacd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guacd
+        app.kubernetes.io/component: proxy
+    spec:
+      containers:
+        - name: guacd
+          image: guacamole/guacd:1.6.0
+          args: ["/usr/local/sbin/guacd", "-b", "0.0.0.0", "-L", "info", "-f"]
+          ports:
+            - name: guacd
+              containerPort: 4822
+          volumeMounts:
+            - name: recordings
+              mountPath: /recordings
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            tcpSocket:
+              port: 4822
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 4822
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: recordings
+          persistentVolumeClaim:
+            claimName: guacamole-recordings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guacd
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: guacd
+  ports:
+    - name: guacd
+      port: 4822
+      targetPort: 4822

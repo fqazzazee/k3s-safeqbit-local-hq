@@ -1,0 +1,38 @@
+# velero-schedule-sra-dev-demo.yaml
+# Bi-monthly Velero backup of the sra-dev-demo namespace to B2.
+#
+# Postgres data handled separately by CNPG ScheduledBackup (weekly).
+# This catches the guacamole-recordings RWX PVC (session recordings) and the
+# k8s objects (Ingress, ConfigMap, Deployments, Services, PVC defs).
+#
+# Schedule: 8th and 23rd 04:30 UTC. Spread across the month with the other
+# bi-monthly workloads so only one fires per day (avoids B2 cap spikes).
+#
+# Retention: keep the last 2 restore points. Velero retention is TTL-based
+# (there is no native "keep N" count), so ttl is set to 28 days — longer than
+# the ~15-16 day bi-monthly interval (so the previous backup survives) but
+# shorter than two intervals (so the one before that expires). Net steady
+# state: 2 backups.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: sra-dev-demo-bimonthly
+  namespace: velero
+spec:
+  schedule: "30 4 8,23 * *"
+
+  template:
+    ttl: "672h0m0s"   # 28 days -> keep last 2 bi-monthly backups
+    includedNamespaces:
+      - sra-dev-demo
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false

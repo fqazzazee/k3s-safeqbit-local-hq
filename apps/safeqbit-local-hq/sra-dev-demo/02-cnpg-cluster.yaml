@@ -1,0 +1,42 @@
+# CloudNativePG cluster backing Apache Guacamole.
+#
+# This Postgres database IS the demo's credential vault: Guacamole stores user
+# accounts, connection definitions, session history, and the per-connection
+# RDP/VNC/SSH credentials here. Credentials are injected into sessions by guacd
+# at connect time and never shown to the end user.
+#
+# instances: 1 — this is a dev/demo workload, so a single instance is fine
+# (see workbook/cnpg-strategy.md for the instance-count rationale; production
+# auth-path workloads like authentik run 2). Bump to 2 if this graduates.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: guacamole-cnpg
+  namespace: sra-dev-demo
+spec:
+  instances: 1
+
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: "128MB"
+
+  bootstrap:
+    initdb:
+      database: guacamole
+      owner: guacamole
+
+  storage:
+    storageClass: longhorn
+    size: 5Gi
+
+  backup:
+    volumeSnapshot:
+      className: longhorn-velero
+      snapshotOwnerReference: backup
+
+  affinity:
+    topologyKey: kubernetes.io/hostname
+
+  monitoring:
+    enablePodMonitor: true

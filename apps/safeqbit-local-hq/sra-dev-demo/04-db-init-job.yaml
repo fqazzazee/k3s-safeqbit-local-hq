@@ -1,0 +1,83 @@
+# One-shot schema loader for the Guacamole database.
+#
+# Guacamole's JDBC auth layer needs its schema (tables for users, connections,
+# permissions, history, sharing profiles, etc.) loaded before the webapp will
+# start cleanly. The official guacamole/guacamole image ships initdb.sh, which
+# emits the exact schema for THIS image version — safer than hand-copying SQL.
+#
+# Flow:
+#   initContainer (guacamole image) -> generates /schema/initdb.sql
+#   main container (postgres client) -> applies it, but only if not already present
+#
+# Idempotent: re-runs are no-ops once guacamole_connection exists, so it is safe
+# for Flux to keep this manifest. If you bump the Guacamole version and the schema
+# changes, delete this Job so it re-runs (Guacamole ships SQL upgrade scripts you
+# may also need to apply — see the upgrade notes in workbook/sra-dev-demo.md).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guacamole-db-init
+  namespace: sra-dev-demo
+  labels:
+    app.kubernetes.io/name: guacamole
+    app.kubernetes.io/component: db-init
+spec:
+  backoffLimit: 10          # retry until the CNPG cluster is accepting connections
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guacamole
+        app.kubernetes.io/component: db-init
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: generate-schema
+          image: guacamole/guacamole:1.6.0
+          command:
+            - /bin/sh
+            - -c
+            - /opt/guacamole/bin/initdb.sh --postgresql > /schema/initdb.sql
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+      containers:
+        - name: apply-schema
+          image: postgres:16-alpine
+          env:
+            - name: PGHOST
+              value: guacamole-cnpg-rw
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: guacamole
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: guacamole-cnpg-app   # auto-created by the CNPG operator
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: guacamole-cnpg-app
+                  key: password
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Waiting for Postgres at $PGHOST:$PGPORT ..."
+              until pg_isready -q; do sleep 3; done
+              if psql -tAc "SELECT to_regclass('public.guacamole_connection')" | grep -q guacamole_connection; then
+                echo "Guacamole schema already present — nothing to do."
+              else
+                echo "Loading Guacamole schema ..."
+                psql -v ON_ERROR_STOP=1 -f /schema/initdb.sql
+                echo "Schema loaded."
+              fi
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+      volumes:
+        - name: schema
+          emptyDir: {}
