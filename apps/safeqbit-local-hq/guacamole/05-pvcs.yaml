@@ -8,7 +8,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: guacamole-recordings
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacamole
     app.kubernetes.io/component: recordings

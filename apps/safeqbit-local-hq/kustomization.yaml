@@ -16,7 +16,7 @@ resources:
   - photoprism
   - cloudflared
   - uptime-kuma
-  - sra-dev-demo
+  - guacamole
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx

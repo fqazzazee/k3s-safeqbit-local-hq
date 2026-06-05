@@ -12,7 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: guacd
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacd
     app.kubernetes.io/component: proxy
@@ -64,7 +64,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: guacd
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacd
 spec:

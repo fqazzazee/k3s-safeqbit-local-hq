@@ -1,8 +1,8 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sra
-  namespace: sra-dev-demo
+  name: guacamole
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacamole
     app.kubernetes.io/component: ingress
@@ -19,11 +19,11 @@ spec:
 
   tls:
     - hosts:
-        - sra-demo.local.safeqbit.com
-      secretName: sra-tls
+        - guacamole.local.safeqbit.com
+      secretName: guacamole-tls
 
   rules:
-    - host: sra-demo.local.safeqbit.com
+    - host: guacamole.local.safeqbit.com
       http:
         paths:
           - path: /

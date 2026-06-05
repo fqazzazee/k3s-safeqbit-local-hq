@@ -13,11 +13,11 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: guacamole-config
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacamole
 data:
-  # --- Serve at root so URLs are https://sra.local.safeqbit.com/ ---
+  # --- Serve at root so URLs are https://guacamole.local.safeqbit.com/ ---
   WEBAPP_CONTEXT: "ROOT"
 
   # --- guacd proxy ---
@@ -43,12 +43,12 @@ data:
   # Implicit flow: response is an id_token, so no client secret is required.
   # NOTE: fill OPENID_CLIENT_ID after creating the provider in Authentik, and
   # confirm the application slug used in the JWKS/issuer URLs (default: guacamole).
-  # See workbook/sra-dev-demo.md for the exact Authentik steps.
+  # See workbook/guacamole.md for the exact Authentik steps.
   OPENID_AUTHORIZATION_ENDPOINT: "https://authentik01.local.safeqbit.com/application/o/authorize/"
   OPENID_JWKS_ENDPOINT: "https://authentik01.local.safeqbit.com/application/o/guacamole/jwks/"
   OPENID_ISSUER: "https://authentik01.local.safeqbit.com/application/o/guacamole/"
   OPENID_CLIENT_ID: "8WN4yb6HxLQ3ep4Nh04FUMGe39HG37SyHqlEsHs1"
-  OPENID_REDIRECT_URI: "https://sra-demo.local.safeqbit.com/"
+  OPENID_REDIRECT_URI: "https://guacamole.local.safeqbit.com/"
   OPENID_USERNAME_CLAIM_TYPE: "preferred_username"
   OPENID_GROUPS_CLAIM_TYPE: "groups"
   OPENID_SCOPE: "openid email profile"
@@ -57,7 +57,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: guacamole
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacamole
     app.kubernetes.io/component: webapp
@@ -125,7 +125,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: guacamole
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacamole
 spec:

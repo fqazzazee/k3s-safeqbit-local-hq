@@ -2,7 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:
   name: guacamole-cnpg-backup
-  namespace: sra-dev-demo
+  namespace: guacamole
 spec:
   # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
   # Weekly Sunday 03:00 UTC — staggered after the other weekly/daily snapshots.

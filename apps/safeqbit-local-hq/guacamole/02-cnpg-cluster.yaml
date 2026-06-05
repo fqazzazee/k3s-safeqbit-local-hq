@@ -12,7 +12,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: guacamole-cnpg
-  namespace: sra-dev-demo
+  namespace: guacamole
 spec:
   instances: 1
 

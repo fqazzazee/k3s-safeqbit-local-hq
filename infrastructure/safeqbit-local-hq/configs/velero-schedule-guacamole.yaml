@@ -1,5 +1,5 @@
-# velero-schedule-sra-dev-demo.yaml
-# Bi-monthly Velero backup of the sra-dev-demo namespace to B2.
+# velero-schedule-guacamole.yaml
+# Bi-monthly Velero backup of the guacamole namespace to B2.
 #
 # Postgres data handled separately by CNPG ScheduledBackup (weekly).
 # This catches the guacamole-recordings RWX PVC (session recordings) and the
@@ -16,7 +16,7 @@
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: sra-dev-demo-bimonthly
+  name: guacamole-bimonthly
   namespace: velero
 spec:
   schedule: "30 4 8,23 * *"
@@ -24,7 +24,7 @@ spec:
   template:
     ttl: "672h0m0s"   # 28 days -> keep last 2 bi-monthly backups
     includedNamespaces:
-      - sra-dev-demo
+      - guacamole
     excludedResources:
       - events
       - events.events.k8s.io

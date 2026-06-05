@@ -1,9 +1,9 @@
 # SRA Dev Demo — Secure Remote Access stack (Apache Guacamole)
 
 **Created:** 2026-06-04
-**Namespace:** `sra-dev-demo`
-**Hostname:** `sra-demo.local.safeqbit.com`
-**Path in repo:** `apps/safeqbit-local-hq/sra-dev-demo/`
+**Namespace:** `guacamole`
+**Hostname:** `guacamole.local.safeqbit.com`
+**Path in repo:** `apps/safeqbit-local-hq/guacamole/`
 
 A self-hosted, identity-aware secure remote access (SRA) stack for RDP / VNC /
 SSH, built to mimic the capabilities of commercial OT SRA tools (e.g. Cyolo):
@@ -45,7 +45,7 @@ Teleport only does GitHub SSO), which would break the Authentik requirement.
 ## Architecture / components
 
 ```
-browser ──https──> nginx ingress (sra-demo.local.safeqbit.com)
+browser ──https──> nginx ingress (guacamole.local.safeqbit.com)
                         │
                         ▼
                   guacamole (Tomcat webapp)  ──4822──>  guacd (proxy)
@@ -103,18 +103,18 @@ Deployment is GitOps — nothing is live until committed and Flux reconciles
 3. **Commit & push.** Flux applies the namespace, CNPG cluster, schema-init Job,
    then guacd + webapp. The init Job waits for Postgres and is a no-op once the
    schema exists.
-4. **DNS:** ensure `sra-demo.local.safeqbit.com` resolves to the ingress (same as the
+4. **DNS:** ensure `guacamole.local.safeqbit.com` resolves to the ingress (same as the
    other `*.local.safeqbit.com` hosts).
 5. **Verify** (see below), then log in.
 
 ### Verify
 
 ```sh
-kubectl -n sra-dev-demo get pods
-kubectl -n sra-dev-demo get cluster guacamole-cnpg          # CNPG ready, 1/1
-kubectl -n sra-dev-demo logs job/guacamole-db-init          # "Schema loaded." or "already present"
-kubectl -n sra-dev-demo get ingress sra                     # address assigned
-kubectl -n sra-dev-demo get certificate sra-tls             # READY=True
+kubectl -n guacamole get pods
+kubectl -n guacamole get cluster guacamole-cnpg          # CNPG ready, 1/1
+kubectl -n guacamole logs job/guacamole-db-init          # "Schema loaded." or "already present"
+kubectl -n guacamole get ingress guacamole               # address assigned
+kubectl -n guacamole get certificate guacamole-tls       # READY=True
 ```
 
 ---
@@ -128,7 +128,7 @@ In the Authentik admin UI (`authentik01.local.safeqbit.com`):
    - Authorization flow: your default explicit-consent (or implicit) flow
    - **Client type: Public** (implicit flow — Guacamole's openid extension uses
      `response_type=id_token`, so no client secret)
-   - **Redirect URIs (exact match):** `https://sra-demo.local.safeqbit.com/`
+   - **Redirect URIs (exact match):** `https://guacamole.local.safeqbit.com/`
      (include the trailing slash)
    - Signing key: your default
    - Scopes: `openid`, `email`, `profile`. To drive identity-aware access by
@@ -197,7 +197,7 @@ To export to video offline: `guacenc /recordings/<file>` produces an `.m4v`.
 
 - **CNPG:** weekly Longhorn volume snapshot (`03-cnpg-scheduled-backup.yaml`,
   Sun 03:00 UTC), retention via `configs/cnpg-backup-retention.yaml`.
-- **Velero → B2:** `configs/velero-schedule-sra-dev-demo.yaml`, bi-monthly (8th &
+- **Velero → B2:** `configs/velero-schedule-guacamole.yaml`, bi-monthly (8th &
   23rd 04:30 UTC). Captures the `guacamole-recordings` RWX PVC + k8s objects.
   **Retention: keep last 2** restore points — Velero has no native "keep N"
   count, so this is expressed as `ttl: 672h` (28 days, longer than the ~15-day
@@ -215,14 +215,14 @@ To export to video offline: `guacenc /recordings/<file>` produces an `.m4v`.
   changed between versions, apply Guacamole's `upgrade/` SQL scripts manually and
   delete the `guacamole-db-init` Job so it can re-run.
 - **Init Job stuck:** it retries until Postgres is ready (`backoffLimit: 10`).
-  Check `kubectl -n sra-dev-demo logs job/guacamole-db-init`. CNPG must be `1/1`.
+  Check `kubectl -n guacamole logs job/guacamole-db-init`. CNPG must be `1/1`.
 - **OIDC redirect errors:** the Authentik redirect URI must exactly equal
-  `https://sra-demo.local.safeqbit.com/` (trailing slash), and the app slug must match
+  `https://guacamole.local.safeqbit.com/` (trailing slash), and the app slug must match
   the JWKS/issuer URLs.
 - **Session drops after ~60s of idle:** check the ingress proxy timeout
   annotations (set to 3600s here).
 - **guacd can't reach a target:** verify pod-network → OT-network routing/firewall
-  for 3389/5900/22; test with `kubectl -n sra-dev-demo exec deploy/guacd -- nc -vz <host> <port>`.
+  for 3389/5900/22; test with `kubectl -n guacamole exec deploy/guacd -- nc -vz <host> <port>`.
 - **Recording won't play:** confirm the connection's recording name is
   `${HISTORY_UUID}` and both pods mount `guacamole-recordings`.
 

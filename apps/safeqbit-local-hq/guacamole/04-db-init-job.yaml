@@ -12,12 +12,12 @@
 # Idempotent: re-runs are no-ops once guacamole_connection exists, so it is safe
 # for Flux to keep this manifest. If you bump the Guacamole version and the schema
 # changes, delete this Job so it re-runs (Guacamole ships SQL upgrade scripts you
-# may also need to apply — see the upgrade notes in workbook/sra-dev-demo.md).
+# may also need to apply — see the upgrade notes in workbook/guacamole.md).
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: guacamole-db-init
-  namespace: sra-dev-demo
+  namespace: guacamole
   labels:
     app.kubernetes.io/name: guacamole
     app.kubernetes.io/component: db-init
