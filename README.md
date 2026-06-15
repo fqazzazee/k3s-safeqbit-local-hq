@@ -422,6 +422,8 @@ learn.
 | [AFFiNE](https://affine.pro/) | Notes & collaborative knowledge base |
 | [Passzilla](https://github.com/pglombardo/PasswordPusher) | One-time secret / password sharing links |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring |
+| [Apache Guacamole](https://guacamole.apache.org/) | Clientless HTML5 remote access (RDP/VNC/SSH) — SRA demo stack |
+| [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
 | [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine |
 

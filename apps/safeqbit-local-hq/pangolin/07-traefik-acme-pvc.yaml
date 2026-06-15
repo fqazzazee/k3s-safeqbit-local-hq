@@ -1,0 +1,20 @@
+# ACME-state PVC for Pangolin's standalone Traefik (acme.json under /data).
+#
+# The alpha chart's standalone Traefik mounts a claim named
+# "<fullname>-acme" (pangolin-traefik-acme) when traefik.persistence.enabled,
+# but ships NO template to create it — only Gerbil's PVC is chart-managed. So
+# we create it here and point traefik.persistence.existingClaim at it in the
+# HelmRelease. Persisting acme.json across restarts avoids re-issuing the
+# wildcard cert and tripping Let's Encrypt's duplicate-certificate rate limit.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pangolin-traefik-acme
+  namespace: pangolin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

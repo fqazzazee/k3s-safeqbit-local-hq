@@ -1,0 +1,18 @@
+# Namespace for Pangolin (https://pangolin.net) — identity-aware remote access
+# (HTTP + browser RDP/VNC/SSH) built on WireGuard.
+#
+# Pod Security Admission MUST be `privileged` here: the Gerbil component manages
+# WireGuard interfaces and requires the NET_ADMIN capability, which the
+# baseline/restricted PSA profiles forbid. The Pangolin Helm chart documents
+# this exact requirement.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/managed-by: flux
+    cluster: safeqbit-local-hq
+    backup.policy/velero: biweekly
+    # Allow Gerbil's NET_ADMIN / WireGuard capability.
+    pod-security.kubernetes.io/enforce: privileged

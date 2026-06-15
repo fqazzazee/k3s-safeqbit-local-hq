@@ -1,0 +1,15 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pangolin-cnpg-backup
+  namespace: pangolin
+spec:
+  # CNPG ScheduledBackup uses 6-field cron (sec min hour dom mon dow).
+  # Weekly Sunday 03:30 UTC — staggered 30 min after guacamole's 03:00 so the
+  # weekly CNPG snapshots don't all fire at once. Low change velocity, so weekly
+  # is plenty. Retention controlled by configs/cnpg-backup-retention.yaml.
+  schedule: "0 30 3 * * 0"
+  backupOwnerReference: self
+  method: volumeSnapshot
+  cluster:
+    name: pangolin-cnpg

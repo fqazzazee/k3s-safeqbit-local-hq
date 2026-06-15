@@ -1,0 +1,178 @@
+# Pangolin (https://pangolin.net) deployed via the official (alpha) Helm chart.
+#
+# Topology: deployment.type=standalone + mode=multi. This mirrors Pangolin's
+# proven docker-compose stack (Pangolin + Gerbil + a Pangolin-owned Traefik that
+# loads routing from Pangolin's dynamic-config API) as three separate workloads,
+# which is the most self-contained, lowest-risk path on this early chart. It
+# avoids the pangolin-kube-controller + Traefik-CRD machinery of controller mode.
+#
+# Edge: Pangolin's own Traefik is the front door on a MetalLB LoadBalancer IP and
+# does its own ACME (Cloudflare DNS-01) — it does NOT use the cluster's
+# nginx-ingress/cert-manager. Gerbil exposes WireGuard UDP on a second MetalLB IP.
+#
+# Auth: starts with Pangolin's built-in accounts. Authentik OIDC SSO is added
+# afterwards in the Pangolin admin UI (Identity Providers) — it is runtime state
+# in the database, not a chart value. See workbook/pangolin.md.
+#
+# Image: ee-postgresql-1.19.2 (Enterprise + Postgres-capable + 1.19). Browser
+# RDP/VNC/SSH stay locked until a (free, <$100k revenue) EE license key is
+# entered at /admin/license.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: pangolin
+  namespace: pangolin
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: pangolin
+      version: 0.1.0-alpha.0
+      sourceRef:
+        kind: HelmRepository
+        name: fossorial
+        namespace: flux-system
+
+  install:
+    remediation:
+      retries: 2
+  upgrade:
+    remediation:
+      retries: 2
+
+  values:
+    deployment:
+      type: standalone
+      mode: multi
+
+    # k3s enforces NetworkPolicy by default. The chart's policies are written for
+    # the chart's *embedded* Postgres and a controller-mode topology: under
+    # enforcement they would block Pangolin -> our external CNPG cluster (pod
+    # label mismatch) and have no HTTPS egress at all (breaking external OIDC to
+    # Authentik and the EE license check at app.pangolin.net). The rest of this
+    # cluster runs without per-app NetworkPolicies, so disable these to match.
+    # TODO(workbook/pangolin.md): author correct policies for this topology.
+    networkPolicy:
+      enabled: false
+
+    # The namespace (with PSA enforce=privileged for Gerbil/NET_ADMIN) is managed
+    # by 01-namespace.yaml, not the chart.
+    namespace:
+      create: false
+
+    images:
+      # Override the chart's automatic image selection (chart AppVersion is
+      # 1.18.2) with the EE + Postgres + 1.19 image.
+      pangolin:
+        repository: fosrl/pangolin
+        tag: "ee-postgresql-1.19.2"
+
+    # ---------------- Pangolin core ----------------
+    pangolin:
+      secret:
+        # Use our pre-sealed SERVER_SECRET so it never rotates on upgrade.
+        existingSecretName: pangolin-server-secret
+        existingSecretKey: SERVER_SECRET
+      ingressRoute:
+        dashboard:
+          # IngressRoute is a controller-mode (Traefik CRD) feature. In standalone
+          # mode the dashboard is routed by Pangolin's own dynamic Traefik config,
+          # and the IngressRoute CRD is not installed — so disable it.
+          enabled: false
+      config:
+        app:
+          dashboard_url: "https://pangolin.local.safeqbit.com"
+          log_level: info
+          telemetry:
+            anonymous_usage: false
+          notifications:
+            product_updates: false
+            new_releases: false
+        domains:
+          domain1:
+            base_domain: "local.safeqbit.com"
+            cert_resolver: "letsencrypt"
+            # Per-host certs via DNS-01 (matches cert-manager's per-host approach
+            # for the nginx apps). No wildcard — the cluster uses none.
+            prefer_wildcard_cert: false
+        gerbil:
+          start_port: 51820
+          clients_start_port: 21820
+          # Endpoint Newt site connectors dial for WireGuard (Gerbil's MetalLB IP).
+          base_endpoint: "10.10.13.52"
+        traefik:
+          enabled: true
+          http_entrypoint: web
+          https_entrypoint: websecure
+          cert_resolver: letsencrypt
+          prefer_wildcard_cert: false
+
+    # ---------------- Database (externally-managed CNPG) ----------------
+    # The CNPG operator is installed cluster-wide and the Cluster CR is hand
+    # authored in 02-cnpg-cluster.yaml (matches the guacamole/authentik pattern),
+    # so disable both bundled CNPG subcharts and consume CNPG's auto-generated
+    # `pangolin-cnpg-app` Secret (key `uri`) directly.
+    cnpg-operator:
+      enabled: false
+    cnpg-cluster:
+      enabled: false
+    database:
+      mode: cloudnativepg
+      name: pangolin
+      username: pangolin
+      cloudnativepg:
+        cluster:
+          name: pangolin-cnpg
+          rwServiceName: pangolin-cnpg-rw
+      connection:
+        existingSecretName: pangolin-cnpg-app
+        existingSecretKey: uri
+
+    # ---------------- Gerbil (WireGuard tunnel server) ----------------
+    gerbil:
+      enabled: true
+      service:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        annotations:
+          metallb.io/loadBalancerIPs: "10.10.13.52"
+      persistence:
+        # Persist Gerbil's WireGuard private key so peers don't re-handshake on
+        # every restart.
+        enabled: true
+        size: 1Gi
+        storageClass: longhorn
+
+    # ---------------- Standalone Traefik (Pangolin's edge proxy) ----------------
+    controller:
+      # pangolin-kube-controller is only for deployment.type=controller.
+      enabled: false
+    traefik:
+      enabled: true
+      service:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        annotations:
+          metallb.io/loadBalancerIPs: "10.10.13.51"
+      config:
+        certResolver: letsencrypt
+        httpEntrypoint: web
+        httpsEntrypoint: websecure
+        letsencryptEmail: "fadi@safeqbit.com"
+        logLevel: INFO
+        # Required by chart validation (PANGOLIN-043) when traefik.enabled=true.
+        dynamicRouters:
+          host: pangolin.local.safeqbit.com
+      cloudflare:
+        # Re-sealed Cloudflare API token (DNS-01 for *.local.safeqbit.com).
+        existingSecretName: pangolin-traefik-cloudflare
+        keys:
+          email: email
+          dnsApiToken: dnsApiToken
+          zoneApiToken: zoneApiToken
+      persistence:
+        # Persist ACME state (acme.json) across restarts to avoid re-issuing certs.
+        # The chart does not create this PVC in standalone mode, so we supply our
+        # own (07-traefik-acme-pvc.yaml) and reference it here.
+        enabled: true
+        existingClaim: pangolin-traefik-acme

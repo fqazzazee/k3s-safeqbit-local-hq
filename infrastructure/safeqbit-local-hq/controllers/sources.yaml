@@ -110,3 +110,17 @@ spec:
   interval: 1h
   url: https://cloudnative-pg.io/charts
 
+---
+# Pangolin is published as an OCI Helm chart (no classic index), so this source
+# uses type: oci. helm-controller pulls `pangolin` from here for the Pangolin
+# HelmRelease in the pangolin namespace.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: fossorial
+  namespace: flux-system
+spec:
+  type: oci
+  interval: 1h
+  url: oci://ghcr.io/fosrl/helm-charts
+
