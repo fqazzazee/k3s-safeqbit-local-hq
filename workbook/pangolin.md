@@ -41,21 +41,27 @@ homelab use is eligible.
 
 ## Architecture as deployed
 
-Topology: **`deployment.type=standalone`, `mode=multi`** — mirrors Pangolin's
-proven docker-compose stack (three separate Deployments) rather than the
-controller + Traefik-CRD mode. Lowest risk on the alpha Helm chart.
+Topology: the Helm chart deploys **Pangolin + Gerbil + DB** only. The chart's
+own Traefik is **disabled** (it's broken/absent in 0.1.0-alpha.x — see Decisions
+below), so the edge is a **hand-authored dedicated Traefik** wired the canonical
+Pangolin way (HTTP provider + file provider + Badger plugin). The chart runs in
+`deployment.type=standalone, mode=multi` purely to get the app+Gerbil workloads;
+`traefik.enabled=false`, `controller.enabled=false`.
 
-| Component | Image | Exposure / notes |
-|---|---|---|
-| **Pangolin** (app/API/dashboard) | `fosrl/pangolin:ee-postgresql-1.19.2` | ClusterIP; behind Traefik. EE + Postgres-capable + 1.19. |
-| **Traefik** (Pangolin's own edge) | `traefik:v3.6.15` | **LoadBalancer `10.10.13.51`**; does its **own ACME** (Cloudflare DNS-01), **per-host** certs (`prefer_wildcard_cert: false`). Does NOT use nginx-ingress/cert-manager. |
-| **Gerbil** (WireGuard) | `fosrl/gerbil:1.3.1` | **LoadBalancer `10.10.13.52`**, UDP 51820/21820; `NET_ADMIN`; PVC for WG key. |
-| **Database** | CNPG `pangolin-cnpg` | Hand-authored Cluster (Longhorn 5Gi, `instances:1`), CNPG app secret `pangolin-cnpg-app` key `uri`. |
+| Component | Image | How it's deployed | Exposure / notes |
+|---|---|---|---|
+| **Pangolin** (app/API/dashboard) | `fosrl/pangolin:ee-postgresql-1.19.2` | Helm chart | ClusterIP `pangolin` :3000/3001/3002/3003. EE + Postgres + 1.19. Generates Traefik routing at `/api/v1/traefik-config`. |
+| **Traefik** (edge proxy `pangolin-edge`) | `traefik:v3.6.15` | **hand-authored** (08–10) | **LoadBalancer `10.10.13.51`**; HTTP provider → `pangolin:3001` + file provider (dashboard routes) + **Badger** plugin (`v1.4.1`); **own ACME**, Cloudflare DNS-01, per-host certs. Does NOT use nginx-ingress/cert-manager. |
+| **Gerbil** (WireGuard) | `fosrl/gerbil:1.3.1` | Helm chart | **LoadBalancer `10.10.13.52`**, UDP 51820/21820; `NET_ADMIN`; PVC for WG key. |
+| **Database** | CNPG `pangolin-cnpg` | hand-authored (02) | Longhorn 5Gi, `instances:1`; CNPG app secret `pangolin-cnpg-app` key `uri`. |
 
-Deployed via Flux **HelmRelease** against the official OCI chart
+Chart deployed via Flux **HelmRelease** against the official OCI chart
 `oci://ghcr.io/fosrl/helm-charts/pangolin:0.1.0-alpha.0` (source `fossorial` in
-`infrastructure/.../controllers/sources.yaml`). The chart's AppVersion is 1.18.2;
-the EE/1.19 image is pinned via `images.pangolin.tag`.
+`infrastructure/.../controllers/sources.yaml`). Chart AppVersion is 1.18.2; the
+EE/1.19 image is pinned via `images.pangolin.tag`. The dedicated Traefik
+(`08-traefik-config.yaml` ConfigMap, `09-traefik-deployment.yaml`,
+`10-traefik-service.yaml`, `07-traefik-acme-pvc.yaml`) is plain manifests in the
+same app dir, adapted from `fosrl/pangolin@1.19.2 install/config/traefik/`.
 
 ### MetalLB IPs
 
@@ -142,14 +148,31 @@ and `10.10.13.52` (Gerbil) from the **reserved** pool (`10.10.13.50–59`,
   Postgres-capable **and** 1.19). Tag families on Docker Hub:
   `1.x` (community/sqlite), `postgresql-1.x` (community/pg), `ee-1.x` (EE/sqlite),
   `ee-postgresql-1.x` (EE/pg ← this one).
-- **Traefik ACME PVC is NOT chart-managed in standalone mode.** The chart's
-  standalone Traefik mounts `pangolin-traefik-acme` but ships no template to
-  create it (only Gerbil's PVC is templated). We create it ourselves
-  (`07-traefik-acme-pvc.yaml`) and set `traefik.persistence.existingClaim`.
-  Without it Traefik would hang Pending; without persistence at all it would
-  re-issue certs each restart and risk hitting LE's rate limits.
-- **`traefik.config.dynamicRouters.host` is required** (chart validation
-  `PANGOLIN-043`) — set to the dashboard host.
+- **The chart's Traefik does not work — we run our own.** Discovered on first
+  deploy (2026-06-15):
+  - *standalone* Traefik (`deployment.type=standalone`, `traefik.enabled=true`)
+    hardcodes its args with **no admin/ping entrypoint**, so the `:8085/ping`
+    probe gets connection-refused → permanent CrashLoop; it also hardcodes
+    `--providers.kubernetescrd/kubernetesingress` (needs Traefik CRDs + a SA
+    token + the kube-controller — none present) instead of Pangolin's HTTP
+    provider.
+  - *controller* mode ships **no Traefik subchart** in `0.1.0-alpha.0/.1`
+    (`charts/` has only the CNPG deps), so `installTraefikController=true`
+    deploys no Traefik at all.
+  So `traefik.enabled=false`, `controller.enabled=false`, and the edge is a
+  hand-authored Traefik (08–10) using the canonical Pangolin compose wiring:
+  `providers.http` → `http://pangolin:3001/api/v1/traefik-config` + a file
+  provider for the dashboard routers + the **Badger** plugin (`v1.4.1`, fetched
+  at startup — needs egress to GitHub). No Kubernetes RBAC/CRDs needed. ACME is
+  **DNS-01** (HTTP-01 can't work for an internal-only domain) using the
+  `pangolin-traefik-cloudflare` token via `CF_DNS_API_TOKEN`. Pangolin still
+  GENERATES resource routes because `pangolin.config.traefik.enabled=true`
+  (entrypoints `web`/`websecure`, resolver `letsencrypt` must match our Traefik).
+  - **Badger version** tracks Pangolin's installer, which builds with the
+    *latest* badger tag (`make` does `jq '.[0].name'`). Bump `v1.4.1` in
+    `08-traefik-config.yaml` when upgrading Pangolin.
+  - ACME state persisted on `pangolin-edge-acme` PVC (`07`), mounted `/letsencrypt`.
+  - Traefik runs as root to bind `:80/:443` (ns PSA is already `privileged`).
 - **NetworkPolicies disabled** (`networkPolicy.enabled: false`). k3s enforces
   NetworkPolicy by default, and the chart's policies are written for the chart's
   *embedded* Postgres + controller topology: under enforcement they would block
@@ -159,9 +182,10 @@ and `10.10.13.52` (Gerbil) from the **reserved** pool (`10.10.13.50–59`,
   NetworkPolicies, so we match. **TODO:** author correct policies for this
   topology if we want default-deny here.
 - **Dashboard IngressRoute disabled** (`pangolin.ingressRoute.dashboard.enabled:
-  false`) — that's a controller-mode (Traefik CRD) feature; in standalone mode
-  Pangolin's own dynamic Traefik config routes the dashboard and the IngressRoute
-  CRD isn't installed.
+  false`) — that's a controller-mode (Traefik CRD) feature. The dashboard is
+  routed by our Traefik **file provider** (`dynamic_config.yml`: `next-service`
+  → `pangolin:3002`, `api-service` → `pangolin:3000`, all behind `badger`). If
+  the dashboard host changes, update the `Host(...)` rules in that ConfigMap.
 - **Telemetry / update notifications disabled** to match the cluster's privacy
   posture (cf. Authentik error-reporting off).
 - **EE vs community is a tag swap**, not a one-way door — data is identical, so

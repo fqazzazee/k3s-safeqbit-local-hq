@@ -1,0 +1,140 @@
+# Static + dynamic Traefik config for the dedicated Pangolin edge proxy.
+# Adapted from Pangolin's reference config (fosrl/pangolin @1.19.2,
+# install/config/traefik/) for Kubernetes + Cloudflare DNS-01:
+#   - HTTP provider polls Pangolin for resource routing (dynamically generated)
+#   - file provider serves the dashboard routers below
+#   - badger plugin enforces Pangolin auth on every router
+#   - ACME uses DNS-01 (the domain resolves only to internal IPs, so HTTP-01
+#     can't work) via the Cloudflare token in pangolin-traefik-cloudflare
+# {{.DashboardDomain}} is substituted with the real dashboard host.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pangolin-edge-config
+  namespace: pangolin
+data:
+  traefik_config.yml: |
+    api:
+      insecure: false
+      dashboard: false
+
+    providers:
+      http:
+        endpoint: "http://pangolin:3001/api/v1/traefik-config"
+        pollInterval: "5s"
+      file:
+        filename: "/etc/traefik/dynamic_config.yml"
+
+    experimental:
+      plugins:
+        badger:
+          moduleName: "github.com/fosrl/badger"
+          version: "v1.4.1"
+
+    log:
+      level: "INFO"
+      format: "common"
+
+    certificatesResolvers:
+      letsencrypt:
+        acme:
+          dnsChallenge:
+            provider: cloudflare
+          email: "fadi@safeqbit.com"
+          storage: "/letsencrypt/acme.json"
+          caServer: "https://acme-v02.api.letsencrypt.org/directory"
+
+    entryPoints:
+      web:
+        address: ":80"
+      websecure:
+        address: ":443"
+        transport:
+          respondingTimeouts:
+            readTimeout: "30m"
+        http:
+          tls:
+            certResolver: "letsencrypt"
+          encodedCharacters:
+            allowEncodedSlash: true
+            allowEncodedQuestionMark: true
+
+    serversTransport:
+      insecureSkipVerify: true
+
+    ping:
+      entryPoint: "web"
+
+  dynamic_config.yml: |
+    http:
+      middlewares:
+        badger:
+          plugin:
+            badger:
+              disableForwardAuth: true
+        redirect-to-https:
+          redirectScheme:
+            scheme: https
+
+      routers:
+        # HTTP -> HTTPS redirect
+        main-app-router-redirect:
+          rule: "Host(`pangolin.local.safeqbit.com`)"
+          service: next-service
+          entryPoints:
+            - web
+          middlewares:
+            - redirect-to-https
+            - badger
+
+        # Next.js (everything except API and WebSocket paths)
+        next-router:
+          rule: "Host(`pangolin.local.safeqbit.com`) && !PathPrefix(`/api/v1`)"
+          service: next-service
+          entryPoints:
+            - websecure
+          middlewares:
+            - badger
+          tls:
+            certResolver: letsencrypt
+
+        # API (/api/v1 paths)
+        api-router:
+          rule: "Host(`pangolin.local.safeqbit.com`) && PathPrefix(`/api/v1`)"
+          service: api-service
+          entryPoints:
+            - websecure
+          middlewares:
+            - badger
+          tls:
+            certResolver: letsencrypt
+
+        # WebSocket
+        ws-router:
+          rule: "Host(`pangolin.local.safeqbit.com`)"
+          service: api-service
+          entryPoints:
+            - websecure
+          middlewares:
+            - badger
+          tls:
+            certResolver: letsencrypt
+
+      services:
+        next-service:
+          loadBalancer:
+            servers:
+              - url: "http://pangolin:3002"  # Next.js server
+        api-service:
+          loadBalancer:
+            servers:
+              - url: "http://pangolin:3000"  # API/WebSocket server
+
+    tcp:
+      serversTransports:
+        pp-transport-v1:
+          proxyProtocol:
+            version: 1
+        pp-transport-v2:
+          proxyProtocol:
+            version: 2

@@ -7,8 +7,11 @@ resources:
   - 03-cnpg-scheduled-backup.yaml
   - 04-sealed-secret-server.yaml
   - 05-sealed-secret-cloudflare.yaml
-  - 07-traefik-acme-pvc.yaml
   - 06-helmrelease.yaml
+  - 07-traefik-acme-pvc.yaml
+  - 08-traefik-config.yaml
+  - 09-traefik-deployment.yaml
+  - 10-traefik-service.yaml
 
 commonLabels:
   cluster: safeqbit-local-hq

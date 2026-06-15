@@ -143,36 +143,18 @@ spec:
         size: 1Gi
         storageClass: longhorn
 
-    # ---------------- Standalone Traefik (Pangolin's edge proxy) ----------------
+    # ---------------- Edge proxy: NOT the chart's Traefik ----------------
+    # The chart's bundled Traefik is broken/absent in 0.1.0-alpha.x:
+    #   - standalone Traefik never binds its admin/ping port -> CrashLoop, and
+    #     hardcodes kubernetescrd/ingress providers (no CRDs/controller/SA here);
+    #   - controller mode ships NO Traefik subchart, so installTraefikController
+    #     deploys nothing.
+    # So we disable the chart's Traefik and the kube-controller, and run our own
+    # dedicated Traefik (09-traefik-deployment.yaml) wired the canonical Pangolin
+    # way: HTTP provider -> http://pangolin:3001/api/v1/traefik-config + a file
+    # provider for the dashboard routes + the Badger auth plugin. Pangolin still
+    # GENERATES that routing config because pangolin.config.traefik.enabled=true.
     controller:
-      # pangolin-kube-controller is only for deployment.type=controller.
       enabled: false
     traefik:
-      enabled: true
-      service:
-        type: LoadBalancer
-        externalTrafficPolicy: Local
-        annotations:
-          metallb.io/loadBalancerIPs: "10.10.13.51"
-      config:
-        certResolver: letsencrypt
-        httpEntrypoint: web
-        httpsEntrypoint: websecure
-        letsencryptEmail: "fadi@safeqbit.com"
-        logLevel: INFO
-        # Required by chart validation (PANGOLIN-043) when traefik.enabled=true.
-        dynamicRouters:
-          host: pangolin.local.safeqbit.com
-      cloudflare:
-        # Re-sealed Cloudflare API token (DNS-01 for *.local.safeqbit.com).
-        existingSecretName: pangolin-traefik-cloudflare
-        keys:
-          email: email
-          dnsApiToken: dnsApiToken
-          zoneApiToken: zoneApiToken
-      persistence:
-        # Persist ACME state (acme.json) across restarts to avoid re-issuing certs.
-        # The chart does not create this PVC in standalone mode, so we supply our
-        # own (07-traefik-acme-pvc.yaml) and reference it here.
-        enabled: true
-        existingClaim: pangolin-traefik-acme
+      enabled: false
