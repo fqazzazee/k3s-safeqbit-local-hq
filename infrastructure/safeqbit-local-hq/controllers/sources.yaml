@@ -48,7 +48,11 @@ metadata:
   namespace: flux-system
 spec:
   interval: 1h
-  url: https://bitnami-labs.github.io/sealed-secrets
+  # Repo moved org bitnami-labs -> bitnami (old GH Pages URL now 404s after the
+  # 2025 Bitnami restructuring). The old URL failing made this HelmRepository
+  # NotReady, which (via infrastructure-controllers' wait:true health gate)
+  # blocked the whole configs->apps reconcile chain.
+  url: https://bitnami.github.io/sealed-secrets
 
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
