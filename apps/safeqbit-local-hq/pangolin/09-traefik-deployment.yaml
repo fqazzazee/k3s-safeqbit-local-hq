@@ -38,6 +38,11 @@ spec:
                 secretKeyRef:
                   name: pangolin-traefik-cloudflare
                   key: dnsApiToken
+            # Give Cloudflare propagation a bit more room before lego gives up.
+            - name: CF_PROPAGATION_TIMEOUT
+              value: "180"
+            - name: CF_POLLING_INTERVAL
+              value: "5"
           ports:
             - name: web
               containerPort: 80

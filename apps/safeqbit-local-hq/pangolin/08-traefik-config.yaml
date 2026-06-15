@@ -40,6 +40,13 @@ data:
         acme:
           dnsChallenge:
             provider: cloudflare
+            # lego's default propagation check queries the zone's authoritative
+            # Cloudflare NS directly on :53, which times out from in-cluster pods
+            # here. Check via reachable recursive resolvers instead (1.1.1.1 works
+            # from the pod; cert-manager's own DNS-01 for this zone succeeds too).
+            resolvers:
+              - "1.1.1.1:53"
+              - "1.0.0.1:53"
           email: "fadi@safeqbit.com"
           storage: "/letsencrypt/acme.json"
           caServer: "https://acme-v02.api.letsencrypt.org/directory"
