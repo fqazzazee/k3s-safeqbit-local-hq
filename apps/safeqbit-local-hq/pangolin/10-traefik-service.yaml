@@ -7,12 +7,13 @@
 # HTTP GET to base_endpoint:80/ping — which only Traefik answers. We share 10.10.13.51
 # between this service (80/443 TCP) and gerbil (51820/21820 UDP, 3004 TCP) via
 # metallb.io/allow-shared-ip so base_endpoint=10.10.13.51 serves BOTH /ping and WG.
-# MetalLB requires shared-IP services to use the same externalTrafficPolicy, so this
-# is Local to match gerbil. Local is REQUIRED (not Cluster) for gerbil: Cluster's
-# SNAT randomizes WireGuard's source IP:port, so the site's endpoint roamed every
-# minute and Gerbil's hole-punch (UDP 21820) couldn't learn the site's real address.
-# Local preserves the client source IP:port. Works because both the edge and gerbil
-# pods sit on k3s-server-01, so MetalLB announces 10.10.13.51 from that one node.
+# MUST be externalTrafficPolicy: Cluster — MetalLB IP sharing does NOT work with
+# Local (it refuses: "can't change sharing key ... address also in use"). Trade-off
+# of Cluster: gerbil's WireGuard source is SNAT'd and roams (port changes ~1/min)
+# and Gerbil's hole-punch (UDP 21820) can't learn the site's real address. WireGuard
+# tolerates roaming, so server-relayed traffic (browser RDP via Gerbil) works; client
+# P2P hole-punching does not. If P2P is ever needed: split to separate IPs (edge .51,
+# gerbil .52), set both Local, and add a /ping responder sidecar on gerbil:80.
 apiVersion: v1
 kind: Service
 metadata:
@@ -26,7 +27,7 @@ metadata:
     metallb.io/allow-shared-ip: "pangolin-front"
 spec:
   type: LoadBalancer
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   selector:
     app.kubernetes.io/name: pangolin
     app.kubernetes.io/component: edge-traefik

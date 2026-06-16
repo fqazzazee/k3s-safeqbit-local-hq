@@ -165,15 +165,13 @@ spec:
       enabled: true
       service:
         type: LoadBalancer
-        # Local (NOT Cluster): WireGuard needs a stable real source IP:port. Cluster's
-        # SNAT rewrote the site's source to a pod IP (10.42.x) with a port that changed
-        # every minute, so Gerbil saw the endpoint "roam" constantly and its hole-punch
-        # (UDP 21820) could never learn the site's real network address ("last hole
-        # punch is too old"). Local preserves the client source IP:port. It works here
-        # because the gerbil pod and the edge (shared IP) both run on k3s-server-01, so
-        # MetalLB announces 10.10.13.51 from that node and delivers traffic locally.
-        # (Must match pangolin-edge's policy — MetalLB shared-IP requires it.)
-        externalTrafficPolicy: Local
+        # MUST be Cluster (not Local): MetalLB IP sharing with pangolin-edge does not
+        # work under Local ("can't change sharing key"). Trade-off: Cluster SNATs the
+        # WireGuard source (shows as 10.42.x, port roams ~1/min) so Gerbil's hole-punch
+        # (UDP 21820) can't learn the site's real address. WireGuard tolerates roaming
+        # so server-relayed browser RDP works; client P2P does not. See the
+        # pangolin-edge service comment for the separate-IP + /ping-sidecar alternative.
+        externalTrafficPolicy: Cluster
         annotations:
           # Share the edge's LB IP (10.10.13.51): stock Pangolin serves Traefik
           # (80/443) and Gerbil (WireGuard) on ONE endpoint. Newt's preflight is an
