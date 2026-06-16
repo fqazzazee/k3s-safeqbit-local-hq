@@ -172,6 +172,16 @@ and `10.10.13.52` (Gerbil) from the **reserved** pool (`10.10.13.50–59`,
     *latest* badger tag (`make` does `jq '.[0].name'`). Bump `v1.4.1` in
     `08-traefik-config.yaml` when upgrading Pangolin.
   - ACME state persisted on `pangolin-edge-acme` PVC (`07`), mounted `/letsencrypt`.
+  - **DNS-01 propagation check** (`08`, `dnsChallenge.propagation`) needs two
+    non-default settings to issue from in-cluster pods (resolved 2026-06-16):
+    `disableANSChecks: true` — lego's default check queries the zone's
+    *authoritative* Cloudflare NS (e.g. `santino.ns.cloudflare.com:53`) directly,
+    which is unreachable from pods here (timed out → "did not return the expected
+    TXT"); and `delayBeforeChecks: "120s"` — with the authoritative check off lego
+    stopped waiting and asked LE within ~13s, so LE got "No TXT record found"
+    before the record propagated. The delay lets the Cloudflare TXT propagate to
+    LE's resolvers. `resolvers: 1.1.1.1/1.0.0.1` (reachable from pods) back the
+    recursive check. Verified: edge serves a real LE cert, `curl` ssl_verify=0.
   - Traefik runs as root to bind `:80/:443` (ns PSA is already `privileged`).
 - **NetworkPolicies disabled** (`networkPolicy.enabled: false`). k3s enforces
   NetworkPolicy by default, and the chart's policies are written for the chart's
