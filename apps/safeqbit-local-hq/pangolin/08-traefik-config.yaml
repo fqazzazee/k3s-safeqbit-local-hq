@@ -46,11 +46,18 @@ data:
             # disableANSChecks skips that authoritative query and verifies via the
             # recursive resolvers below (1.1.1.1 IS reachable from the pod). LE then
             # validates from the public internet, where the record really exists.
+            #
+            # delayBeforeChecks: with the authoritative check disabled, lego stopped
+            # waiting for propagation and asked LE within ~13s, so LE got "No TXT
+            # record found" (record not yet propagated to LE's resolvers). lego sleeps
+            # delayBeforeChecks before the propagation check runs, so this forces the
+            # Cloudflare TXT record time to propagate publicly before LE validates.
             resolvers:
               - "1.1.1.1:53"
               - "1.0.0.1:53"
             propagation:
               disableANSChecks: true
+              delayBeforeChecks: "120s"
           email: "fadi@safeqbit.com"
           storage: "/letsencrypt/acme.json"
           caServer: "https://acme-v02.api.letsencrypt.org/directory"
