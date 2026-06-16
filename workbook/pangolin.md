@@ -171,7 +171,23 @@ and `10.10.13.52` (Gerbil) from the **reserved** pool (`10.10.13.50–59`,
   - **Badger version** tracks Pangolin's installer, which builds with the
     *latest* badger tag (`make` does `jq '.[0].name'`). Bump `v1.4.1` in
     `08-traefik-config.yaml` when upgrading Pangolin.
-  - ACME state persisted on `pangolin-edge-acme` PVC (`07`), mounted `/letsencrypt`.
+  - ACME state persisted on the **shared RWX** `pangolin-acme` PVC (`07`,
+    nfs-truenas): edge mounts it RW at `/letsencrypt`, the **server** pod mounts it
+    RO at `/app/config/letsencrypt`. RWX is required because Pangolin's
+    `acmeCertSync` (server side) scrapes Traefik's `acme.json` to flip a resource's
+    cert status **pending → valid**; with the edge's old RWO PVC the server warned
+    `cannot stat config/letsencrypt/acme.json` every 5s and every resource cert was
+    stuck "pending" (resolved 2026-06-16). The server mount is injected via a Flux
+    **postRenderer** kustomize patch (`06`), NOT `pangolin.extraVolumes` — the
+    0.1.0-alpha.0 chart renders `extraVolumeMounts` with a broken
+    `- {{- toYaml . | nindent 12 }}` that emits invalid YAML and fails the upgrade.
+    Migrated the existing `acme.json` volume-to-volume (busybox pod mounting both
+    PVCs) so no certs re-issued. Old `pangolin-edge-acme` + a stale
+    `pangolin-traefik-acme` PVC are unreferenced orphans (kustomization `prune:
+    false`) — delete manually. NOTE: a resource only goes "valid" once the **edge
+    actually issues its cert**; the edge's HTTP provider must emit a router for the
+    resource's host (lazy ACME on first request) — `acmeCertSync` only reflects
+    what's already in `acme.json`.
   - **DNS-01 propagation check** (`08`, `dnsChallenge.propagation`) needs two
     non-default settings to issue from in-cluster pods (resolved 2026-06-16):
     `disableANSChecks: true` — lego's default check queries the zone's
