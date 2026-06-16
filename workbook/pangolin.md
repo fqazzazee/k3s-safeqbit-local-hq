@@ -52,7 +52,7 @@ Pangolin way (HTTP provider + file provider + Badger plugin). The chart runs in
 |---|---|---|---|
 | **Pangolin** (app/API/dashboard) | `fosrl/pangolin:ee-postgresql-1.19.2` | Helm chart | ClusterIP `pangolin` :3000/3001/3002/3003. EE + Postgres + 1.19. Generates Traefik routing at `/api/v1/traefik-config`. |
 | **Traefik** (edge proxy `pangolin-edge`) | `traefik:v3.6.15` | **hand-authored** (08–10) | **LoadBalancer `10.10.13.51`**; HTTP provider → `pangolin:3001` + file provider (dashboard routes) + **Badger** plugin (`v1.4.1`); **own ACME**, Cloudflare DNS-01, per-host certs. Does NOT use nginx-ingress/cert-manager. |
-| **Gerbil** (WireGuard) | `fosrl/gerbil:1.3.1` | Helm chart | **Shares LoadBalancer `10.10.13.51`** with the edge (MetalLB `allow-shared-ip: pangolin-front`), UDP 51820/21820 + TCP 3004; `NET_ADMIN`; PVC for WG key. See "Newt exit-node /ping" below for why it's co-located. |
+| **Gerbil** (WireGuard) | `fosrl/gerbil:1.3.1` | Helm chart | **LoadBalancer `10.10.13.52`** (own IP, `externalTrafficPolicy: Local`), UDP 51820/21820 + TCP 3004 + **TCP 80** (http-echo `/ping` sidecar, added via postRenderer); `NET_ADMIN`; PVC for WG key. See "Newt exit-node /ping" below. |
 | **Database** | CNPG `pangolin-cnpg` | hand-authored (02) | Longhorn 5Gi, `instances:1`; CNPG app secret `pangolin-cnpg-app` key `uri`. |
 
 Chart deployed via Flux **HelmRelease** against the official OCI chart
@@ -65,29 +65,39 @@ same app dir, adapted from `fosrl/pangolin@1.19.2 install/config/traefik/`.
 
 ### MetalLB IPs
 
-`10.10.13.50` = ingress-nginx (existing). Pangolin pins **`10.10.13.51`** from the
-**reserved** pool (`10.10.13.50–59`, `autoAssign:false`) via
-`metallb.io/loadBalancerIPs`. The edge Traefk **and** Gerbil now **share**
-`10.10.13.51` (MetalLB `allow-shared-ip: pangolin-front`, both
-`externalTrafficPolicy: Cluster`); ports don't overlap (TCP 80/443 vs UDP
-51820/21820 + TCP 3004). `10.10.13.52` is **free** (was Gerbil's old solo IP).
+`10.10.13.50` = ingress-nginx (existing). From the **reserved** pool
+(`10.10.13.50–59`, `autoAssign:false`) via `metallb.io/loadBalancerIPs`: the edge
+Traefik pins **`10.10.13.51`** and Gerbil pins **`10.10.13.52`**, each its OWN IP,
+both **`externalTrafficPolicy: Local`**.
 
-### Newt exit-node `/ping` (why Gerbil shares the edge IP)
+> **Why NOT a shared IP** (tried, reverted): stock Pangolin runs Traefik + Gerbil on
+> one endpoint, so co-locating them on `10.10.13.51` via `allow-shared-ip` is tempting.
+> But MetalLB **refuses to share an IP unless both services use `Cluster`** ("can't
+> change sharing key" → edge loses its IP under `Local`). And `Cluster` is fatal to
+> WireGuard: its SNAT rewrites the site's source to a pod IP (`10.42.x`) with a port
+> that **roams every ~minute**, so the WG endpoint flaps and Gerbil's hole-punch
+> (UDP 21820) can't learn the site's real address (`last hole punch is too old`). The
+> flapping tunnel kept the Newt site from staying online, so Pangolin never published
+> the RDP resource (404 + cert pending). Conclusion: separate IPs + `Local` is required
+> for a stable tunnel; the `/ping` problem is solved with a sidecar instead (below).
+
+### Newt exit-node `/ping` (why Gerbil has an http-echo sidecar)
 
 A Newt site connector, before bringing up WireGuard, runs an HTTP preflight
 `GET http://<base_endpoint>:80/ping` to confirm the exit node is reachable. That
-`/ping` is answered **only by the front-door Traefik** (Gerbil serves
-`/peer`,`/healthz`,… but **never `/ping`** — true even on the latest Gerbil). In
-stock single-host Pangolin, `base_endpoint` is the one host running both Traefik
-(80/443) and Gerbil (WireGuard), so the same IP serves `/ping` and the tunnel.
-Our original split (Gerbil on its own `10.10.13.52` with nothing on :80) made the
-preflight time out — Newt logged `Failed to ping exit node (http://10.10.13.52/ping)`
-and **never reached the handshake**, so Gerbil sat idle. Fix: co-locate Gerbil on
-the edge IP and set `base_endpoint: 10.10.13.51`, so `:80/ping` = real Traefik and
-`:51820/udp` = Gerbil on one endpoint. (Also note Newt's *post-handshake* check is
-an ICMP ping over the tunnel to Gerbil's `100.89.x` IP, allowed by Gerbil's wg0
-firewall — unrelated to the HTTP preflight.) Newt must run on a network that can
-**route to `10.10.13.0/24`** (base_endpoint is a private IP).
+`/ping` is answered **only by a front-door Traefik** (Gerbil serves
+`/peer`,`/healthz`,… but **never `/ping`** — true even on the latest Gerbil). Since
+Gerbil has its own IP (`base_endpoint: 10.10.13.52`) with nothing on :80, the
+preflight timed out — Newt logged `Failed to ping exit node (http://10.10.13.52/ping)`
+and **never reached the handshake**, so Gerbil sat idle. Fix: a tiny
+`hashicorp/http-echo` **sidecar** in the Gerbil pod (binds `:8080`, 200s every path)
+exposed as **port 80** on Gerbil's LB (postRenderer patches in `06`). Now
+`10.10.13.52:80/ping` → `OK` and `:51820/udp` → Gerbil's WireGuard, on Gerbil's own
+`Local` IP. (Newt's *post-handshake* check is a separate ICMP ping over the tunnel to
+Gerbil's `100.89.x` IP, allowed by Gerbil's wg0 firewall.) Newt must run on a network
+that can **route to `10.10.13.0/24`** (base_endpoint is a private IP). Browser RDP/VNC
+also requires **Newt ≥ 1.13.0** (the RDP/SSH gateway runs inside Newt;
+`authDaemonMode: native`).
 
 ---
 
@@ -105,8 +115,8 @@ firewall — unrelated to the HTTP preflight.) Newt must run on a network that c
      (e.g. `winbox.local.safeqbit.com`). One CNAME per resource — no wildcard
      (the cluster uses none). ⚠️ resource names share the `local.safeqbit.com`
      namespace with the nginx apps, so don't reuse an existing host name.
-   - Gerbil shares `10.10.13.51` (no own DNS record needed); Newt dials
-     `base_endpoint=10.10.13.51` directly.
+   - Gerbil uses its own IP `10.10.13.52` (no DNS record needed); Newt dials
+     `base_endpoint=10.10.13.52` directly.
 2. **First login:** browse to the dashboard, create the initial server admin.
 3. **EE license:** apply the free key at `/admin/license` (see top section).
    Verify browser RDP/VNC/SSH resource types appear.
