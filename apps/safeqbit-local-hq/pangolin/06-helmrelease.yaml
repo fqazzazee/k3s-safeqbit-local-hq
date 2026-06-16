@@ -69,6 +69,42 @@ spec:
                   name: acme
                   mountPath: /app/config/letsencrypt
                   readOnly: true
+          # Newt's preflight is an HTTP GET to base_endpoint:80/ping, which only a
+          # front Traefik answers — Gerbil never serves /ping. Since Gerbil has its
+          # own IP (not shared with the edge), add a tiny http-echo sidecar that 200s
+          # every path, and expose it as port 80 on the Gerbil LB. The sidecar binds
+          # :8080 (unprivileged) and the service maps 80 -> 8080.
+          - target:
+              kind: Deployment
+              name: pangolin-gerbil
+            patch: |
+              - op: add
+                path: /spec/template/spec/containers/-
+                value:
+                  name: ping
+                  image: hashicorp/http-echo:0.2.3
+                  args: ["-listen=:8080", "-text=OK"]
+                  ports:
+                    - name: ping
+                      containerPort: 8080
+                  resources:
+                    requests:
+                      cpu: 10m
+                      memory: 16Mi
+                    limits:
+                      cpu: 50m
+                      memory: 32Mi
+          - target:
+              kind: Service
+              name: pangolin-gerbil
+            patch: |
+              - op: add
+                path: /spec/ports/-
+                value:
+                  name: ping
+                  port: 80
+                  targetPort: 8080
+                  protocol: TCP
 
   values:
     deployment:
@@ -128,10 +164,9 @@ spec:
         gerbil:
           start_port: 51820
           clients_start_port: 21820
-          # Public endpoint Newt dials. Must be the SHARED IP that fronts both the
-          # edge Traefik (HTTP :80/ping preflight) and Gerbil (WireGuard :51820) —
-          # see the gerbil.service shared-ip note. 10.10.13.51 = edge LB IP.
-          base_endpoint: "10.10.13.51"
+          # Public endpoint Newt dials (its own Gerbil LB IP). :80/ping is answered by
+          # the http-echo sidecar; :51820/udp is Gerbil's WireGuard. See gerbil.service.
+          base_endpoint: "10.10.13.52"
         traefik:
           enabled: true
           http_entrypoint: web
@@ -165,23 +200,16 @@ spec:
       enabled: true
       service:
         type: LoadBalancer
-        # MUST be Cluster (not Local): MetalLB IP sharing with pangolin-edge does not
-        # work under Local ("can't change sharing key"). Trade-off: Cluster SNATs the
-        # WireGuard source (shows as 10.42.x, port roams ~1/min) so Gerbil's hole-punch
-        # (UDP 21820) can't learn the site's real address. WireGuard tolerates roaming
-        # so server-relayed browser RDP works; client P2P does not. See the
-        # pangolin-edge service comment for the separate-IP + /ping-sidecar alternative.
-        externalTrafficPolicy: Cluster
+        # Local preserves the WireGuard client source IP:port. Cluster's SNAT made the
+        # site endpoint roam (~1/min) and broke hole-punch (UDP 21820), which destabilized
+        # the Newt tunnel and stopped Pangolin from publishing resources. Gerbil has its
+        # OWN IP (10.10.13.52) — NOT shared with the edge — because MetalLB won't share an
+        # IP under Local. Newt's preflight (HTTP GET base_endpoint:80/ping) is answered by
+        # a tiny http-echo sidecar on :80 (added via postRenderer), since Gerbil itself
+        # never serves /ping. base_endpoint=10.10.13.52 below.
+        externalTrafficPolicy: Local
         annotations:
-          # Share the edge's LB IP (10.10.13.51): stock Pangolin serves Traefik
-          # (80/443) and Gerbil (WireGuard) on ONE endpoint. Newt's preflight is an
-          # HTTP GET to base_endpoint:80/ping, answered only by the edge Traefik, so
-          # base_endpoint must be the IP that also fronts Traefik. allow-shared-ip
-          # (same key + same externalTrafficPolicy as pangolin-edge) lets both
-          # services bind 10.10.13.51; ports don't overlap (TCP 80/443 vs UDP
-          # 51820/21820 + TCP 3004). Frees 10.10.13.52.
-          metallb.io/loadBalancerIPs: "10.10.13.51"
-          metallb.io/allow-shared-ip: "pangolin-front"
+          metallb.io/loadBalancerIPs: "10.10.13.52"
       persistence:
         # Persist Gerbil's WireGuard private key so peers don't re-handshake on
         # every restart.
