@@ -1,6 +1,15 @@
 # LoadBalancer for the Pangolin edge Traefik. Pinned to a reserved MetalLB IP
 # (10.10.13.51) via annotation; this is the address all pangolin.* / resource
-# CNAMEs point at. externalTrafficPolicy: Local preserves the client source IP.
+# CNAMEs point at.
+#
+# Shared IP with pangolin-gerbil: stock Pangolin runs Traefik (80/443) and Gerbil
+# (WireGuard) on ONE public endpoint, and Newt's preflight reachability check is an
+# HTTP GET to base_endpoint:80/ping — which only Traefik answers. We share 10.10.13.51
+# between this service (80/443 TCP) and gerbil (51820/21820 UDP, 3004 TCP) via
+# metallb.io/allow-shared-ip so base_endpoint=10.10.13.51 serves BOTH /ping and WG.
+# MetalLB requires shared-IP services to use the same externalTrafficPolicy, so this
+# is Cluster (was Local) to match gerbil's cross-subnet Cluster policy. Trade-off:
+# Traefik now sees the node IP, not the real client IP.
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,9 +20,10 @@ metadata:
     app.kubernetes.io/component: edge-traefik
   annotations:
     metallb.io/loadBalancerIPs: "10.10.13.51"
+    metallb.io/allow-shared-ip: "pangolin-front"
 spec:
   type: LoadBalancer
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   selector:
     app.kubernetes.io/name: pangolin
     app.kubernetes.io/component: edge-traefik
