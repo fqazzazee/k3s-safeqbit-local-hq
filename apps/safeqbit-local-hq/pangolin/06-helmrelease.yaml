@@ -165,16 +165,15 @@ spec:
       enabled: true
       service:
         type: LoadBalancer
-        # Cluster (not Local): Newt site connectors dial Gerbil from OTHER internal
-        # subnets routed to 10.10.13.0/24. With Local, only k3s-server-01 answers
-        # the LB IP and the source IP is preserved un-SNAT'd, so cross-subnet UDP
-        # (WireGuard 51820 / relay 21820) dies on asymmetric return paths — the
-        # handshake silently never completes and Newt logs "failed to ping exit
-        # node". Cluster SNATs to the Gerbil pod so the return path is symmetric;
-        # WireGuard authenticates by key and tracks endpoint roaming, so the SNAT
-        # is harmless. Trade-off: Gerbil sees the node IP, not the real client IP
-        # (revisit if hole-punching for NAT'd browser clients ever needs real IPs).
-        externalTrafficPolicy: Cluster
+        # Local (NOT Cluster): WireGuard needs a stable real source IP:port. Cluster's
+        # SNAT rewrote the site's source to a pod IP (10.42.x) with a port that changed
+        # every minute, so Gerbil saw the endpoint "roam" constantly and its hole-punch
+        # (UDP 21820) could never learn the site's real network address ("last hole
+        # punch is too old"). Local preserves the client source IP:port. It works here
+        # because the gerbil pod and the edge (shared IP) both run on k3s-server-01, so
+        # MetalLB announces 10.10.13.51 from that node and delivers traffic locally.
+        # (Must match pangolin-edge's policy — MetalLB shared-IP requires it.)
+        externalTrafficPolicy: Local
         annotations:
           # Share the edge's LB IP (10.10.13.51): stock Pangolin serves Traefik
           # (80/443) and Gerbil (WireGuard) on ONE endpoint. Newt's preflight is an

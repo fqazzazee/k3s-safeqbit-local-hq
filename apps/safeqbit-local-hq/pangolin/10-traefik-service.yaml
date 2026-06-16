@@ -8,8 +8,11 @@
 # between this service (80/443 TCP) and gerbil (51820/21820 UDP, 3004 TCP) via
 # metallb.io/allow-shared-ip so base_endpoint=10.10.13.51 serves BOTH /ping and WG.
 # MetalLB requires shared-IP services to use the same externalTrafficPolicy, so this
-# is Cluster (was Local) to match gerbil's cross-subnet Cluster policy. Trade-off:
-# Traefik now sees the node IP, not the real client IP.
+# is Local to match gerbil. Local is REQUIRED (not Cluster) for gerbil: Cluster's
+# SNAT randomizes WireGuard's source IP:port, so the site's endpoint roamed every
+# minute and Gerbil's hole-punch (UDP 21820) couldn't learn the site's real address.
+# Local preserves the client source IP:port. Works because both the edge and gerbil
+# pods sit on k3s-server-01, so MetalLB announces 10.10.13.51 from that one node.
 apiVersion: v1
 kind: Service
 metadata:
@@ -23,7 +26,7 @@ metadata:
     metallb.io/allow-shared-ip: "pangolin-front"
 spec:
   type: LoadBalancer
-  externalTrafficPolicy: Cluster
+  externalTrafficPolicy: Local
   selector:
     app.kubernetes.io/name: pangolin
     app.kubernetes.io/component: edge-traefik
