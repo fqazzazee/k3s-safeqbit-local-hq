@@ -73,6 +73,19 @@ spec:
         # Use our pre-sealed SERVER_SECRET so it never rotates on upgrade.
         existingSecretName: pangolin-server-secret
         existingSecretKey: SERVER_SECRET
+      # The edge Traefik (separate pod) writes acme.json to the shared RWX PVC.
+      # Mount it read-only at the default scrape path so Pangolin's acmeCertSync
+      # can read issued certs and flip per-resource cert status pending -> valid.
+      # Without this the server pod has no acme.json and every resource cert is
+      # stuck "pending" (see workbook/pangolin.md). RO: only the edge may write.
+      extraVolumes:
+        - name: acme
+          persistentVolumeClaim:
+            claimName: pangolin-acme
+      extraVolumeMounts:
+        - name: acme
+          mountPath: /app/config/letsencrypt
+          readOnly: true
       ingressRoute:
         dashboard:
           # IngressRoute is a controller-mode (Traefik CRD) feature. In standalone

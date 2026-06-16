@@ -13,7 +13,8 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate            # single ACME PVC (RWO) — avoid two pods mounting it
+    type: RollingUpdate       # ACME PVC is now RWX (shared with the server) — two
+                              # pods may mount it briefly, so rolling restarts are OK
   selector:
     matchLabels:
       app.kubernetes.io/name: pangolin
@@ -92,4 +93,4 @@ spec:
                 path: dynamic_config.yml
         - name: acme
           persistentVolumeClaim:
-            claimName: pangolin-edge-acme
+            claimName: pangolin-acme
