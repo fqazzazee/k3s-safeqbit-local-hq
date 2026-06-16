@@ -163,7 +163,16 @@ spec:
       enabled: true
       service:
         type: LoadBalancer
-        externalTrafficPolicy: Local
+        # Cluster (not Local): Newt site connectors dial Gerbil from OTHER internal
+        # subnets routed to 10.10.13.0/24. With Local, only k3s-server-01 answers
+        # the LB IP and the source IP is preserved un-SNAT'd, so cross-subnet UDP
+        # (WireGuard 51820 / relay 21820) dies on asymmetric return paths — the
+        # handshake silently never completes and Newt logs "failed to ping exit
+        # node". Cluster SNATs to the Gerbil pod so the return path is symmetric;
+        # WireGuard authenticates by key and tracks endpoint roaming, so the SNAT
+        # is harmless. Trade-off: Gerbil sees the node IP, not the real client IP
+        # (revisit if hole-punching for NAT'd browser clients ever needs real IPs).
+        externalTrafficPolicy: Cluster
         annotations:
           metallb.io/loadBalancerIPs: "10.10.13.52"
       persistence:
