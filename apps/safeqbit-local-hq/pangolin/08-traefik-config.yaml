@@ -40,13 +40,17 @@ data:
         acme:
           dnsChallenge:
             provider: cloudflare
-            # lego's default propagation check queries the zone's authoritative
-            # Cloudflare NS directly on :53, which times out from in-cluster pods
-            # here. Check via reachable recursive resolvers instead (1.1.1.1 works
-            # from the pod; cert-manager's own DNS-01 for this zone succeeds too).
+            # lego's propagation check queries the zone's *authoritative* Cloudflare
+            # NS directly on :53, which is unreachable from in-cluster pods here
+            # ("NS santino.ns.cloudflare.com:53 did not return the expected TXT").
+            # disableANSChecks skips that authoritative query and verifies via the
+            # recursive resolvers below (1.1.1.1 IS reachable from the pod). LE then
+            # validates from the public internet, where the record really exists.
             resolvers:
               - "1.1.1.1:53"
               - "1.0.0.1:53"
+            propagation:
+              disableANSChecks: true
           email: "fadi@safeqbit.com"
           storage: "/letsencrypt/acme.json"
           caServer: "https://acme-v02.api.letsencrypt.org/directory"
