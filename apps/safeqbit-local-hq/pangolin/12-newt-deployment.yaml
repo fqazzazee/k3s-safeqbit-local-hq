@@ -1,0 +1,57 @@
+# In-cluster Newt site connector. Tests/serves the RDP site from inside the
+# cluster: it reaches Gerbil (base_endpoint 10.10.13.52, WG 51820 + hole-punch
+# 21820) and the RDP target on the LAN via node routing. Newt uses userspace
+# WireGuard (netstack), so no NET_ADMIN / /dev/net/tun is required.
+#
+# Credentials come from the SealedSecret pangolin-newt (NEWT_ID / NEWT_SECRET).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pangolin-newt
+  namespace: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: newt
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pangolin
+      app.kubernetes.io/component: newt
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pangolin
+        app.kubernetes.io/component: newt
+    spec:
+      containers:
+        - name: newt
+          image: fosrl/newt:1.13.0
+          env:
+            - name: PANGOLIN_ENDPOINT
+              value: "https://pangolin.local.safeqbit.com"
+            - name: NEWT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-newt
+                  key: NEWT_ID
+            - name: NEWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-newt
+                  key: NEWT_SECRET
+          volumeMounts:
+            - name: config
+              mountPath: /root/.config
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: config
+          emptyDir: {}

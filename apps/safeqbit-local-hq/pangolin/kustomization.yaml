@@ -12,6 +12,8 @@ resources:
   - 08-traefik-config.yaml
   - 09-traefik-deployment.yaml
   - 10-traefik-service.yaml
+  - 11-sealed-secret-newt.yaml
+  - 12-newt-deployment.yaml
 
 commonLabels:
   cluster: safeqbit-local-hq
