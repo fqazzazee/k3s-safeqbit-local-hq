@@ -17,7 +17,11 @@ resources:
   - cloudflared
   - uptime-kuma
   - guacamole
-  - pangolin
+  # pangolin removed 2026-06-18 — moving to a standalone Linux VM (docker-compose).
+  # The k3s/MetalLB topology forced a non-stock split (separate edge/gerbil IPs,
+  # /ping sidecar, hairpin) and the in-cluster Newt connector can't carry data
+  # through the WG return path. See workbook/pangolin.md for the full history
+  # (incl. the Gerbil 1.4.2 hole-punch fix) before any VM redeploy.
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx
