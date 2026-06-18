@@ -52,7 +52,20 @@ Pangolin way (HTTP provider + file provider + Badger plugin). The chart runs in
 |---|---|---|---|
 | **Pangolin** (app/API/dashboard) | `fosrl/pangolin:ee-postgresql-1.19.2` | Helm chart | ClusterIP `pangolin` :3000/3001/3002/3003. EE + Postgres + 1.19. Generates Traefik routing at `/api/v1/traefik-config`. |
 | **Traefik** (edge proxy `pangolin-edge`) | `traefik:v3.6.15` | **hand-authored** (08–10) | **LoadBalancer `10.10.13.51`**; HTTP provider → `pangolin:3001` + file provider (dashboard routes) + **Badger** plugin (`v1.4.1`); **own ACME**, Cloudflare DNS-01, per-host certs. Does NOT use nginx-ingress/cert-manager. |
-| **Gerbil** (WireGuard) | `fosrl/gerbil:1.3.1` | Helm chart | **LoadBalancer `10.10.13.52`** (own IP, `externalTrafficPolicy: Local`), UDP 51820/21820 + TCP 3004 + **TCP 80** (http-echo `/ping` sidecar, added via postRenderer); `NET_ADMIN`; PVC for WG key. See "Newt exit-node /ping" below. |
+| **Gerbil** (WireGuard) | `fosrl/gerbil:1.4.2` (pinned via `images.gerbil.tag`) | Helm chart | **LoadBalancer `10.10.13.52`** (own IP, `externalTrafficPolicy: Local`), UDP 51820/21820 + TCP 3004 + **TCP 80** (http-echo `/ping` sidecar, added via postRenderer); `NET_ADMIN`; PVC for WG key. See "Newt exit-node /ping" and "Gerbil version" below. |
+
+> **Gerbil version MUST match Pangolin (`images.gerbil.tag: "1.4.2"`).** The chart
+> (appVersion 1.18.2) pins Gerbil **1.3.1**, but Pangolin's own build pairs each
+> release with the **latest** Gerbil — 1.19.2 ⇒ **1.4.2**. Gerbil 1.3.1 has a
+> hole-punch *registering* bug: the Newt connects but the server logs `Site last
+> hole punch is too old; skipping this register`, `Config version` stays `0`, the
+> Newt times out on `newt/wg/get-config`, and **no resource router is published**
+> (resources 404, cert stuck "pending"). Gerbil **1.4.2** changelog: *"Add cache
+> timeout of 2.5s to record hp; fixes registering issue when endpoint was the
+> same"* — exactly our case (all exit nodes share endpoint `10.10.13.52`). This
+> wasted a long debug chasing firewall/hairpin/MetalLB; the fix is the version pin.
+> Newt still logs `failed to read ICMP packet: i/o timeout` self-ping warnings
+> (newt issue #89) — noisy but non-fatal; it stays connected.
 | **Database** | CNPG `pangolin-cnpg` | hand-authored (02) | Longhorn 5Gi, `instances:1`; CNPG app secret `pangolin-cnpg-app` key `uri`. |
 
 Chart deployed via Flux **HelmRelease** against the official OCI chart
