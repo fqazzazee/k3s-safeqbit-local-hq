@@ -1,10 +1,12 @@
-# In-cluster Newt site connector, on hostNetwork so its source IP is the node's
-# LAN address (10.10.13.x) instead of a pod IP. This is REQUIRED here: a pod
-# reaching the cluster's own MetalLB LB IP (Gerbil 10.10.13.52) over UDP is the
-# hairpin case and the hole-punch (UDP 21820) never registers. On hostNetwork the
-# Newt behaves like a real host on the 10.10.13.0/24 segment, so the hole-punch
-# reaches Gerbil normally. Newt uses userspace WireGuard (netstack) — no NET_ADMIN.
-# (ns PSA is privileged, so hostNetwork is allowed.)
+# In-cluster Newt site connector (pod network). Newt uses userspace WireGuard
+# (netstack), so no NET_ADMIN is needed and its self-ping to the exit node is
+# handled in-process.
+#
+# NOTE: we briefly tried hostNetwork (to get a 10.10.13.x source IP) while chasing
+# a "hole punch never registers" failure — but the real cause was Gerbil 1.3.1's
+# hole-punch bug, fixed by pinning Gerbil 1.4.2 (see 06-helmrelease images.gerbil).
+# hostNetwork actually broke the netstack ICMP self-ping ("no route to host"), so
+# we reverted to pod networking now that the hole-punch works server-side.
 #
 # Credentials come from the SealedSecret pangolin-newt (NEWT_ID / NEWT_SECRET).
 apiVersion: apps/v1
@@ -29,8 +31,6 @@ spec:
         app.kubernetes.io/name: pangolin
         app.kubernetes.io/component: newt
     spec:
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet   # resolve pangolin.local.safeqbit.com via CoreDNS->upstream
       containers:
         - name: newt
           image: fosrl/newt:1.13.0
