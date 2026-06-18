@@ -1,7 +1,10 @@
-# In-cluster Newt site connector. Tests/serves the RDP site from inside the
-# cluster: it reaches Gerbil (base_endpoint 10.10.13.52, WG 51820 + hole-punch
-# 21820) and the RDP target on the LAN via node routing. Newt uses userspace
-# WireGuard (netstack), so no NET_ADMIN / /dev/net/tun is required.
+# In-cluster Newt site connector, on hostNetwork so its source IP is the node's
+# LAN address (10.10.13.x) instead of a pod IP. This is REQUIRED here: a pod
+# reaching the cluster's own MetalLB LB IP (Gerbil 10.10.13.52) over UDP is the
+# hairpin case and the hole-punch (UDP 21820) never registers. On hostNetwork the
+# Newt behaves like a real host on the 10.10.13.0/24 segment, so the hole-punch
+# reaches Gerbil normally. Newt uses userspace WireGuard (netstack) — no NET_ADMIN.
+# (ns PSA is privileged, so hostNetwork is allowed.)
 #
 # Credentials come from the SealedSecret pangolin-newt (NEWT_ID / NEWT_SECRET).
 apiVersion: apps/v1
@@ -26,6 +29,8 @@ spec:
         app.kubernetes.io/name: pangolin
         app.kubernetes.io/component: newt
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet   # resolve pangolin.local.safeqbit.com via CoreDNS->upstream
       containers:
         - name: newt
           image: fosrl/newt:1.13.0
