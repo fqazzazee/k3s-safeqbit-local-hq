@@ -132,6 +132,13 @@ spec:
       pangolin:
         repository: fosrl/pangolin
         tag: "ee-postgresql-1.19.2"
+      # The chart pins Gerbil 1.3.1, but Pangolin's own build pairs 1.19.2 with the
+      # LATEST Gerbil (1.4.2). 1.3.1's hole-punch never registers here — Gerbil 1.4.2
+      # "fixes registering issue when endpoint was the same" (all our exit nodes share
+      # endpoint 10.10.13.52), which is exactly the Newt "last hole punch too old" /
+      # Config version 0 / no-RDP-router failure. Pin Gerbil to match Pangolin.
+      gerbil:
+        tag: "1.4.2"
 
     # ---------------- Pangolin core ----------------
     pangolin:
