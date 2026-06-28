@@ -74,6 +74,12 @@ spec:
         # create PodMonitors without the release label and have no way to inject it.
         podMonitorSelectorNilUsesHelmValues: false
         retention: 30d
+        # Size cap so the TSDB self-trims and can never fill the volume again.
+        # 2026-06-28: disk hit 100% (no size cap) and wedged Prometheus -> Grafana
+        # showed no data. Keep this comfortably below the volume size to leave
+        # headroom for the WAL and compaction. Whichever of retention/retentionSize
+        # is reached first triggers block deletion.
+        retentionSize: 33GB
         resources:
           requests:
             cpu: 200m
@@ -83,11 +89,16 @@ spec:
         storageSpec:
           volumeClaimTemplate:
             spec:
+              # NOTE (2026-06-28): the LIVE PVC is on `longhorn`, not nfs-truenas.
+              # The existing PVC predates this git value and STS volumeClaimTemplates
+              # are immutable, so this storageClassName only applies to a fresh
+              # re-deploy. Live volume was expanded 30Gi -> 40Gi (manual PVC patch,
+              # the most the Longhorn disk's over-provisioning limit allowed).
               storageClassName: nfs-truenas
               accessModes: [ReadWriteOnce]
               resources:
                 requests:
-                  storage: 30Gi
+                  storage: 40Gi
     grafana:
       enabled: true
       persistence:
