@@ -18,10 +18,13 @@ A living document. Add entries as new patterns emerge.
 - [Graceful Node Shutdown (kubelet)](#graceful-node-shutdown-kubelet)
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
+- [Longhorn Capacity & Disk Expansion](#longhorn-capacity--disk-expansion)
 - [CoreDNS HA](#coredns-ha)
 - [Grafana](#grafana)
+- [Prometheus TSDB / Storage](#prometheus-tsdb--storage)
 - [Flux](#flux)
 - [CNPG](#cnpg)
+- [Velero](#velero)
 - [Sealed Secrets](#sealed-secrets)
 - [Monitoring & Alerting](#monitoring--alerting)
 - [General Pod Ops](#general-pod-ops)
@@ -426,6 +429,116 @@ After cleanup, Longhorn will auto-schedule the missing replica on the freed node
 
 ---
 
+## Longhorn Capacity & Disk Expansion
+
+Longhorn enforces **two independent limits** that fail differently. The orphan case
+above is the *physical* kind; this section is the *scheduling* kind, plus how to add
+real capacity and how to recover a stuck PVC expansion.
+
+- **Physical** — actual bytes on `/var/lib/longhorn` (the `sdb` disk). Alert: `LonghornNodeStorageLow` (`storage_usage / storage_capacity > 0.85`).
+- **Scheduling (over-provisioning)** — sum of *nominal* replica sizes vs the limit `(storageMaximum − storageReserved) × storageOverProvisioningPercentage/100`. With `storageOverProvisioningPercentage: 100` (kept strict in `controllers/longhorn.yaml`) the limit ≈ disk size. Alert: `LonghornNodeSchedulingCeiling`.
+
+### Symptom: ReplicaSchedulingFailure while the disk is NOT physically full
+
+`kubectl -n longhorn-system get volumes <vol> -o yaml` shows `Scheduled: False
+(ReplicaSchedulingFailure)`, but `df -h /var/lib/longhorn` has free space. New or
+expanded PVCs, **and every Velero data-mover backup** (their temp restore volumes
+can't place), fail. Hit 2026-06-28 after a Prometheus PVC expansion ate the last
+over-provisioning headroom (441 MiB/node).
+
+**Check scheduling headroom per node:**
+```bash
+kubectl get nodes.longhorn.io -n longhorn-system -o jsonpath='{range .items[*]}{.metadata.name}: scheduled={.status.diskStatus.*.storageScheduled} max={.status.diskStatus.*.storageMaximum} reserved={.status.diskStatus.*.storageReserved}{"\n"}{end}'
+# Headroom = (max - reserved) - scheduled  (at over-provisioning 100%)
+```
+
+**Relieve it (in order of preference):**
+1. **Reclaim** — delete unused PVCs / orphaned namespaces (frees `scheduled` bytes). Deleting a namespace cascades to its PVCs → Longhorn volumes. (2026-06-28: removed the orphaned `sra-dev-demo` namespace, +5 Gi/node.)
+2. **Grow the sdb disk** (below) — the durable fix.
+3. **Raise `storageOverProvisioningPercentage`** in `controllers/longhorn.yaml` — quick, but overcommits thin volumes; only safe when physical usage is low, and needs disk alerting. Kept at 100 here on purpose.
+
+### Growing the Longhorn disk (sdb)
+
+`/var/lib/longhorn` is a **bare XFS filesystem on `/dev/sdb` (no partition table)**.
+After enlarging the virtual disk in Proxmox, run **on each host** (one at a time):
+```bash
+# 1. Confirm the kernel sees the new size (usually auto-detected for sdb):
+lsblk /dev/sdb
+#    If it still shows the old size, rescan:
+echo 1 | sudo tee /sys/block/sdb/device/rescan
+
+# 2. Grow the XFS filesystem ONLINE. xfs_growfs takes the MOUNTPOINT, not the device.
+#    It is XFS, not ext4 — do NOT use resize2fs. No growpart needed (bare disk).
+sudo xfs_growfs /var/lib/longhorn
+
+# 3. Verify:
+df -h /var/lib/longhorn
+```
+Longhorn polls capacity and updates `storageMaximum` within ~1 min — no restart.
+Confirm cluster-side:
+```bash
+kubectl get nodes.longhorn.io -n longhorn-system -o jsonpath='{range .items[*]}{.metadata.name} max={.status.diskStatus.*.storageMaximum}{"\n"}{end}'
+```
+
+### Online PVC expansion (when you DO want a single volume bigger)
+
+`longhorn` StorageClass has `allowVolumeExpansion: true`. Patch the PVC:
+```bash
+kubectl patch pvc -n <ns> <pvc> --type merge -p '{"spec":{"resources":{"requests":{"storage":"<new>Gi"}}}}'
+```
+Longhorn online-expands the replicas, then the filesystem resizes on the node.
+If the admission webhook rejects it (`cannot schedule ... more bytes`), you are at
+the scheduling ceiling — see above. **Note:** a StatefulSet's `volumeClaimTemplate`
+is immutable, so the live PVC size can legitimately differ from the manifest
+(e.g. the Prometheus PVC is `longhorn` while `controllers/monitoring.yaml` still
+says `nfs-truenas`/30Gi — the manifest only applies on a fresh redeploy).
+
+### Stuck PVC expansion — stale iscsid PID / iSCSI frontend refresh
+
+**Symptom:** after patching a PVC larger, Longhorn expands the *replicas* but the
+volume stays at the old size with `expansionRequired: true` forever. The
+instance-manager on the volume's node logs (every few seconds):
+```
+fail to refresh iSCSI initiator ... nsenter: cannot open /host/proc/<PID>/ns/mnt: No such file or directory
+```
+**Root cause:** the node's `iscsid` restarted (e.g. during an OS upgrade) and
+Longhorn cached the dead PID, so the online frontend rescan never completes — and
+the volume won't detach to do an offline resize because the volume-expansion-
+controller keeps it attached. Hit 2026-06-28 on the Prometheus volume after Ubuntu
+node upgrades.
+
+**Diagnose:**
+```bash
+VOL=<pvc-...>   # Longhorn volume name (kubectl get pvc -n <ns> <pvc> -o jsonpath='{.spec.volumeName}')
+kubectl get volumes.longhorn.io -n longhorn-system $VOL -o jsonpath='expReq={.status.expansionRequired} state={.status.state}{"\n"}'
+IM=$(kubectl get pods -n longhorn-system -o wide | awk '/instance-manager/ && /<node>/{print $1; exit}')
+kubectl logs -n longhorn-system "$IM" --since=5m | grep -i "fail to refresh iSCSI"
+```
+
+**Fix — scoped to one volume, NO data loss (replicas already hold the new size):**
+```bash
+# 1. Quiesce the workload so the volume has no consumer. For operator-managed
+#    StatefulSets (Prometheus), scale the operator down too or it reconciles back.
+kubectl scale deploy -n monitoring monitoring-kube-prometheus-operator --replicas=0
+kubectl scale statefulset -n monitoring prometheus-monitoring-kube-prometheus-prometheus --replicas=0
+
+# 2. Delete the volume's Engine CR. Longhorn recreates the engine; the fresh engine
+#    binds to the LIVE iscsid and the pending (offline) expansion completes.
+kubectl delete engines.longhorn.io -n longhorn-system ${VOL}-e-0
+
+# 3. Wait for the expansion to finish:
+until [ "$(kubectl get volumes.longhorn.io -n longhorn-system $VOL -o jsonpath='{.status.expansionRequired}')" = "false" ]; do sleep 5; done
+
+# 4. Bring the workload back; the filesystem resizes online on reattach.
+kubectl scale statefulset -n monitoring prometheus-monitoring-kube-prometheus-prometheus --replicas=1
+kubectl scale deploy -n monitoring monitoring-kube-prometheus-operator --replicas=1
+```
+**Heavier node-wide alternative:** restarting the node's `instance-manager` pod
+re-discovers iscsid — but it bounces **every** engine on that node (brief I/O pause
+for all those volumes). Avoid unless many volumes on the node are affected.
+
+---
+
 ## CoreDNS HA
 
 k3s deploys CoreDNS as an **Addon** (CR `addons.k3s.cattle.io/coredns`), not as a HelmChart, so `HelmChartConfig` overrides don't apply. The source manifest lives at `/var/lib/rancher/k3s/server/manifests/coredns.yaml` on every control-plane node and the Addon controller watches that file's checksum - editing the file makes k3s re-apply the new content.
@@ -523,6 +636,47 @@ kubectl get helmrelease -n monitoring monitoring \
 
 ---
 
+## Prometheus TSDB / Storage
+
+### Symptom: Grafana dashboards render but show "No data"
+
+Panels load (Grafana itself is healthy) but every query is empty. The usual cause
+is the **Prometheus TSDB volume is 100% full** — at 100% Prometheus can neither
+append the WAL nor compact, so it stops ingesting and `up` returns nothing.
+Hit 2026-06-28.
+
+**Confirm:**
+```bash
+# Disk full?
+kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus -- df -h /prometheus
+# Smoking gun in the logs:
+kubectl logs -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus --tail=20 | grep -i "no space"
+#   ... write /prometheus/wal/...: no space left on device
+# Ingestion check — an empty result means it is NOT ingesting:
+kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus -- wget -qO- 'http://localhost:9090/api/v1/query?query=up'
+```
+
+**Root cause:** the spec had `retention: 30d` (time-based) but **no `retentionSize`**
+cap, so data outgrew the 30Gi volume before 30 days elapsed.
+
+**Permanent fix (in repo):** `controllers/monitoring.yaml` →
+`prometheusSpec.retentionSize: 33GB` (keep it comfortably below the volume size to
+leave room for the WAL + compaction). Whichever of `retention` / `retentionSize` is
+hit first triggers block deletion. Verify the live flags:
+```bash
+kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus -- cat /proc/1/cmdline | tr '\0' '\n' | grep retention
+# --storage.tsdb.retention.time=30d
+# --storage.tsdb.retention.size=33GB
+```
+
+**Recovery when already wedged at 100%:** Prometheus can't self-trim in this state.
+Free space first by **expanding the PVC** (see *Longhorn Capacity & Disk Expansion* —
+and beware the stale-iscsid expansion deadlock, which bit this exact volume), then
+the `retentionSize` cap keeps it bounded going forward. There is also a
+`LonghornNodeStorageLow` / PVC-fill alert, but the real guard here is the size cap.
+
+---
+
 ## Flux
 
 ### Force reconcile any HelmRelease immediately
@@ -614,6 +768,27 @@ kubectl get backup -n <namespace>
 kubectl get scheduledbackup -n <namespace>
 ```
 
+### Backup retention CronJob (prevents the 250-snapshot cap)
+
+CNPG's `ScheduledBackup` has no built-in retention, so `cnpg-backup-retention`
+(`configs/cnpg-backup-retention.yaml`, `cnpg-system`, 05:00 UTC daily) prunes old
+Backup CRs (cascade-deletes their VolumeSnapshots → Longhorn snapshots). Keeps:
+authentik 10, affine/netbox/monitoring 30.
+
+**Gotcha (2026-06-28):** it was `ImagePullBackOff` because `bitnami/kubectl:1.34`
+was removed from Docker Hub (Bitnami pulled all `docker.io/bitnami/*` tags, Aug 2025).
+While it was dead ~30d, Backup CRs piled up (authentik hit 176). Now pinned to
+`alpine/k8s:1.34.1` — it has kubectl **and a real `/bin/sh` + GNU coreutils**; the
+prune script needs `head -n -N` (negative count), which busybox/distroless kubectl
+images (`rancher/kubectl`, `registry.k8s.io/kubectl`) do **not** support.
+
+```bash
+# Health + manual run (e.g. after a long outage left a big backlog):
+kubectl get cronjob -n cnpg-system cnpg-backup-retention
+kubectl create job -n cnpg-system cnpg-retention-manual-$(date +%s) --from=cronjob/cnpg-backup-retention
+kubectl logs -n cnpg-system -l job-name=cnpg-retention-manual-<...> -f
+```
+
 ### Dump a CNPG database to stdout
 
 ```bash
@@ -624,6 +799,72 @@ kubectl exec -n <namespace> <cluster-name>-1 -- \
   sh -c "PGPASSWORD='${CNPG_PASS}' pg_dump -U <dbuser> -h <cluster-name>-rw <dbname>" \
   > dump.sql
 ```
+
+---
+
+## Velero
+
+Backups run as `Schedule` CRs in the `velero` namespace, store to Backblaze B2 (BSL
+`default`), and move PVC data with the **kopia data mover** (`snapshotMoveData: true`).
+Each namespace gets a `BackupRepository` named `<ns>-default-kopia`.
+
+### Symptom: backups PartiallyFailed / "repository not initialized"
+
+DataUploads fail with `error to connect to repository: repository not initialized
+in the provided storage`. The `BackupRepository` CR can be stuck `Ready` while the
+kopia repo in B2 is gone, so Velero never re-initializes it. The backup reports
+**PartiallyFailed** (volume data NOT captured). Critically, `velero_backup_last_status`
+reads **1 (success) even for PartiallyFailed**, which is why this hid for ~6 weeks on
+`monitoring-bimonthly` (2026-06-28) — see the `VeleroBackupPartiallyFailed` alert added
+since.
+
+**Diagnose:**
+```bash
+# The repo whose lastMaintenanceTime lags far behind the others is the broken one:
+kubectl get backuprepository.velero.io -n velero \
+  -o custom-columns=NAME:.metadata.name,NS:.spec.volumeNamespace,PHASE:.status.phase,LASTMAINT:.status.lastMaintenanceTime
+# Per-PVC failure detail for a backup:
+kubectl get datauploads.velero.io -n velero -l velero.io/backup-name=<backup> \
+  -o jsonpath='{range .items[*]}{.spec.sourcePVC} -> {.status.phase}: {.status.message}{"\n"}{end}'
+```
+
+**Fix — force re-initialization (deletes NO backup data in B2):**
+```bash
+kubectl delete backuprepository.velero.io -n velero <ns>-default-kopia
+# Velero recreates + initializes it on the next backup that needs it.
+```
+
+**Validate cheaply** without moving a large PVC — back up one small PVC via a label
+selector:
+```bash
+cat <<'EOF' | kubectl apply -f -
+apiVersion: velero.io/v1
+kind: Backup
+metadata: {name: <ns>-repo-check, namespace: velero}
+spec:
+  ttl: 24h0m0s
+  storageLocation: default
+  includedNamespaces: [<ns>]
+  labelSelector: {matchLabels: {app.kubernetes.io/name: <small-app>}}   # e.g. alertmanager (1Gi)
+  snapshotMoveData: true
+  defaultVolumesToFsBackup: false
+EOF
+# Expect: DataUpload -> Completed, backup -> Completed, repo phase Ready w/ fresh lastMaintenanceTime.
+```
+**Gotcha:** a data-mover backup creates a **temp restore volume sized to the source
+PVC**. If Longhorn is at the scheduling ceiling, that temp volume fails with
+`ReplicaSchedulingFailure` and the backup hangs in `WaitingForPluginOperations`. See
+*Longhorn Capacity & Disk Expansion*.
+
+### Orphaned schedules
+
+`infrastructure-configs` has `prune: false`, so deleting a `velero-schedule-*.yaml`
+from git does **not** remove the live `Schedule`. After merge, delete it by hand:
+```bash
+kubectl delete schedule -n velero <name>   # e.g. pangolin-bimonthly, after the app was removed
+```
+(Metrics from removed schedules linger in Prometheus until the velero pod restarts —
+cosmetic.)
 
 ---
 
@@ -689,9 +930,9 @@ The cluster is monitored by kube-prometheus-stack in the `monitoring` namespace.
 
 `configs/monitoring-alert-rules.yaml` (PrometheusRule `safeqbit-storage-and-backup`) covers gaps in the upstream chart:
 
-- **Longhorn**: `LonghornVolumeDegraded`, `LonghornVolumeFaulted`, `LonghornVolumeSnapshotCountHigh` (>200, prevent hitting the 250 cap), `LonghornNodeStorageLow` (>85%)
+- **Longhorn**: `LonghornVolumeDegraded`, `LonghornVolumeFaulted`, `LonghornVolumeSnapshotCountHigh` (>200, prevent hitting the 250 cap), `LonghornNodeStorageLow` (physical >85%), `LonghornNodeSchedulingCeiling` (scheduled/(capacity−reservation) >85% — the *scheduling* dimension `LonghornNodeStorageLow` misses; added 2026-06-28)
 - **CNPG**: `CNPGReplicationLagHigh` (>5m lag), `CNPGExporterDown`
-- **Velero**: `VeleroBackupFailed` (last status = 0), `VeleroBackupFailureRateHigh` (>2 in 24h)
+- **Velero**: `VeleroBackupFailed` (last status = 0 — full failures only), `VeleroBackupFailureRateHigh` (>2 in 24h), `VeleroBackupPartiallyFailed` (partial-failure counter over 16d, self-healing — catches the silent "data not captured" case `last_status` misses; added 2026-06-28)
 
 ### Suppressed false-positives
 
@@ -733,8 +974,10 @@ kubectl -n photoprism scale deploy photoprism --replicas=1
 | Alert | First thing to check |
 |---|---|
 | `LonghornVolumeDegraded` | `kubectl -n longhorn-system get volumes <vol> -o yaml` - which replica is missing? Often resolves on its own after node recovery. |
-| `LonghornVolumeSnapshotCountHigh` | `kubectl get backups.postgresql.cnpg.io -A` - old CNPG Backup CRs likely accumulating. Verify `cnpg-backup-retention` CronJob is running daily. |
+| `LonghornVolumeSnapshotCountHigh` | `kubectl get backups.postgresql.cnpg.io -A` - old CNPG Backup CRs likely accumulating. Verify `cnpg-backup-retention` CronJob is running daily (see *CNPG → Backup retention CronJob*). |
+| `LonghornNodeSchedulingCeiling` | Over-provisioning limit nearly reached. See *Longhorn Capacity & Disk Expansion* — reclaim volumes or grow the sdb disk; blocks new volumes + Velero data-mover temp volumes. |
 | `VeleroBackupFailed` | `velero backup describe <name> --details`; check `kubectl -n velero get backuprepository <ns>-<id>` for kopia maintenance errors. |
+| `VeleroBackupPartiallyFailed` | A backup ran but didn't capture volume data, and hasn't fully succeeded since. See *Velero → repository not initialized*; often the kopia repo or the Longhorn scheduling ceiling. |
 | `CNPGReplicationLagHigh` | `kubectl -n <ns> exec -ti <primary> -- psql -c "SELECT * FROM pg_stat_replication;"` |
 
 ---
