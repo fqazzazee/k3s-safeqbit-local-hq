@@ -239,6 +239,8 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 
 > Closed gaps (kept for context):
 > - ~~No alerts on backup failures.~~ Closed 2026-05-29: P2.5 added `VeleroBackupFailed`, `VeleroBackupFailureRateHigh`, `LonghornVolumeSnapshotCountHigh`, plus CNPG replication/exporter alerts. See [maintenance.md](maintenance.md#monitoring--alerting).
+> - ~~Partial backup failures were invisible.~~ Closed 2026-06-28: `velero_backup_last_status` reads 1 even for PartiallyFailed, so `VeleroBackupFailed` missed `monitoring-bimonthly` being broken ~6 weeks. Added `VeleroBackupPartiallyFailed` (self-healing). See [maintenance.md](maintenance.md#velero).
+> - ~~No alert on the Longhorn over-provisioning ceiling.~~ Closed 2026-06-28: `LonghornNodeStorageLow` only watches physical usage; the *scheduling* ceiling silently broke all data-mover backups. Added `LonghornNodeSchedulingCeiling`. See [maintenance.md](maintenance.md#longhorn-capacity--disk-expansion).
 
 ---
 
@@ -249,3 +251,4 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | 2026-05-27 | CNPG ScheduledBackup cron bug fixed (5-field → 6-field). Velero kopia maintenance bumped from 1h → 168h. Manually pruned 119 stale authentik Backup CRs to dodge 250-snapshot cap. |
 | 2026-05-28 | P2.1 + P2.2 - full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
 | 2026-05-29 | P2.5 - alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |
+| 2026-06-28 | Incident response. (1) `cnpg-backup-retention` was `ImagePullBackOff` ~30d (`bitnami/kubectl:1.34` removed from Docker Hub) → repinned to `alpine/k8s:1.34.1`; ran a manual prune (authentik 176→10). (2) `monitoring-default-kopia` was uninitialized → monitoring DataUploads PartiallyFailed ~6 weeks; fixed by deleting the stale `BackupRepository` CR to force re-init. (3) Longhorn scheduling ceiling (over-provisioning 100%) blocked all data-mover temp volumes after a Prometheus PVC expansion; reclaimed orphaned `sra-dev-demo` ns, then grew each node's sdb 150→250 GiB (`xfs_growfs`). (4) Added `LonghornNodeSchedulingCeiling` + self-healing `VeleroBackupPartiallyFailed` alerts; removed orphan `pangolin-bimonthly`. Full runbooks in [maintenance.md](maintenance.md). |
