@@ -71,7 +71,12 @@ spec:
           restartPolicy: Never
           containers:
             - name: prune
-              image: bitnami/kubectl:1.34
+              # Was bitnami/kubectl:1.34 — Docker Hub removed the docker.io/bitnami/*
+              # tags (Bitnami deprecation, Aug 2025) so it ImagePullBackOff'd.
+              # alpine/k8s ships kubectl + a real /bin/sh + GNU coreutils (the
+              # prune script below relies on `head -n -N`, which busybox/distroless
+              # images like rancher/kubectl and registry.k8s.io/kubectl lack).
+              image: alpine/k8s:1.34.1
               command: ["/bin/sh", "-c"]
               args:
                 - |
