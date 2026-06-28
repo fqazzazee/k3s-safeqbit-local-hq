@@ -138,13 +138,25 @@ spec:
           # PartiallyFailed backup, so VeleroBackupFailed (== 0) never catches
           # them. monitoring-bimonthly's kopia repo was broken for ~6 weeks this
           # way (every DataUpload failed -> PartiallyFailed -> volume data NOT
-          # backed up, but no alert). The partial-failure counter does
-          # increment; watch a window longer than the slowest cadence
+          # backed up, but no alert). The partial-failure counter increments on
+          # each bad run; watch a window longer than the slowest cadence
           # (bimonthly ~15d) so a single bad run is caught before the next one.
-          expr: increase(velero_backup_partial_failure_total{schedule!=""}[16d]) > 0
+          #
+          # SELF-HEALING: `unless on(schedule) (a full success within 16d)`.
+          # A bare counter would keep firing for the full 16d even after the
+          # schedule recovered (counters don't decrement). Suppressing once
+          # velero_backup_last_successful_timestamp is fresh makes the alert
+          # clear automatically on the schedule's next successful run, while a
+          # never-succeeded schedule (timestamp absent, e.g. monitoring after
+          # the outage) keeps firing until it does. Deleted-schedule metrics
+          # linger ~16d then age out (cleared sooner by a velero pod restart).
+          expr: |
+            (increase(velero_backup_partial_failure_total{schedule!=""}[16d]) > 0)
+            unless on(schedule)
+            ((time() - velero_backup_last_successful_timestamp) < 16 * 86400)
           for: 1h
           labels:
             severity: warning
           annotations:
-            summary: "Velero schedule {{ $labels.schedule }} partially failed"
-            description: "Schedule {{ $labels.schedule }} had a PartiallyFailed backup in the last 16d — volume data was likely NOT captured even though the backup didn't fully fail. Check its DataUploads and BackupRepository in namespace velero."
+            summary: "Velero schedule {{ $labels.schedule }} partially failed (no full success since)"
+            description: "Schedule {{ $labels.schedule }} had a PartiallyFailed backup in the last 16d and has not had a fully successful backup since — volume data was likely NOT captured. Check its DataUploads and BackupRepository in namespace velero. Clears automatically once a backup fully succeeds."
