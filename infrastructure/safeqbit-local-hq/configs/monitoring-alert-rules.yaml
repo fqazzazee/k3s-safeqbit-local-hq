@@ -12,10 +12,17 @@
 #   state (one of healthy/degraded/faulted/unknown — only one is 1 at a time)
 # - longhorn_snapshot_actual_size_bytes — count() per volume gives snapshot count
 # - longhorn_node_storage_usage_bytes / longhorn_node_storage_capacity_bytes
+#   — PHYSICAL disk used / total (not scheduling)
+# - longhorn_node_storage_scheduled_bytes / ..._reservation_bytes — SCHEDULING
+#   dimension: sum of replica sizes / reserved. Limit (at over-provisioning
+#   100%) = capacity - reservation. Verified live 2026-06-28.
 # - cnpg_pg_replication_lag — seconds, per-pod
 # - cnpg_collector_up — 1 if exporter scraping postgres OK
-# - velero_backup_last_status{schedule=...} — 1 success, 0 failed (per schedule)
-# - velero_backup_failure_total{schedule=...} — monotonic counter
+# - velero_backup_last_status{schedule=...} — 1 success, 0 failed. NOTE: reads
+#   1 for PartiallyFailed too, so it does NOT catch partial failures.
+# - velero_backup_failure_total{schedule=...} — counter (full failures)
+# - velero_backup_partial_failure_total{schedule=...} — counter, increments on
+#   PartiallyFailed (catches the silent data-not-backed-up case)
 
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -64,7 +71,25 @@ spec:
             severity: warning
           annotations:
             summary: "Longhorn node {{ $labels.node }} >85% full"
-            description: "Node {{ $labels.node }} Longhorn storage at {{ $value | humanizePercentage }}. Approaching the schedulable threshold — new replicas may fail to place."
+            description: "Node {{ $labels.node }} Longhorn storage at {{ $value | humanizePercentage }} (physical). Approaching disk capacity — physical space is running out."
+
+        - alert: LonghornNodeSchedulingCeiling
+          # 2026-06-28 incident: physical usage was only ~63% (so the alert
+          # above never fired), but *scheduled* capacity (sum of replica sizes)
+          # hit the over-provisioning limit -> ReplicaSchedulingFailure, which
+          # silently broke EVERY Velero data-mover backup (their temp restore
+          # volumes couldn't place) and blocked PVC expansion. This watches the
+          # scheduling dimension the physical alert misses.
+          # With storageOverProvisioningPercentage=100 the schedulable limit is
+          # (capacity - reservation). If that setting is raised above 100,
+          # multiply the denominator by (percentage / 100).
+          expr: longhorn_node_storage_scheduled_bytes / (longhorn_node_storage_capacity_bytes - longhorn_node_storage_reservation_bytes) > 0.85
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Longhorn node {{ $labels.node }} scheduling near over-provisioning limit"
+            description: "Node {{ $labels.node }} has {{ $value | humanizePercentage }} of its schedulable capacity reserved by volume replicas. Near 100%, new/expanded volumes and Velero data-mover temp volumes fail to schedule. Grow the sdb disk or reclaim volumes."
 
     - name: cnpg
       interval: 1m
@@ -107,3 +132,19 @@ spec:
           annotations:
             summary: "Velero schedule {{ $labels.schedule }} has >2 failures in 24h"
             description: "Schedule {{ $labels.schedule }} has accumulated {{ $value }} backup failures in the last 24h. Likely a persistent issue (BSL unreachable, B2 caps hit, or kopia maintain failing)."
+
+        - alert: VeleroBackupPartiallyFailed
+          # velero_backup_last_status reports 1 (success) even for a
+          # PartiallyFailed backup, so VeleroBackupFailed (== 0) never catches
+          # them. monitoring-bimonthly's kopia repo was broken for ~6 weeks this
+          # way (every DataUpload failed -> PartiallyFailed -> volume data NOT
+          # backed up, but no alert). The partial-failure counter does
+          # increment; watch a window longer than the slowest cadence
+          # (bimonthly ~15d) so a single bad run is caught before the next one.
+          expr: increase(velero_backup_partial_failure_total{schedule!=""}[16d]) > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Velero schedule {{ $labels.schedule }} partially failed"
+            description: "Schedule {{ $labels.schedule }} had a PartiallyFailed backup in the last 16d — volume data was likely NOT captured even though the backup didn't fully fail. Check its DataUploads and BackupRepository in namespace velero."
