@@ -1,0 +1,11 @@
+# 01-namespace.yaml
+# Namespace for Pulse (rcourtman/Pulse) — single-pane-of-glass monitoring for
+# the k3s cluster, the standalone Docker host, and the Proxmox hosts.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/managed-by: flux
+    cluster: safeqbit-local-hq

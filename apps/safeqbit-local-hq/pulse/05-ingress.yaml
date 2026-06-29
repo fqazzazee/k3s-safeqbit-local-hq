@@ -1,0 +1,37 @@
+# 05-ingress.yaml
+# Ingress for Pulse at https://pulse.local.safeqbit.com
+# cert-manager auto-issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+#
+# Pulse streams live metrics to the dashboard over a long-lived WebSocket
+# connection. nginx upgrades the connection automatically, but the default 60s
+# proxy timeouts would tear the socket down and make the UI reconnect
+# constantly — the extended read/send timeouts keep it stable.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pulse
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - pulse.local.safeqbit.com
+      secretName: pulse-tls
+  rules:
+    - host: pulse.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pulse
+                port:
+                  number: 7655

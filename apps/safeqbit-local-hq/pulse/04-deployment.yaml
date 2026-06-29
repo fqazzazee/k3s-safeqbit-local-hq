@@ -1,0 +1,110 @@
+# 04-deployment.yaml
+# Pulse server Deployment + ClusterIP Service.
+#
+# Single replica, no external database — Pulse stores its config, the *encrypted*
+# target credentials, discovered nodes, and history in a local /data directory
+# on the pulse-data PVC. Pulse is an active poller and is not designed to run
+# active-active: two replicas would double-poll every target and race on the
+# same data dir (and the RWO Longhorn volume can't multi-attach anyway). So we
+# run exactly one replica. Node-failure resilience comes from Longhorn (the
+# volume is replicated across all 3 nodes) + auto-reschedule: if the node
+# holding this pod dies, Kubernetes restarts it on a surviving node and Longhorn
+# re-attaches the replicated data, resuming monitoring within a few minutes with
+# zero data loss. This is the same pattern as uptime-kuma.
+#
+# Image is pinned to a specific tag (not :latest or :5) so a pod restart can't
+# silently roll us onto a new minor. Bump deliberately after reading the
+# upstream release notes: https://github.com/rcourtman/Pulse/releases
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulse
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # Recreate: terminate old pod before starting new. The data PVC is an RWO
+  # Longhorn volume — RollingUpdate would deadlock on Multi-Attach (the new
+  # pod can't acquire the volume while the old one still holds it).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pulse
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pulse
+        app.kubernetes.io/component: server
+    spec:
+      containers:
+        - name: pulse
+          image: rcourtman/pulse:v5.1.35
+          ports:
+            - containerPort: 7655
+              name: http
+          env:
+            # Built-in web-UI auth. Plaintext password is auto-hashed by Pulse
+            # on startup; enforced from first boot so the ingress is never open.
+            - name: PULSE_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-auth
+                  key: PULSE_AUTH_USER
+            - name: PULSE_AUTH_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-auth
+                  key: PULSE_AUTH_PASS
+            - name: FRONTEND_PORT
+              value: "7655"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 7655
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 7655
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pulse-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulse
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 7655
+      targetPort: 7655
+      protocol: TCP

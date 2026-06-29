@@ -1,0 +1,32 @@
+# 02-pvc.yaml
+# pulse-data (2Gi RWO) → /data
+#
+# This single volume holds EVERYTHING that defines this monitoring stack:
+# Pulse's config, the *encrypted* target credentials (Proxmox API tokens, Docker
+# agent tokens, k3s access), discovered nodes, alert config, and history. There
+# is no declarative source for that config — targets are added in the web UI
+# after deploy and live only here. Treat this PVC as the source of truth and
+# make sure the Velero schedule
+# (infrastructure/.../velero-schedule-pulse.yaml) keeps backing it up.
+#
+# Longhorn RWO — single-writer, replicated across 3 nodes. If the node holding
+# the pod dies, Longhorn re-attaches the replicated volume on a surviving node
+# and the rescheduled pod resumes with zero data loss.
+#
+# Expandable: kubectl patch pvc pulse-data -n pulse \
+#   -p '{"spec":{"resources":{"requests":{"storage":"4Gi"}}}}'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pulse-data
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi

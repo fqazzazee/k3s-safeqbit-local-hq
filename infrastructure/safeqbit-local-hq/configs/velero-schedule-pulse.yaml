@@ -1,0 +1,39 @@
+# velero-schedule-pulse.yaml
+# Weekly Velero backup of the pulse namespace to B2.
+#
+# Covers: pulse-data PVC (Pulse's config, the *encrypted* target credentials —
+# Proxmox API tokens, Docker agent tokens, k3s access — discovered nodes, alert
+# config, and history), plus the PVC definition, Deployment, Service, Ingress,
+# and the pulse-auth SealedSecret.
+#
+# There is no external database for Pulse and no declarative source for its
+# target config — targets are added in the web UI after deploy and this PVC
+# snapshot is the only backup of that configuration. If the volume is lost
+# without this, every Proxmox / Docker / k3s target has to be re-added by hand.
+#
+# Schedule: Sundays 05:00 UTC (slots after the uptime-kuma 04:00 weekly job to
+# spread snapshot load).
+# Retention: 180 days (~26 weekly restore points at steady state).
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: pulse-weekly
+  namespace: velero
+spec:
+  schedule: "0 5 * * 0"
+
+  template:
+    ttl: "4320h0m0s"   # 180 days
+    includedNamespaces:
+      - pulse
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+
+  paused: false
