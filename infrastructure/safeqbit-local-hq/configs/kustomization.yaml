@@ -32,3 +32,4 @@ resources:
   - cnpg-backup-retention.yaml
   - monitoring-servicemonitors.yaml
   - monitoring-alert-rules.yaml
+  - flannel-offload-fix.yaml
