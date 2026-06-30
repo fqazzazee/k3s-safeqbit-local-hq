@@ -33,11 +33,21 @@ in a few minutes, zero data loss. This was the explicit trade-off when deploying
 
 ---
 
-## The k3s agent (DaemonSet)
+## The k3s agent (single-replica Deployment)
 
-To make the cluster appear in Pulse, the **unified agent** runs as a **DaemonSet**
-(`06-agent-rbac.yaml`, `07-agent-sealed-secret.yaml`, `08-agent-daemonset.yaml`) —
-one pod per node, automatically including any node added later.
+To make the cluster appear in Pulse, the **unified agent** runs as a
+**single-replica Deployment** (`06-agent-rbac.yaml`, `07-agent-sealed-secret.yaml`,
+`08-agent-deployment.yaml`).
+
+> **Why one replica, not a DaemonSet (hard-won):** it was *first* shipped as a
+> DaemonSet (one pod per node) per the upstream example, and it **flapped** the
+> agent online/offline on the dashboard. The Kubernetes module reads the *whole
+> cluster* from the in-cluster API, so all 3 pods reported the identical view
+> under the same `PULSE_AGENT_ID` and the server's single agent record raced
+> between them. A DaemonSet is only correct when each node contributes its *own
+> host metrics* (which we have off) — one reporter already sees everything.
+> Fixed in PR `ops/pulse-agent-single-reporter`. `strategy: Recreate` so a
+> rollout never briefly runs two reporters and re-triggers the flap.
 
 - **Scope: Kubernetes-only.** `--enable-kubernetes`, `PULSE_ENABLE_HOST=false`.
   Reports node / pod / deployment health via the in-cluster API. Runs
@@ -52,10 +62,10 @@ one pod per node, automatically including any node added later.
   `watch` on nodes, pods, deployments) + binding. Monitoring read path only.
 - **Token:** sealed `PULSE_TOKEN` (`pulse-agent-token`), generated in the Pulse UI
   with scope **`kubernetes:report`**.
-- **`PULSE_AGENT_ID=safeqbit-local-hq` (critical):** all DaemonSet pods share the
-  one token and this **shared ID**, so the cluster registers as **one logical
-  agent**, not three. Without it each pod invents its own ID and the server
-  rejects them with *"API token is already in use by agent …"*.
+- **`PULSE_AGENT_ID=safeqbit-local-hq`:** stable identity for the cluster's single
+  reporter. (Also the lever that matters if this is ever scaled out: multiple
+  pods sharing one ID is exactly what caused the dashboard flap — see the box
+  above — so keep it to one reporter for the Kubernetes module.)
 
 ---
 
@@ -64,7 +74,7 @@ one pod per node, automatically including any node added later.
 | Target | Agent? | How |
 |---|---|---|
 | **Proxmox hosts** | No (agentless) | Add each PVE host in the UI with a Proxmox **API token**. Optional: install the host agent on a PVE node for temps/SMART. |
-| **k3s cluster** | Yes — DaemonSet | One manifest set, one agent pod per node (above). |
+| **k3s cluster** | Yes — single Deployment | One agent reads the whole cluster via the in-cluster API (above). *Not* a DaemonSet — that flaps the dashboard. |
 | **Docker host** (standalone) | Yes — one agent | Install the unified agent on that box (docker mode); it auto-detects Docker. Generate a token with the docker/host report scope in the UI. |
 
 ---
@@ -78,8 +88,8 @@ straight to `main`; the agent went via PR (`ops/pulse-k3s-agent`, PR #9).
 # Watch Flux pick it up
 kubectl -n pulse get pods,pvc,ingress
 kubectl -n pulse get certificate pulse-tls          # DNS-01 via Cloudflare — wait READY=True
-kubectl -n pulse get ds pulse-agent                 # 3/3 desired/ready
-kubectl -n pulse logs -l app.kubernetes.io/component=agent --tail=20
+kubectl -n pulse get deploy pulse-agent             # 1/1 ready (single reporter)
+kubectl -n pulse logs deploy/pulse-agent --tail=20
 ```
 
 ## First-run / configuration (UI)
@@ -98,15 +108,19 @@ Velero backup. Nothing about targets is in Git.
 
 ## Troubleshooting
 
+- **Agent flaps online/offline on the dashboard** — more than one pod is
+  reporting the same cluster under one `PULSE_AGENT_ID`. The Kubernetes agent is a
+  **single-replica Deployment** for exactly this reason; don't scale it up or
+  convert it back to a DaemonSet. (Original root cause of the post-deploy flap.)
 - **Agent: `API token is already in use by agent "mac-…"`** — `PULSE_AGENT_ID` is
-  missing/blank on the DaemonSet. It must be set to a shared value
-  (`safeqbit-local-hq`) so all pods report as one agent.
+  missing/blank. With the single Deployment it's set to `safeqbit-local-hq`; if
+  you ever fan out, every reporter must share that one ID.
 - **Agent log: `Failed to fetch remote config … 403 Forbidden`** — harmless. The
   agent tries to pull an upstream remote config; it falls back to local defaults.
   Not a connection problem with the Pulse server.
-- **Agent not showing in UI** — check `kubectl -n pulse logs -l
-  app.kubernetes.io/component=agent` for a `PULSE_URL`/token error; confirm the
-  pods can reach `pulse.pulse.svc.cluster.local:7655`.
+- **Agent not showing in UI** — check `kubectl -n pulse logs deploy/pulse-agent`
+  for a `PULSE_URL`/token error; confirm the pod can reach
+  `pulse.pulse.svc.cluster.local:7655`.
 - **Cert `pulse-tls` stuck `READY=False`** — DNS-01 challenge in progress
   (`delayBeforeChecks`); usually issues in 2–5 min. `kubectl -n pulse get
   challenge`.
