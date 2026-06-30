@@ -1,0 +1,96 @@
+# 08-agent-deployment.yaml
+# Pulse unified agent, Kubernetes mode — a single-replica Deployment.
+#
+# Why ONE replica (not a DaemonSet): the Kubernetes module reads the *entire*
+# cluster from the in-cluster API, so one pod already sees every node/pod/
+# deployment. A DaemonSet ran one pod per node, and all of them reported the
+# same cluster view under the same identity (PULSE_AGENT_ID) — the server kept a
+# single agent record and the 3 reporters raced/overwrote each other, flapping
+# the agent online/offline on the dashboard. One reporter fixes that with no
+# loss of data (host metrics are off — see below). A DaemonSet is only the right
+# shape when each node contributes its *own* host metrics.
+#
+# Recreate strategy: no PVC here, but it guarantees the old pod is gone before
+# the new one starts on a rollout, so there's never a brief window with two
+# reporters re-triggering the flap.
+#
+# Node-failure resilient like the server: if the pod's node dies, the Deployment
+# reschedules it on a survivor; the cluster view it reports is global anyway.
+#
+# Scope unchanged: Kubernetes-only, non-privileged, read-only root FS, no host
+# mounts. To add per-node host metrics later, that's a *separate* DaemonSet with
+# privileged mode + /proc,/sys,/ mounts + a host-agent:report token.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulse-agent
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pulse
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pulse
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: pulse-agent
+      containers:
+        - name: pulse-agent
+          image: rcourtman/pulse:v5.1.35
+          command: ["/opt/pulse/bin/pulse-agent-linux-amd64"]
+          args:
+            - --enable-kubernetes
+          env:
+            - name: PULSE_URL
+              value: "http://pulse.pulse.svc.cluster.local:7655"
+            - name: PULSE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-agent-token
+                  key: PULSE_TOKEN
+            # Stable identity for this cluster's single reporter.
+            - name: PULSE_AGENT_ID
+              value: "safeqbit-local-hq"
+            - name: PULSE_ENABLE_HOST
+              value: "false"
+            - name: PULSE_KUBE_INCLUDE_ALL_PODS
+              value: "true"
+            - name: PULSE_KUBE_INCLUDE_ALL_DEPLOYMENTS
+              value: "true"
+          ports:
+            # Agent's own health/metrics server (logs: "Health/metrics server
+            # listening addr :9191").
+            - containerPort: 9191
+              name: health
+          readinessProbe:
+            tcpSocket:
+              port: 9191
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 9191
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

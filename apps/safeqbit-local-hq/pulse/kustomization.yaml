@@ -9,7 +9,7 @@ resources:
   - 05-ingress.yaml
   - 06-agent-rbac.yaml
   - 07-agent-sealed-secret.yaml
-  - 08-agent-daemonset.yaml
+  - 08-agent-deployment.yaml
 
 labels:
   - includeSelectors: false
