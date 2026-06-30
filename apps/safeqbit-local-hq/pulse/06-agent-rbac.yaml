@@ -1,0 +1,47 @@
+# 06-agent-rbac.yaml
+# RBAC for the Pulse k3s agent (DaemonSet, 08-agent-daemonset.yaml).
+#
+# The agent reads cluster state through the in-cluster Kubernetes API, so it
+# needs a ServiceAccount with READ-ONLY (get/list/watch) access to the
+# resources Pulse surfaces: nodes, pods, and deployments. No write/exec/secret
+# access — this is a monitoring read path only. ClusterRole (not Role) because
+# nodes are cluster-scoped and we watch pods/deployments across all namespaces.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pulse-agent
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pulse-agent-read
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: agent
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pulse-agent-read
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: agent
+subjects:
+  - kind: ServiceAccount
+    name: pulse-agent
+    namespace: pulse
+roleRef:
+  kind: ClusterRole
+  name: pulse-agent-read
+  apiGroup: rbac.authorization.k8s.io

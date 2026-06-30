@@ -7,6 +7,9 @@ resources:
   - 03-sealed-secret.yaml
   - 04-deployment.yaml
   - 05-ingress.yaml
+  - 06-agent-rbac.yaml
+  - 07-agent-sealed-secret.yaml
+  - 08-agent-daemonset.yaml
 
 labels:
   - includeSelectors: false
