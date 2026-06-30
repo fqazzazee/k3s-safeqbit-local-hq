@@ -17,6 +17,7 @@
 ![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-5CDD8B?style=for-the-badge&logo=uptimekuma&logoColor=black)
 ![AFFiNE](https://img.shields.io/badge/AFFiNE-1E1E1E?style=for-the-badge&logo=affine&logoColor=white)
 ![Passzilla](https://img.shields.io/badge/Passzilla-3D6EB4?style=for-the-badge&logoColor=white)
+![Pulse](https://img.shields.io/badge/Pulse-00B4D8?style=for-the-badge&logoColor=white)
 
 > A small private cloud running in my home - three computers working together to host
 > my passwords, photos, notes, and a handful of other apps I'd rather not rent from a
@@ -426,6 +427,7 @@ learn.
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
 | [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine |
+| [Pulse](https://github.com/rcourtman/Pulse) | Single-pane-of-glass monitoring for the Proxmox hosts, this k3s cluster, and the Docker host |
 
 ### Platform components (the plumbing)
 
