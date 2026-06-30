@@ -343,19 +343,6 @@ kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" \
 
 ## Flannel VXLAN Checksum Offload (Post-Reboot)
 
-> **Now self-healed in-cluster (2026-06-30):** a GitOps DaemonSet
-> `flannel-offload-fix` (kube-system, manifest
-> `infrastructure/.../configs/flannel-offload-fix.yaml`) runs on every node and
-> re-applies `ethtool -K flannel.1 tx-checksum-ip-generic off` within 60s of
-> `flannel.1` being (re)created — surviving reboots and covering new nodes. It
-> complements the out-of-band `flannel-fix-offload.service` (which did **not**
-> survive a reboot, recurring as the Pulse-agent dashboard flap — DNS replies
-> from the lone CoreDNS pod to off-node clients were being dropped). The manual
-> steps below remain valid for ad-hoc diagnosis. NOTE: CoreDNS still runs as a
-> **single replica** (k3s-managed addon from
-> `/var/lib/rancher/k3s/server/manifests/coredns.yaml`); making it HA is a
-> node-level/k3s change, not a Flux one — recommended follow-up.
-
 **Symptom seen on 2026-05-27 after rebooting k3s-server-02:**
 - Pods on the rebooted node can ping pod IPs across nodes via ICMP (≈0.3 ms), but every TCP/UDP connection to a ClusterIP or remote pod IP times out.
 - DNS from any pod on the affected node fails (`dig @10.43.0.10` times out).
