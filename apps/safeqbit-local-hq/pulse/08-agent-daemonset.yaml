@@ -1,0 +1,78 @@
+# 08-agent-daemonset.yaml
+# Pulse unified agent, Kubernetes mode, as a DaemonSet — one pod per node.
+#
+# Why a DaemonSet: this is the upstream-recommended way to monitor a k8s cluster
+# (the Helm chart's "agent" is the deprecated Docker-only one). One manifest →
+# one agent pod on every node, and any node added later gets one automatically.
+#
+# Why they don't collide: all pods share the one API token (07-agent-sealed-
+# secret.yaml) AND a single PULSE_AGENT_ID, so Pulse treats the whole cluster as
+# one logical agent. Without the shared PULSE_AGENT_ID each pod would invent its
+# own ID and the server would reject them with "token already in use".
+#
+# Scope: Kubernetes-only (node/pod/deployment health via the in-cluster API).
+# PULSE_ENABLE_HOST=false → no privileged mode, no host mounts, read-only root
+# FS. In-guest host metrics are intentionally left off: these nodes are Proxmox
+# VMs (no real temps/SMART) and host CPU/mem/disk is already covered by the
+# Prometheus/Grafana stack. To add host metrics later, flip PULSE_ENABLE_HOST
+# and add the /proc,/sys,/ hostPath mounts + privileged securityContext (see
+# upstream docs/KUBERNETES.md), and reissue the token with host-agent:report.
+#
+# Image pinned to match the server (v5.1.35); the agent is the pulse-agent
+# binary inside the same image. amd64 — all nodes are x86_64.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pulse-agent
+  namespace: pulse
+  labels:
+    app.kubernetes.io/name: pulse
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pulse
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pulse
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: pulse-agent
+      containers:
+        - name: pulse-agent
+          image: rcourtman/pulse:v5.1.35
+          command: ["/opt/pulse/bin/pulse-agent-linux-amd64"]
+          args:
+            - --enable-kubernetes
+          env:
+            - name: PULSE_URL
+              value: "http://pulse.pulse.svc.cluster.local:7655"
+            - name: PULSE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pulse-agent-token
+                  key: PULSE_TOKEN
+            # Shared identity so all DaemonSet pods report as one cluster agent.
+            - name: PULSE_AGENT_ID
+              value: "safeqbit-local-hq"
+            - name: PULSE_ENABLE_HOST
+              value: "false"
+            - name: PULSE_KUBE_INCLUDE_ALL_PODS
+              value: "true"
+            - name: PULSE_KUBE_INCLUDE_ALL_DEPLOYMENTS
+              value: "true"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      # Run on every node, including the control-plane/etcd servers (all 3 nodes
+      # in this cluster are control-plane). Tolerate any taint a node may carry.
+      tolerations:
+        - operator: Exists
