@@ -10,7 +10,7 @@
 #
 # Schedule: 9th and 24th 03:00 UTC. Spread across the month with other
 # bi-monthly workloads.
-# Retention: 180 days
+# Retention: 60 days (tuned down from 180d, 2026-07-03)
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -21,7 +21,7 @@ spec:
   schedule: "0 3 9,24 * *"
 
   template:
-    ttl: "4320h0m0s"   # 180 days
+    ttl: "1440h0m0s"   # 60 days
     includedNamespaces:
       - monitoring
     excludedResources:

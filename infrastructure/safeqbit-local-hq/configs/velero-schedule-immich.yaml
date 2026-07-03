@@ -1,0 +1,47 @@
+# velero-schedule-immich.yaml
+# Bi-monthly Velero backup of the immich namespace to B2.
+#
+# Added 2026-07-03: immich had NO backup at all — its postgres is a plain
+# Deployment (custom image, not CNPG), so no Layer-2 snapshots exist either.
+# The database (albums, people/faces, photo metadata; ~470MB actual) was
+# protected by nothing but Longhorn replication.
+#
+# Covers: immich-postgres-data (10Gi Longhorn, ~470MB used), immich-config
+# (1Gi, ~20K), k8s objects. The PVC snapshot of a running postgres is
+# crash-consistent — WAL recovery on restore, fine for this workload.
+# Skipped: photo library + import/export (static NFS PVs — TrueNAS's job,
+# volume policy), immich-model-cache (velero.io/exclude-from-backup label:
+# re-downloadable ML models).
+#
+# Schedule: 1st and 16th 03:30 UTC — free days in the bi-monthly stagger;
+# 30min offset avoids colliding with affine-weekly when the 1st is a Sunday.
+# Retention: 60 days
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: immich-bimonthly
+  namespace: velero
+spec:
+  schedule: "30 3 1,16 * *"
+
+  template:
+    ttl: "1440h0m0s"   # 60 days
+    includedNamespaces:
+      - immich
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false

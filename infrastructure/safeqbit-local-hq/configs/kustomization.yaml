@@ -28,6 +28,7 @@ resources:
   - velero-schedule-uptime-kuma.yaml
   - velero-schedule-guacamole.yaml
   - velero-schedule-pulse.yaml
+  - velero-schedule-immich.yaml
   - pdbs.yaml
   - coredns-autoscaler.yaml
   - alertmanager-slack.yaml

@@ -10,7 +10,7 @@
 # directly claims it.
 #
 # Schedule: Sundays 03:00 UTC (1h after CNPG snapshot at 02:00)
-# Retention: 180 days (~26 weekly restore points at steady state)
+# Retention: 60 days (tuned down from 180d, 2026-07-03) (~26 weekly restore points at steady state)
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -21,7 +21,7 @@ spec:
   schedule: "0 3 * * 0"
 
   template:
-    ttl: "4320h0m0s"   # 180 days
+    ttl: "1440h0m0s"   # 60 days
     includedNamespaces:
       - affine
     excludedResources:

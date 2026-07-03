@@ -39,3 +39,14 @@ data:
           capacity: "20Gi,"
         action:
           type: skip
+      # CNPG replica PVCs: primary and replica are near-identical, so
+      # uploading both doubles every DB backup for nothing (netbox alone:
+      # 2x639MB per weekly run). The operator keeps instanceRole labels
+      # current across switchovers, so whichever instance is replica at
+      # backup time is skipped; a restore brings back the primary and CNPG
+      # rebuilds the replica from it.
+      - conditions:
+          pvcLabels:
+            cnpg.io/instanceRole: replica
+        action:
+          type: skip

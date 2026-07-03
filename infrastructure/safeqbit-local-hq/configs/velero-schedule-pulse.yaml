@@ -13,7 +13,7 @@
 #
 # Schedule: Sundays 05:00 UTC (slots after the uptime-kuma 04:00 weekly job to
 # spread snapshot load).
-# Retention: 180 days (~26 weekly restore points at steady state).
+# Retention: 60 days (tuned down from 180d, 2026-07-03) (~26 weekly restore points at steady state).
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
@@ -23,7 +23,7 @@ spec:
   schedule: "0 5 * * 0"
 
   template:
-    ttl: "4320h0m0s"   # 180 days
+    ttl: "1440h0m0s"   # 60 days
     includedNamespaces:
       - pulse
     excludedResources:

@@ -8,7 +8,7 @@
 #
 # Schedule: Wednesdays 03:00 UTC (mid-week timing keeps it off the bi-monthly
 # day-stagger so at most one workload runs to B2 per day)
-# Retention: 180 days
+# Retention: 60 days (tuned down from 180d, 2026-07-03)
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -19,7 +19,7 @@ spec:
   schedule: "0 3 * * 3"
 
   template:
-    ttl: "4320h0m0s"   # 180 days
+    ttl: "1440h0m0s"   # 60 days
     includedNamespaces:
       - netbox
     excludedResources:
