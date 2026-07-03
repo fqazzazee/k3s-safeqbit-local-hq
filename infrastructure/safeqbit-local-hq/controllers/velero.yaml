@@ -46,6 +46,13 @@ spec:
         - name: default
           provider: aws
           bucket: k3s-safeqbit-local-hq-velero
+          # Both default to ~1m, which is ~3,000 B2 Class C (list) calls/day —
+          # alone exceeding the 2,500/day free-tier cap and triggering the
+          # daily 75%/100% cap emails (and hard blocks at 100% pre-2026-05).
+          # Hourly is ~50/day. At a daily-at-most backup cadence, a 1h delay
+          # on syncing bucket state / validating connectivity costs nothing.
+          backupSyncPeriod: 1h
+          validationFrequency: 1h
           config:
             region: us-east-005      # e.g. us-east-005
             s3ForcePathStyle: "true"
