@@ -131,22 +131,32 @@ data:
     def ts(s):
         return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
-    def fmt(dt):
-        return dt.strftime("%m-%d %H:%M") if dt else "never"
+    def to_et(dt):
+        """UTC -> US Eastern. Hand-rolled DST rule (2nd Sun Mar 02:00 ET ->
+        1st Sun Nov 02:00 ET) because python:alpine ships no tzdata."""
+        def nth_sunday(month, n):
+            first = datetime(dt.year, month, 1, tzinfo=timezone.utc)
+            return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+        dst_start = nth_sunday(3, 2).replace(hour=7)   # 02:00 EST == 07:00 UTC
+        dst_end = nth_sunday(11, 1).replace(hour=6)    # 02:00 EDT == 06:00 UTC
+        return dt - timedelta(hours=4 if dst_start <= dt < dst_end else 5)
 
-    HEADS = ["SCHEDULE", "LAST", "STATUS", "NEXT (UTC)", "#", "RETAIN"]
+    def fmt(dt):
+        return to_et(dt).strftime("%m-%d %H:%M") if dt else "never"
+
+    HEADS = ["SCHEDULE", "LAST", "STATUS", "NEXT (ET)", "#", "RETAIN"]
 
     def table(rows):
-        """Box-drawing table; renders as a bordered grid in Slack code blocks."""
+        """ASCII-bordered table. ASCII only: Slack's fonts don't render
+        box-drawing chars at monospace width, which shears the grid."""
         w = [max(len(HEADS[i]), *(len(r[i]) for r in rows)) for i in range(len(HEADS))]
-        def rule(l, m, r):
-            return l + m.join("─" * (w[i] + 2) for i in range(len(w))) + r
+        rule = "+" + "+".join("-" * (w[i] + 2) for i in range(len(w))) + "+"
         def row(cells):
             padded = [(c.rjust(w[i]) if i == 4 else c.ljust(w[i]))
                       for i, c in enumerate(cells)]
-            return "│ " + " │ ".join(padded) + " │"
-        return "\n".join([rule("┌", "┬", "┐"), row(HEADS), rule("├", "┼", "┤"),
-                          *[row(r) for r in rows], rule("└", "┴", "┘")])
+            return "| " + " | ".join(padded) + " |"
+        return "\n".join([rule, row(HEADS), rule,
+                          *[row(r) for r in rows], rule])
 
     warnings = []
 
@@ -178,14 +188,14 @@ data:
                 (not last_t or last_t < prev - timedelta(minutes=5)):
             warnings.append(
                 f":warning: `{name}` MISSED its {fmt(prev)} run "
-                f"(last actual: {fmt(last_t)}). Next try: {fmt(nxt)} UTC.")
+                f"(last actual: {fmt(last_t)}). Next try: {fmt(nxt)} ET.")
         ok = [b for b in mine if b["status"].get("phase") == "Completed"]
         if phase in ("PARTIAL", "FAIL", "BADCFG"):
             since = fmt(ts(ok[-1]["status"]["startTimestamp"])) if ok else "never"
             warnings.append(
                 f":warning: `{name}` last run {phase}; last full success: "
                 f"{since}. Effect: k8s objects/volumes restore only from that "
-                f"point. Next try: {fmt(nxt)} UTC.")
+                f"point. Next try: {fmt(nxt)} ET.")
         vrows.append([name, fmt(last_t), phase, fmt(nxt),
                       str(len(mine)), f"{ttl_h // 24}d"])
 
@@ -208,18 +218,18 @@ data:
         created = ts(s["metadata"]["creationTimestamp"])
         if phase == "FAIL":
             warnings.append(f":warning: CNPG `{cluster}` last backup FAILED. "
-                            f"Next try: {fmt(nxt)} UTC.")
+                            f"Next try: {fmt(nxt)} ET.")
         if prev and prev > created and NOW > prev + timedelta(hours=2) and \
                 (not last_t or last_t < prev - timedelta(minutes=5)):
             warnings.append(f":warning: CNPG `{cluster}` MISSED its "
-                            f"{fmt(prev)} run. Next try: {fmt(nxt)} UTC.")
+                            f"{fmt(prev)} run. Next try: {fmt(nxt)} ET.")
         crows.append([cluster, fmt(last_t), phase, fmt(nxt), str(len(mine)),
                       f"keep {keep}" if keep else "-"])
 
-    msg = (f":floppy_disk: *Backup summary — {NOW.strftime('%Y-%m-%d %H:%M')} UTC*\n"
+    msg = (f":floppy_disk: *Backup summary — {to_et(NOW).strftime('%Y-%m-%d %H:%M')} ET*\n"
            f"*Velero → B2* (namespace objects + Longhorn volumes; NFS = TrueNAS)\n"
            f"```\n{table(vrows)}\n```\n"
-           f"*CNPG snapshots* (postgres, local Longhorn; pruned daily 05:00 UTC)\n"
+           f"*CNPG snapshots* (postgres, local Longhorn; pruned daily ~01:00 ET)\n"
            f"```\n{table(crows)}\n```\n")
     msg += ("\n".join(warnings) if warnings
             else ":white_check_mark: All schedules on time, nothing missed.")
