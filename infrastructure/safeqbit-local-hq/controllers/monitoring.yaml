@@ -67,7 +67,21 @@ spec:
     kubeControllerManager:
       enabled: false
     prometheus:
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+        hosts:
+          - prometheus.local.safeqbit.com
+        tls:
+          - secretName: prometheus-tls
+            hosts:
+              - prometheus.local.safeqbit.com
       prometheusSpec:
+        # Reachable URL for alert generatorURL/"Source" links (Slack, Alertmanager
+        # UI). Without it links point at the in-cluster pod URL.
+        externalUrl: https://prometheus.local.safeqbit.com
         # Disable the chart's default podMonitorSelector (matchLabels: release: monitoring).
         # With this false, Prometheus gets no selector and matches ALL PodMonitors
         # in any namespace. Required for third-party operators like CNPG that
@@ -163,7 +177,21 @@ spec:
           memory: 1Gi
     alertmanager:
       enabled: true
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+        hosts:
+          - alertmanager.local.safeqbit.com
+        tls:
+          - secretName: alertmanager-tls
+            hosts:
+              - alertmanager.local.safeqbit.com
       alertmanagerSpec:
+        # Reachable URL for notification links ({{ .ExternalURL }} in Slack
+        # messages). Without it links point at the in-cluster service URL.
+        externalUrl: https://alertmanager.local.safeqbit.com
         # Modest storage — alert history only, not metrics. 1Gi is plenty.
         storage:
           volumeClaimTemplate:
