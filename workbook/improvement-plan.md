@@ -60,49 +60,22 @@ For Helm-managed (authentik, monitoring-grafana): set via chart values. For plai
 
 ### ☑ P0.2 Scale CoreDNS to 3 replicas with hard host-spread
 
-**Closed:** 2026-05-28 - CoreDNS in k3s is managed by an `Addon` CR (not a HelmChart) sourced from `/var/lib/rancher/k3s/server/manifests/coredns.yaml`. Approach: (1) live-patched the Deployment (`replicas: 3` + pod-anti-affinity on hostname), confirming 3 pods running on 3 separate nodes; (2) edited the source manifest file on all 3 control-plane nodes to inject `replicas: 3`. The file already had `topologySpreadConstraints` on `kubernetes.io/hostname` with `whenUnsatisfiable: DoNotSchedule`, so spread is enforced even without my anti-affinity. Now persistent across k3s restarts on any single node. **Caveat:** k3s upgrades may regenerate this file from the embedded template - re-check after each k3s version bump. See workbook section "CoreDNS HA". 
+**Closed (for real): 2026-07-03.** The 2026-05-28 closure did not stick: the
+coredns Deployment is owned by the k3s `Addon` controller whose applied state
+includes `replicas: 1`, so the node reboots of late June silently reverted the
+live-patch AND the node-local manifest edits. Final fix (PR #27): a Flux-managed
+**cluster-proportional-autoscaler** (`configs/coredns-autoscaler.yaml`,
+registry.k8s.io v1.10.3) targeting `deployment/coredns` — linear mode
+`nodesPerReplica: 1, min: 2, max: 3` → 3 replicas, re-enforced every ~10s, so
+any future k3s re-apply self-heals in seconds. Hard host-spread needed no work:
+the bundled template already carries hostname `topologySpreadConstraints`
+(DoNotSchedule) + required podAntiAffinity, so replicas land one per node.
+This also finally satisfied the coredns PDB (`minAvailable: 2`, from P1.1) and
+cleared the standing `KubePdbNotEnoughHealthyPods` alert.
 
-> **Future improvement (P3?):** Long-term, replace this file-edit pattern with `--disable=coredns` on the k3s server flag + a Flux-managed CoreDNS HelmRelease. Cleaner GitOps, no node-local files.
-
----
-
-### ☐ P0.2 Scale CoreDNS to 3 replicas with hard host-spread
-
-**Why:** Today CoreDNS has 1 replica on `k3s-server-01`. When that node reboots (we just did one), every pod cluster-wide loses DNS until the pod restarts on another node. Today's incident only spared us because the rebooted node was `server-02`, not the one CoreDNS lived on. Next time it could be the other way.
-
-**Current state:**
-```
-kube-system/coredns deployment: replicas=1, affinity={}, all pods on k3s-server-01
-```
-
-**Fix:**
-1. The k3s embedded CoreDNS is deployed via the auto-deploying manifest at `/var/lib/rancher/k3s/server/manifests/coredns.yaml`. To change replica count cluster-wide and survive k3s upgrades, use k3s's HelmChartConfig:
-   - Create `infrastructure/safeqbit-local-hq/controllers/coredns-config.yaml`:
-     ```yaml
-     apiVersion: helm.cattle.io/v1
-     kind: HelmChartConfig
-     metadata:
-       name: rke2-coredns          # k3s uses this chart name in 1.30+
-       namespace: kube-system
-     spec:
-       valuesContent: |-
-         replicaCount: 3
-         affinity:
-           podAntiAffinity:
-             requiredDuringSchedulingIgnoredDuringExecution:
-             - labelSelector:
-                 matchExpressions:
-                 - key: k8s-app
-                   operator: In
-                 - values: [kube-dns]
-               topologyKey: kubernetes.io/hostname
-     ```
-   - **Note:** verify chart name with `kubectl -n kube-system get helmcharts` - may be `coredns` or `rke2-coredns` depending on k3s version
-2. Or simpler interim fix: `kubectl -n kube-system scale deploy coredns --replicas=3` (will revert on next k3s restart that re-applies the manifest)
-
-**Verification:** `kubectl -n kube-system get pods -l k8s-app=kube-dns -o wide` shows 3 pods on 3 different nodes. From any app pod: `nslookup kubernetes.default` still works after killing each CoreDNS pod individually.
-
-**Effort:** ~45 min. **Depends on:** none.
+> Lesson recorded: never "fix" a k3s-Addon-owned object by patching it or
+> editing `/var/lib/rancher/k3s/server/manifests/` — both revert. Use a
+> controller that continuously enforces, or `--disable` the addon and own it.
 
 ---
 
@@ -112,31 +85,10 @@ kube-system/coredns deployment: replicas=1, affinity={}, all pods on k3s-server-
 
 ---
 
-### ☐ P0.3 Fix passzilla session secret + pin image version
-
-**Why:**
-1. `passzilla/passzilla-config` ConfigMap has no `SECRET_KEY_BASE` - pwpush's startup log says `"SECRET_KEY_BASE not set; generating a random key for this boot. Users will need to login again after container restart."` Every restart invalidates all active sessions. Combined with frequent restarts (98 today before the probe-timeout fix), this is user-hostile.
-2. Image is `pglombardo/pwpush:latest` - an upstream push can break passzilla silently during a Flux reconcile or pod restart.
-
-**Fix:**
-1. Generate a `SECRET_KEY_BASE`:
-   ```bash
-   docker run --rm pglombardo/pwpush bundle exec rails secret
-   ```
-2. Add a SealedSecret `passzilla/passzilla-secret` with key `SECRET_KEY_BASE`
-3. Update `apps/safeqbit-local-hq/passzilla/03-deployment.yaml` to mount it via `envFrom`:
-   ```yaml
-   envFrom:
-     - configMapRef:
-         name: passzilla-config
-     - secretRef:
-         name: passzilla-secret      # new
-   ```
-4. Replace `image: pglombardo/pwpush:latest` with a specific tag (check Docker Hub for current stable - e.g. `pglombardo/pwpush:v2.7.0`)
-
-**Verification:** Pod restarts no longer log the SECRET_KEY_BASE warning; sessions persist across pod restart.
-
-**Effort:** ~30 min. **Depends on:** none.
+> **Follow-up 2026-07-03 (PR #17):** passzilla was OOMKilled every ~15 min for
+> 22 days (1,671 restarts) — pwpush 2.7.0 (Rails 8 web + worker under foreman)
+> idles at ~480Mi and the 512Mi limit left no headroom. Limit raised to 1Gi,
+> request 128Mi→512Mi. Verified stable (>1h, 0 restarts, ~668Mi steady).
 
 ---
 
@@ -182,59 +134,9 @@ Make this consistent with how the maintenance workbook documents node shutdown -
 
 ---
 
-### ☐ P1.1 PodDisruptionBudgets for critical control-plane / dataplane pods
-
-**Why:** During a node drain (for upgrades, hardware maintenance), kubelet kills pods on the draining node. Without a PDB, all replicas of a service on that node die simultaneously. CNPG primaries and Longhorn instance-managers already have auto-generated PDBs (good). But CoreDNS, longhorn-manager, sealed-secrets-controller, and most app deployments don't.
-
-**Current state:**
-- 13 PDBs exist, all auto-created by CNPG/Longhorn/cloudflared
-- Missing for: CoreDNS, longhorn-manager (DaemonSet, but still), sealed-secrets-controller, ingress-nginx (DaemonSet - has redundancy by virtue of running on every node), all app Deployments
-
-**Fix:** Add `PodDisruptionBudget` resources alongside each Deployment. For singletons (`replicas: 1`), use `minAvailable: 0` or skip (PDB on a singleton means the node can't be drained at all). For multi-replica services use `minAvailable: 1` or `maxUnavailable: 1`.
-
-Concrete additions (only where multi-replica):
-- `kube-system/coredns` (after P0.2): `minAvailable: 2` out of 3
-- `cert-manager/cert-manager` (already 2 replicas): `minAvailable: 1`
-- `cert-manager/cert-manager-webhook` (already 2 replicas): `minAvailable: 1`
-- `cert-manager/cert-manager-cainjector` (already 2 replicas): `minAvailable: 1`
-- `nfs-provisioner` (already 2 replicas): `minAvailable: 1`
-
-**Verification:** `kubectl get pdb -A` shows new PDBs; `kubectl drain k3s-server-01 --ignore-daemonsets --dry-run=client` would now succeed without violating any PDB.
-
-**Effort:** ~45 min. **Depends on:** P0.2 (coredns PDB needs >1 replica first).
-
----
-
 ### ☑ P1.3 Bump single-instance CNPG clusters to `instances: 2`
 
 **Closed:** 2026-05-28 - set `spec.instances: 2` on `affine-cnpg`, `netbox-cnpg`, and `grafana-cnpg`. CNPG will pg_basebackup the new standbys on next reconcile (takes a few minutes per cluster, no downtime on the existing primaries). Cost: 3 × 5 GiB extra PVCs ≈ 15 GiB cluster-wide after Longhorn replicas. Was well within available headroom post the orphan cleanup.
-
----
-
-### ☐ P1.3 Bump single-instance CNPG clusters to `instances: 2`
-
-**Why:** When `authentik-cnpg-1` corrupted today, the primary `authentik-cnpg-2` kept serving - that's exactly the value of `instances: 2`. The other clusters have no such fallback:
-
-**Current state:**
-| Cluster | Instances | Storage |
-|---|---|---|
-| `authentik/authentik-cnpg` | 2 | 10 GiB ✓ |
-| `affine/affine-cnpg` | 1 | 5 GiB |
-| `monitoring/grafana-cnpg` | 1 | 5 GiB |
-| `netbox/netbox-cnpg` | 1 | 5 GiB |
-
-If any of those single-instance DBs has its volume corrupt the same way authentik's did, the app loses its database until you restore from a Velero snapshot (hours of work, recent data lost). 2 instances ≈ doubles disk and gives sub-minute recovery.
-
-**Fix:** Edit `spec.instances: 1` → `2` in:
-- `apps/safeqbit-local-hq/affine/03-cnpg-cluster.yaml`
-- `apps/safeqbit-local-hq/netbox/03-cnpg-cluster.yaml`
-- `infrastructure/safeqbit-local-hq/configs/grafana-cnpg.yaml`
-
-**Cost:** +15 GiB Longhorn storage across the cluster (3 PVCs × 5GiB × 3-replica factor = ~45 GiB total → ~30 GiB increase). Well within current free space (server-02: 135 GiB available post-cleanup).
-
-**Verification:** `kubectl get cluster -A` shows `INSTANCES: 2 READY: 2` for all four.
-
-**Effort:** ~20 min. **Depends on:** none. **Note:** CNPG will pg_basebackup the standbys, takes a few minutes per cluster.
 
 ---
 
@@ -242,52 +144,39 @@ If any of those single-instance DBs has its volume corrupt the same way authenti
 
 **Closed:** 2026-05-28 - enabled `alertmanager: enabled: true` in `controllers/monitoring.yaml` with 1Gi Longhorn storage, inline AM config routing to a Slack `slack-default` receiver. Webhook URL is read at runtime from `slack_api_url_file`, pointed at the mounted SealedSecret `alertmanager-slack-webhook` (stub in `configs/alertmanager-slack.yaml`). Suppressed the three k3s false-positives at the rule source via `defaultRules.rules.kubeProxy/Scheduler/ControllerManager: false` AND disabled the corresponding ServiceMonitors. Added `route.routes` to silence `Watchdog` and bump `severity=critical` alerts to 10s wait / 1h repeat. **Action required from you:** seal a Secret containing the Slack channel webhook URL into `alertmanager-slack.yaml`, set the correct channel name (`#k3s-alerts` placeholder), and re-commit. Until then, keep alertmanager disabled or AM pod will crash-loop.
 
----
-
-### ☐ P1.4 Wire up Alertmanager so firing alerts go somewhere
-
-**Why:** Prometheus has **6 alerts currently firing**, including 3 `critical` (`KubeProxyDown`, `KubeSchedulerDown`, `KubeControllerManagerDown` - all false positives from k3s embedding these components, but still). One real alert today is `KubeJobNotCompleted` (from the velero kopia failures). **Nobody gets notified.** The monitoring chart was deployed with `alertmanager.enabled: false`.
-
-**Current state:**
-- `monitoring-kube-prometheus-stack` deployed
-- `alertmanager: enabled: false` in `infrastructure/safeqbit-local-hq/controllers/monitoring.yaml`
-- 243 PrometheusRules loaded, but no destination
-
-**Fix:**
-1. Enable alertmanager in `monitoring.yaml`:
-   ```yaml
-   alertmanager:
-     enabled: true
-     alertmanagerSpec:
-       storage:
-         volumeClaimTemplate:
-           spec:
-             storageClassName: longhorn
-             resources:
-               requests:
-                 storage: 1Gi
-     config:
-       route:
-         receiver: 'discord'        # or email, slack, etc.
-       receivers:
-       - name: 'discord'
-         webhook_configs:
-         - url: 'https://discord.com/api/webhooks/...'    # via SealedSecret
-   ```
-2. **Suppress the k3s false positives** - silence `KubeProxyDown`, `KubeSchedulerDown`, `KubeControllerManagerDown`, `KubeControllerManagerDown` via Alertmanager `inhibit_rules`, or set `kubeProxy.enabled: false`, `kubeScheduler.enabled: false`, `kubeControllerManager.enabled: false` in the kube-prometheus-stack values (cleaner).
-3. **Add Longhorn-specific alerts** (no built-in rule for `LonghornVolumeRobustness != healthy`). The Longhorn chart's `metrics.serviceMonitor.enabled: true` exposes the metrics; rules need to be authored. See https://longhorn.io/docs/1.11.2/monitoring/alert-rules-example/
-
-**Verification:** Trigger a known alert (e.g. scale a deployment to 0) and confirm the notification lands in your channel.
-
-**Effort:** ~2 hr (longest item - alert design is the bulk). **Depends on:** decision on notification channel.
+> **Actually finished 2026-07-03** — the 05-28 wiring never delivered a single
+> notification. Two stacked bugs, each masking the next (PRs #14, #15):
+> (1) `secrets:` was nested under `alertmanager:` instead of
+> `alertmanager.alertmanagerSpec:` — the chart silently ignored it and the
+> webhook file was never mounted; (2) the `#k3s-alerts` channel override was a
+> placeholder Slack couldn't resolve (404 channel_not_found) — removed; the
+> webhook posts to its bound channel. Also added (PRs #16, #19, #20/#25/#26):
+> ingresses + `externalUrl` for Alertmanager/Prometheus so notification links
+> work (alertmanager/prometheus.local.safeqbit.com), a `VeleroBackupSucceeded`
+> info route (one ✅ per successful backup), and a weekly Monday-08:00-ET
+> backup digest CronJob (`configs/backup-summary-report.yaml`) with per-schedule
+> status/next-run/retention + B2 bucket usage.
 
 ---
 
 ## P2 - Operational hygiene
 
-### ☐ P2.2 Move Velero off Backblaze B2 (or reduce frequency)
+### ☑ P2.2 Move Velero off Backblaze B2 (or reduce frequency)
 
 > **Partial progress 2026-05-28:** the "reduce frequency" half is done - Velero schedules were fully rewritten under P2.1. Killed `daily-everything` and `weekly-everything`, replaced with per-workload bi-monthly schedules staggered so only one runs per day (5th/7th/9th/11th/13th/20th/22nd/24th/26th/28th), plus weekly for high-churn workloads (affine Sunday, netbox Wednesday). TTL uniform 180d. See [backup-strategy.md](backup-strategy.md). The "move off B2" half (R2 or NFS) is still open.
+>
+> **Closed 2026-07-03: staying on B2 deliberately.** Backblaze made all
+> standard API calls free effective 2026-05-01, removing the transaction-cap
+> rationale for moving (account caps persist for cardless accounts, but PR #22
+> cut Velero's bucket polling 1m→1h ≈ 60x, well under them; R2 also requires a
+> payment method, so it solves nothing we have). Full tuning same day
+> (PRs #18, #29, #30): NFS volumes skipped (TrueNAS owns them), Prometheus TSDB
+> excluded (accepted DR loss), CNPG replica PVCs skipped (halves DB churn),
+> immich-bimonthly added (immich had NO backup at all — plain-Deployment
+> postgres, no CNPG layer), per-workload TTLs (60d most / 90d authentik /
+> 28d passzilla / 180d vaultwarden). Bucket at ~2.8GiB of 10GiB free tier;
+> the weekly digest warns at 80%. Revisit only if that warning fires
+> (then: MinIO on TrueNAS, not R2).
 
 
 
@@ -335,32 +224,9 @@ Then run one of these per quarter, log results, refine docs.
 
 **Closed:** 2026-05-28 - added `cnpg-backup-retention` CronJob in `cnpg-system` (file `configs/cnpg-backup-retention.yaml`). Runs daily at 05:00 UTC, lists CNPG Backup CRs per cluster, deletes oldest beyond retention via `kubectl delete`. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup. Per-cluster retention: authentik 10 (weekly cadence ≈ 10 weeks), affine/netbox/grafana 30 each (daily ≈ 1 month). Also added missing ScheduledBackups for `netbox-cnpg` (daily 02:15) and `grafana-cnpg` (daily 02:30); changed `authentik-cnpg` from daily to weekly Sunday 02:45; `affine-cnpg` stays daily (now 02:00). Full layout in [backup-strategy.md](backup-strategy.md).
 
----
-
-### ☐ P2.1 CNPG ScheduledBackup retention policy
-
-**Why:** Today we manually deleted 119 old Backup CRs to get under the 250-snapshot-per-volume Longhorn cap. Without a retention policy, daily CNPG backups will accumulate indefinitely and hit the cap again. Even with the cron fix (daily instead of hourly), in ~6 months we'll be back at 180+ snapshots on the authentik volume.
-
-**Current state:**
-- `authentik/authentik-cnpg-backup`: daily at 02:00 UTC, no retention
-- `affine/affine-cnpg-backup`: weekly on Sunday 03:00 UTC, no retention
-- CNPG `ScheduledBackup` CRD doesn't have a built-in retention field
-
-**Fix options:**
-1. **Best:** Switch from `volumeSnapshot` method to CNPG's plugin-based backup (Barman) which has native retention. Requires moving backup target from Longhorn snapshots to S3-compatible storage. Bigger change.
-2. **Pragmatic:** A weekly CronJob that runs:
-   ```bash
-   kubectl -n <ns> get backups.postgresql.cnpg.io --sort-by=.metadata.creationTimestamp \
-     -o jsonpath='{.items[*].metadata.name}' \
-     | tr ' ' '\n' | head -n -30 \
-     | xargs -r kubectl -n <ns> delete backup.postgresql.cnpg.io
-   ```
-   Keeps newest 30 backups per cluster, deletes the rest. Owner-ref cascades VolumeSnapshot + Longhorn snapshot cleanup.
-3. Author this as a CronJob per CNPG namespace, or one CronJob with a list.
-
-**Verification:** A month after deployment, `kubectl get backups -A | wc -l` shows count plateauing at ~30 per cluster, not climbing.
-
-**Effort:** ~1 hr. **Depends on:** none.
+> **Gap fixed 2026-07-03 (PR #20):** guacamole was never added to the prune
+> list — its weekly CNPG backups grew unbounded since 06-05. Added
+> `prune guacamole 10`.
 
 ---
 
