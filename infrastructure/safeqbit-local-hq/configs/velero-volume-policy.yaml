@@ -30,3 +30,12 @@ data:
           nfs: {}
         action:
           type: skip
+      # Bulk volumes (>=20Gi) don't fit the B2 10GiB free tier. Today this
+      # matches exactly one Longhorn volume: the Prometheus TSDB (40Gi).
+      # Decision 2026-07-03: metrics history is accepted DR loss — after a
+      # rebuild Grafana starts empty and refills over 30d; dashboards, alert
+      # rules and Grafana's DB are preserved via git/CNPG/Velero regardless.
+      - conditions:
+          capacity: "20Gi,"
+        action:
+          type: skip
