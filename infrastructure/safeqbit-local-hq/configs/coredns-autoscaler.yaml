@@ -1,0 +1,131 @@
+# coredns-autoscaler.yaml
+# P0.2: keep CoreDNS at one replica per node (3 today) — permanently.
+#
+# Why an autoscaler instead of `kubectl scale`: the coredns Deployment is
+# owned by the k3s Addon controller (objectset.rio.cattle.io/owner-gvk:
+# k3s.cattle.io/v1 Addon), whose applied state includes `replicas: 1`.
+# Every k3s server restart/upgrade re-applies the bundled manifest and
+# silently reverts a manual scale — which is how P0.2 got "done" and then
+# undone. The cluster-proportional-autoscaler re-enforces the computed
+# replica count every poll interval (~10s), so a k3s reset self-heals in
+# seconds. (A brief dip to 1 desired replica during a server restart is
+# unavoidable without disabling the bundled addon entirely; running pods
+# beyond the reverted count terminate gracefully and DNS stays served.)
+#
+# Spread needs no work: k3s's bundled template already has HARD host
+# spread (topologySpreadConstraints hostname/DoNotSchedule + required
+# podAntiAffinity on hostname), so 3 replicas land one per node.
+# The existing coredns PDB (pdbs.yaml, minAvailable: 2) finally has
+# enough pods to permit a disruption — this also clears the standing
+# KubePdbNotEnoughHealthyPods alert.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coredns-autoscaler
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coredns-autoscaler
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coredns-autoscaler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coredns-autoscaler
+subjects:
+  - kind: ServiceAccount
+    name: coredns-autoscaler
+    namespace: kube-system
+---
+# The autoscaler reads its params from this ConfigMap (declarative here
+# rather than letting it self-create from --default-params).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coredns-autoscaler
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coredns-autoscaler
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coredns-autoscaler
+subjects:
+  - kind: ServiceAccount
+    name: coredns-autoscaler
+    namespace: kube-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-autoscaler
+  namespace: kube-system
+data:
+  # linear mode: replicas = max(ceil(nodes * 1), min), capped at max.
+  # 3 nodes -> 3 replicas (one per node, enforced by the template's hard
+  # host spread). min 2 keeps HA even if the cluster ever shrinks.
+  linear: |-
+    {
+      "nodesPerReplica": 1,
+      "min": 2,
+      "max": 3,
+      "preventSinglePointFailure": true,
+      "includeUnschedulableNodes": false
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns-autoscaler
+  namespace: kube-system
+  labels:
+    k8s-app: coredns-autoscaler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: coredns-autoscaler
+  template:
+    metadata:
+      labels:
+        k8s-app: coredns-autoscaler
+    spec:
+      serviceAccountName: coredns-autoscaler
+      priorityClassName: system-cluster-critical
+      containers:
+        - name: autoscaler
+          image: registry.k8s.io/cpa/cluster-proportional-autoscaler:v1.10.3
+          command:
+            - /cluster-proportional-autoscaler
+            - --namespace=kube-system
+            - --configmap=coredns-autoscaler
+            - --target=deployment/coredns
+            - --logtostderr=true
+            - --v=2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi

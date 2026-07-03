@@ -29,6 +29,7 @@ resources:
   - velero-schedule-guacamole.yaml
   - velero-schedule-pulse.yaml
   - pdbs.yaml
+  - coredns-autoscaler.yaml
   - alertmanager-slack.yaml
   - cnpg-backup-retention.yaml
   - backup-summary-report.yaml
