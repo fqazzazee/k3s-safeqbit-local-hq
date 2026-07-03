@@ -49,9 +49,15 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
-            limits:
+              # pwpush 2.7 (Rails 8 web + worker under foreman) idles at
+              # ~480Mi RSS — request must reflect that or the scheduler
+              # over-packs the node.
               memory: 512Mi
+            limits:
+              # 512Mi OOMKilled the pod every ~15min (1,671 restarts in 22
+              # days). Idle baseline barely fit; any Ruby heap growth crossed
+              # the limit. 2x baseline leaves room for real request load.
+              memory: 1Gi
 
           readinessProbe:
             httpGet:
