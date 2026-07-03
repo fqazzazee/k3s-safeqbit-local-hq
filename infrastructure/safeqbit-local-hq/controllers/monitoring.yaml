@@ -215,8 +215,10 @@ spec:
           - name: 'null'
           - name: 'slack-default'
             slack_configs:
-              - channel: '#k3s-alerts'                # change to your channel name
-                send_resolved: true
+              # No channel override: incoming webhooks are bound to a channel at
+              # creation, and overriding with a name Slack can't resolve fails
+              # the whole notification (404 channel_not_found).
+              - send_resolved: true
                 title: '{{ if eq .Status "firing" }}🔥{{ else }}✅{{ end }} [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
                 text: |-
                   {{ range .Alerts -}}
