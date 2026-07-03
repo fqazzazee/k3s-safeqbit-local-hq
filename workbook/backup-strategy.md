@@ -93,6 +93,9 @@ All Velero schedules use `snapshotMoveData: true`, which:
 | `monitoring-bimonthly` | `0 3 9,24 * *` | 9th + 24th 03:00 | 180d | monitoring |
 | `passzilla-bimonthly` | `0 3 11,26 * *` | 11th + 26th 03:00 | 180d | passzilla |
 | `photoprism-bimonthly` | `0 3 13,28 * *` | 13th + 28th 03:00 | 180d | photoprism |
+| `uptime-kuma-weekly` | `0 4 * * 0` | Sundays 04:00 | 180d | uptime-kuma |
+| `pulse-weekly` | `0 5 * * 0` | Sundays 05:00 | 180d | pulse |
+| `guacamole-bimonthly` | `30 4 8,23 * *` | 8th + 23rd 04:30 | 28d (keep last 2) | guacamole |
 
 **Source of truth:** `infrastructure/safeqbit-local-hq/configs/velero-schedule-*.yaml`
 
@@ -102,6 +105,24 @@ All Velero schedules use `snapshotMoveData: true`, which:
 - Credentials: SealedSecret `velero-cloud-credentials`
 
 **Kopia maintenance frequency:** `168h0m0s` (weekly per repo, set in `velero.yaml` HelmRelease values as `defaultRepoMaintainFrequency`). Was hourly until 2026-05-27 when it blew through the B2 free-tier transaction cap.
+
+**NFS volumes are deliberately skipped (2026-07-03).** Every Schedule references
+the `velero-volume-policy` ConfigMap (`template.resourcePolicy`), whose single
+rule skips any NFS-sourced volume. Rationale:
+
+- NFS has no CSI snapshot support. Before the policy, every backup touching an
+  NFS PVC errored (`unable to get valid VolumeSnapshotter`), was marked
+  **PartiallyFailed**, and silently shipped **no** NFS data to B2 — the
+  "coverage" was an illusion.
+- TrueNAS owns that data anyway: ZFS periodic snapshots + replication between
+  the two NAS boxes + the NAS's own cloud backup. Duplicating bulk files into
+  the B2 free tier adds transactions/cost, not durability.
+- Affected data: netbox media/reports/scripts, authentik media/templates,
+  guacamole recordings, grafana NFS home (plugins — rebuildable), photoprism
+  library (static PVs). All under `10.10.10.5:/mnt/nvme2tb/k8s/pvs` (dynamic)
+  or `/mnt/mach2/mach2nas/Media` (static). **Both datasets must stay covered
+  by the TrueNAS snapshot/replication/cloud tasks — verify when changing NAS
+  config.**
 
 **Namespaces NOT backed up by Velero:**
 
@@ -222,6 +243,26 @@ velero restore create --from-backup <backup-name> \
   --restore-volumes
 ```
 
+### NFS volume data after a Velero restore (manual step!)
+
+Velero restores the PVC *object* but NFS **data** is not in the backup (see
+the volume policy above). The nfs-subdir provisioner then creates a **new,
+empty** directory for the restored PVC (the path embeds the new PV name), so
+the app comes up with blank NFS volumes. To reconnect the data:
+
+```bash
+# 1. Old data still lives in the previous subdir on TrueNAS (or in a ZFS
+#    snapshot of it): /mnt/nvme2tb/k8s/pvs/<ns>-<pvc-name>-pvc-<old-uid>/
+# 2. Find the NEW subdir the provisioner created for the restored PVC:
+kubectl get pv $(kubectl -n <ns> get pvc <pvc> -o jsonpath='{.spec.volumeName}') \
+  -o jsonpath='{.spec.nfs.path}{"\n"}'
+# 3. On the NAS, copy old contents into the new subdir (rsync -a), then
+#    restart the pod. Ownership must match the pod's fsGroup/runAsUser.
+```
+
+Static NFS PVs (photoprism/immich media) need no copy — they point at fixed
+paths; restore the data in-place from a ZFS snapshot if it was damaged.
+
 ### Single CNPG cluster restore from a Backup CR
 The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. See CNPG docs - destroy the old Cluster first, then create a new one pointing at the desired Backup. For full procedure see `cnpg-strategy.md`.
 
@@ -251,4 +292,5 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | 2026-05-27 | CNPG ScheduledBackup cron bug fixed (5-field → 6-field). Velero kopia maintenance bumped from 1h → 168h. Manually pruned 119 stale authentik Backup CRs to dodge 250-snapshot cap. |
 | 2026-05-28 | P2.1 + P2.2 - full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
 | 2026-05-29 | P2.5 - alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |
+| 2026-07-03 | NFS volume policy. All 10 Velero Schedules now reference the `velero-volume-policy` ConfigMap (skip all NFS volumes). Ends the standing PartiallyFailed status on netbox/authentik/guacamole/monitoring/photoprism backups — NFS data was never actually uploaded, only errored. NFS protection = TrueNAS (ZFS snapshots + inter-NAS replication + NAS cloud backup). Documented the copy-back-into-new-subdir step for NFS data after a Velero restore. Known residual: monitoring Longhorn DataUploads (Prometheus TSDB) still failing — scoping decision pending; grafana-cnpg PVCs still redundantly uploaded by Velero alongside CNPG snapshots. |
 | 2026-06-28 | Incident response. (1) `cnpg-backup-retention` was `ImagePullBackOff` ~30d (`bitnami/kubectl:1.34` removed from Docker Hub) → repinned to `alpine/k8s:1.34.1`; ran a manual prune (authentik 176→10). (2) `monitoring-default-kopia` was uninitialized → monitoring DataUploads PartiallyFailed ~6 weeks; fixed by deleting the stale `BackupRepository` CR to force re-init. (3) Longhorn scheduling ceiling (over-provisioning 100%) blocked all data-mover temp volumes after a Prometheus PVC expansion; reclaimed orphaned `sra-dev-demo` ns, then grew each node's sdb 150→250 GiB (`xfs_growfs`). (4) Added `LonghornNodeSchedulingCeiling` + self-healing `VeleroBackupPartiallyFailed` alerts; removed orphan `pangolin-bimonthly`. Full runbooks in [maintenance.md](maintenance.md). |

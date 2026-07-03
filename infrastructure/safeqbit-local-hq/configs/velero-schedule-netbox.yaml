@@ -1,9 +1,10 @@
 # velero-schedule-netbox.yaml
 # Weekly Velero backup of the netbox namespace to B2.
 #
-# Covers: netbox-media + netbox-reports + netbox-scripts (RWX NFS), redis
-# task queue PVC, SealedSecrets, manifests. Postgres data handled separately
-# by CNPG ScheduledBackup (apps/.../netbox/04-cnpg-scheduled-backup.yaml).
+# Covers: redis task queue PVC (Longhorn), SealedSecrets, manifests.
+# Postgres data handled separately by CNPG ScheduledBackup
+# (apps/.../netbox/04-cnpg-scheduled-backup.yaml). netbox-media/-reports/
+# -scripts are NFS and skipped by the volume policy — TrueNAS protects them.
 #
 # Schedule: Wednesdays 03:00 UTC (mid-week timing keeps it off the bi-monthly
 # day-stagger so at most one workload runs to B2 per day)
@@ -30,5 +31,10 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
 
   paused: false

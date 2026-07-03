@@ -2,8 +2,9 @@
 # Bi-monthly Velero backup of the guacamole namespace to B2.
 #
 # Postgres data handled separately by CNPG ScheduledBackup (weekly).
-# This catches the guacamole-recordings RWX PVC (session recordings) and the
-# k8s objects (Ingress, ConfigMap, Deployments, Services, PVC defs).
+# This catches the k8s objects (Ingress, ConfigMap, Deployments, Services,
+# PVC defs). guacamole-recordings is NFS and skipped by the volume policy —
+# TrueNAS protects the recordings.
 #
 # Schedule: 8th and 23rd 04:30 UTC. Spread across the month with the other
 # bi-monthly workloads so only one fires per day (avoids B2 cap spikes).
@@ -34,5 +35,10 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
 
   paused: false

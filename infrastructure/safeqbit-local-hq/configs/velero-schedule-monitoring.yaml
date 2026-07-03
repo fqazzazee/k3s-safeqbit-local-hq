@@ -1,9 +1,12 @@
 # velero-schedule-monitoring.yaml
 # Bi-monthly Velero backup of the monitoring namespace to B2.
 #
-# Covers: Grafana PVC (NFS-backed, small), Prometheus PVC (30Gi Longhorn —
-# the bulk of the backup size). The grafana-cnpg primary PVC is excluded
-# (handled by CNPG ScheduledBackup separately).
+# Covers: Prometheus PVC (40Gi Longhorn — the bulk of the backup size,
+# and its DataUploads to B2 have been failing; scoping TBD) and k8s objects.
+# The Grafana NFS PVC (plugins/scratch, rebuildable) is skipped by the
+# volume policy. NOTE: grafana-cnpg PVCs are NOT actually excluded despite
+# what this comment used to claim — they upload redundantly alongside the
+# CNPG ScheduledBackup; fixing that is tracked in the improvement plan.
 #
 # Schedule: 9th and 24th 03:00 UTC. Spread across the month with other
 # bi-monthly workloads.
@@ -30,5 +33,10 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
 
   paused: false

@@ -1,11 +1,11 @@
 # velero-schedule-photoprism.yaml
 # Bi-monthly Velero backup of the photoprism namespace to B2.
 #
-# Covers: photoprism's metadata PVCs and k8s objects. The actual photo
-# library lives on RWX NFS volumes pointing at TrueNAS (photoprism-import,
-# photoprism-originals, photoprism-storage) — those are static PVs and
-# Velero CAN snapshot them via the data mover, but the library is huge
-# and primary protection is TrueNAS's own snapshots/replication.
+# Covers: photoprism's metadata PVCs (Longhorn) and k8s objects. The photo
+# library lives on static NFS PVs pointing at TrueNAS (photoprism-import,
+# photoprism-originals, photoprism-storage). Velero can NOT snapshot NFS
+# (every run PartiallyFailed on them) — they are skipped by the volume
+# policy; primary protection is TrueNAS's own snapshots/replication.
 #
 # Schedule: 13th and 28th 03:00 UTC. Spread across the month with other
 # bi-monthly workloads.
@@ -32,5 +32,10 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
 
   paused: false

@@ -14,6 +14,7 @@ resources:
   - cert-manager-issuers.yaml
   - grafana-admin.yaml
   - velero-cloud-credentials.yaml
+  - velero-volume-policy.yaml
   - velero-volume-snapshot-class.yaml
   - velero-schedule-vaultwarden.yaml
   - grafana-cnpg.yaml

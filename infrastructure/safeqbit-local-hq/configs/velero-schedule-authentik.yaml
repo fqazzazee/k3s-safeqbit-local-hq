@@ -2,8 +2,9 @@
 # Bi-monthly Velero backup of the authentik namespace to B2.
 #
 # Postgres data handled separately by CNPG ScheduledBackup (weekly).
-# This catches authentik-media + authentik-templates RWX PVCs and the
-# k8s objects (Ingress, SealedSecret, HelmRelease state, etc).
+# This catches the k8s objects (Ingress, SealedSecret, HelmRelease state,
+# etc). authentik-media/-templates are NFS and skipped by the volume
+# policy — TrueNAS protects them.
 #
 # Schedule: 5th and 20th 03:00 UTC. Spread across the month with other
 # bi-monthly workloads so only one fires per day (avoids B2 cap spikes).
@@ -30,5 +31,10 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
 
   paused: false

@@ -1,0 +1,32 @@
+# velero-volume-policy.yaml
+# Velero volume resource policy: skip ALL NFS-backed volumes.
+#
+# Why: NFS volumes (nfs-truenas dynamic PVCs under 10.10.10.5:/mnt/nvme2tb/k8s/pvs,
+# and the static bulk-media PVs under /mnt/mach2/mach2nas/Media) cannot be
+# CSI-snapshotted. Before this policy Velero errored on each one
+# ("unable to get valid VolumeSnapshotter"), silently skipped the data, and
+# marked every affected backup PartiallyFailed. The data was never in B2.
+#
+# Decision (2026-07-03): NFS data is deliberately NOT backed up by Velero.
+# TrueNAS owns it — ZFS periodic snapshots + replication between the two NAS
+# boxes + NAS cloud backup. Duplicating bulk file data into the B2 free tier
+# adds cost, not durability. See workbook/backup-strategy.md ("NFS volumes")
+# for the restore procedure — note a Velero namespace restore creates a NEW
+# empty NFS subdir; data must be copied back from the ZFS snapshot.
+#
+# Referenced by every Schedule via template.resourcePolicy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velero-volume-policy
+  namespace: velero
+data:
+  policy.yaml: |
+    version: v1
+    volumePolicies:
+      # Any volume whose source is NFS (dynamic nfs-subdir PVCs and static
+      # NFS PVs alike) — do not snapshot, do not fs-backup.
+      - conditions:
+          nfs: {}
+        action:
+          type: skip
