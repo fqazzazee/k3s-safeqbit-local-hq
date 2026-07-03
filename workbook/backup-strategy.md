@@ -204,6 +204,36 @@ Not on any schedule directly; populated by:
 
 ---
 
+## Layer 0 - etcd snapshots to B2 (control plane)
+
+**Added 2026-07-03 (P1.2).** k3s takes an etcd snapshot every 12h (00:00/12:00
+UTC) on each of the 3 server nodes and — via `etcd-s3` config — uploads each
+to B2 as well. etcd is the cluster's full state: every object, PVC binding,
+and critically the **sealed-secrets private key** (exists only in etcd; without
+it every SealedSecret in this repo is undecryptable).
+
+- **Bucket:** `k3s-safeqbit-etcd` (separate from the Velero bucket, with an
+  application key scoped to it alone — the Velero credentials cannot touch
+  etcd snapshots and vice versa). Lifecycle must stay "keep only last version"
+  or k3s's pruning leaves hidden versions accumulating forever.
+- **Config:** `/etc/rancher/k3s/config.yaml` on each server node (root-only,
+  0600 — contains the B2 key, deliberately NOT in git). Fields: `etcd-s3: true`,
+  endpoint/region `s3.us-east-005.backblazeb2.com`/`us-east-005`, bucket,
+  `etcd-s3-folder: snapshots`, `etcd-snapshot-retention: 10` (~5 days x 3
+  nodes x ~30-120MB ≈ 2-3GB).
+- **Verify:** `kubectl get etcdsnapshotfiles | grep s3://` — S3-flavored
+  records appear next to the `file://` ones after each scheduled snapshot.
+  On-demand test: `sudo k3s etcd-snapshot save` on any server node.
+  (The `Unknown flag --tls-san` warning from the snapshot subcommand is
+  harmless — it parses config.yaml but only knows snapshot flags.)
+- **Restore (full control-plane loss):** on a fresh node,
+  `k3s server --cluster-reset --cluster-reset-restore-path=<snapshot-name> \
+  --etcd-s3 --etcd-s3-endpoint=... --etcd-s3-bucket=k3s-safeqbit-etcd \
+  --etcd-s3-folder=snapshots --etcd-s3-access-key=... --etcd-s3-secret-key=...`
+  then rejoin the other servers. See k3s docs "Restoring a Snapshot".
+
+---
+
 ## Verification commands
 
 ```bash
@@ -281,12 +311,12 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 ## Known gaps
 
 - **No off-cluster CNPG backup target.** Layer 2 snapshots live on the same Longhorn volumes as the primary. Whole-Longhorn corruption loses both primary AND backups. Only Layer 3 (Velero → B2) protects against that scenario. See P3.1 in [improvement-plan.md](improvement-plan.md) for the future plan to switch CNPG to plugin-based Barman backups direct to S3.
-- **No off-site etcd snapshots.** k3s writes etcd snapshots locally only. See P1.2 in [improvement-plan.md](improvement-plan.md) (currently deferred).
 - **Single B2 backend.** B2 outage or transaction-cap exhaustion takes Layer 3 down. Cloudflare R2 was considered as an alternative (10M Class A ops free/month vs B2's 2,500/day) - see P2.2.
 - **Restore drills not run.** See P2.3.
 - **Prometheus TSDB (metrics history) has no off-site copy — deliberate.** Decided 2026-07-03: the 40Gi TSDB never fit the B2 10GiB free tier (its DataUploads had never once succeeded). The volume policy skips volumes ≥20Gi. After a full rebuild Grafana starts with empty graphs that refill over the 30d retention window; dashboards (git), alert rules (git), and Grafana's DB (CNPG + Velero) survive regardless. Revisit if the Velero target ever moves to NAS MinIO (no size pressure there).
 
 > Closed gaps (kept for context):
+> - ~~No off-site etcd snapshots.~~ Closed 2026-07-03: P1.2 — k3s `etcd-s3` upload to dedicated `k3s-safeqbit-etcd` B2 bucket with a bucket-scoped key. See "Layer 0" above.
 > - ~~No alerts on backup failures.~~ Closed 2026-05-29: P2.5 added `VeleroBackupFailed`, `VeleroBackupFailureRateHigh`, `LonghornVolumeSnapshotCountHigh`, plus CNPG replication/exporter alerts. See [maintenance.md](maintenance.md#monitoring--alerting).
 > - ~~Partial backup failures were invisible.~~ Closed 2026-06-28: `velero_backup_last_status` reads 1 even for PartiallyFailed, so `VeleroBackupFailed` missed `monitoring-bimonthly` being broken ~6 weeks. Added `VeleroBackupPartiallyFailed` (self-healing). See [maintenance.md](maintenance.md#velero).
 > - ~~No alert on the Longhorn over-provisioning ceiling.~~ Closed 2026-06-28: `LonghornNodeStorageLow` only watches physical usage; the *scheduling* ceiling silently broke all data-mover backups. Added `LonghornNodeSchedulingCeiling`. See [maintenance.md](maintenance.md#longhorn-capacity--disk-expansion).
@@ -300,6 +330,7 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | 2026-05-27 | CNPG ScheduledBackup cron bug fixed (5-field → 6-field). Velero kopia maintenance bumped from 1h → 168h. Manually pruned 119 stale authentik Backup CRs to dodge 250-snapshot cap. |
 | 2026-05-28 | P2.1 + P2.2 - full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
 | 2026-05-29 | P2.5 - alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |
+| 2026-07-03 | P1.2 closed: etcd snapshots to B2. `etcd-s3` config on all 3 server nodes (rolling k3s restarts, no workload impact; also first live validation of the CoreDNS autoscaler surviving a k3s Addon re-apply). Dedicated bucket `k3s-safeqbit-etcd` + bucket-scoped key. Verified: on-demand snapshot uploaded (~29MB). |
 | 2026-07-03 | B2 tuning round 2. (1) immich-bimonthly schedule added — immich had NO backup (plain-Deployment postgres, no CNPG layer; ~470MB) — 1st+16th 03:30, 60d TTL, model-cache PVC excluded via label. (2) CNPG replica PVCs skipped via pvcLabels volume policy (halves DB upload churn). (3) TTLs tuned per workload: 180d→60d for netbox/affine/monitoring/photoprism/uptime-kuma/pulse, 180d→90d authentik, 180d→28d passzilla; vaultwarden stays 180d (tiny + critical), guacamole stays 28d/keep-2. Existing Backup CRs keep their original 180d expirations; only new backups get the shorter TTLs. |
 | 2026-07-03 | Prometheus TSDB excluded from Velero (volume policy: skip ≥20Gi; only other ≥20Gi volume is guacamole-recordings, already NFS-skipped). Metrics history = accepted DR loss. Unblocks monitoring-bimonthly going fully green on 07-09 without blowing the B2 10GiB free tier (bucket at ~2.8GiB). Same day: BSL polling cut 1m→1h (B2 Class C cap emails), Velero success notifications + weekly Slack backup digest added, netbox-housekeeping CronJob unwedged (image script never exits; now runs manage.py directly + activeDeadlineSeconds). |
 | 2026-07-03 | NFS volume policy. All 10 Velero Schedules now reference the `velero-volume-policy` ConfigMap (skip all NFS volumes). Ends the standing PartiallyFailed status on netbox/authentik/guacamole/monitoring/photoprism backups — NFS data was never actually uploaded, only errored. NFS protection = TrueNAS (ZFS snapshots + inter-NAS replication + NAS cloud backup). Documented the copy-back-into-new-subdir step for NFS data after a Velero restore. Known residual: monitoring Longhorn DataUploads (Prometheus TSDB) still failing — scoping decision pending; grafana-cnpg PVCs still redundantly uploaded by Velero alongside CNPG snapshots. |
