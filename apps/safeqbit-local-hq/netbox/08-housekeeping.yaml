@@ -1,10 +1,18 @@
 # 08-housekeeping.yaml
 # Netbox housekeeping CronJob.
 #
-# Runs /opt/netbox/housekeeping.sh daily at 00:30 UTC. The script:
+# Runs `manage.py housekeeping` daily at 00:30 UTC:
 #   - Purges expired change log records (past changelogRetention days)
 #   - Removes stale sessions
 #   - Syncs object counts
+#
+# Do NOT use the image's /opt/netbox/housekeeping.sh here: it is a
+# `while true; do ...; sleep 86400; done` loop meant for a long-lived
+# sidecar. As a CronJob payload it never exits, the Job stays Active
+# forever, and concurrencyPolicy: Forbid then blocks every future run
+# (2026-05..07 incident: schedule wedged 48 days behind one zombie pod).
+# We invoke the manage.py command directly so the container exits, and
+# activeDeadlineSeconds backstops any future hang.
 #
 # SKIP_SUPERUSER: true because this pod never needs to create a superuser.
 
@@ -23,6 +31,10 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # Hard stop: housekeeping takes seconds; 15 minutes means "hung".
+      # Without this, one stuck pod + Forbid silences the schedule forever.
+      activeDeadlineSeconds: 900
+      backoffLimit: 2
       template:
         metadata:
           labels:
@@ -33,7 +45,10 @@ spec:
           containers:
             - name: housekeeping
               image: netboxcommunity/netbox:v4.2-3.2.0
-              command: ["/opt/netbox/housekeeping.sh"]
+              command:
+                - /opt/netbox/venv/bin/python
+                - /opt/netbox/netbox/manage.py
+                - housekeeping
               env:
                 - name: DB_HOST
                   value: netbox-cnpg-rw
