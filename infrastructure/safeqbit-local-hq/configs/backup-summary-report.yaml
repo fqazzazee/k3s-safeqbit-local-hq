@@ -134,6 +134,20 @@ data:
     def fmt(dt):
         return dt.strftime("%m-%d %H:%M") if dt else "never"
 
+    HEADS = ["SCHEDULE", "LAST", "STATUS", "NEXT (UTC)", "#", "RETAIN"]
+
+    def table(rows):
+        """Box-drawing table; renders as a bordered grid in Slack code blocks."""
+        w = [max(len(HEADS[i]), *(len(r[i]) for r in rows)) for i in range(len(HEADS))]
+        def rule(l, m, r):
+            return l + m.join("─" * (w[i] + 2) for i in range(len(w))) + r
+        def row(cells):
+            padded = [(c.rjust(w[i]) if i == 4 else c.ljust(w[i]))
+                      for i, c in enumerate(cells)]
+            return "│ " + " │ ".join(padded) + " │"
+        return "\n".join([rule("┌", "┬", "┐"), row(HEADS), rule("├", "┼", "┤"),
+                          *[row(r) for r in rows], rule("└", "┴", "┘")])
+
     warnings = []
 
     # ---------------- Velero ----------------
@@ -172,8 +186,8 @@ data:
                 f":warning: `{name}` last run {phase}; last full success: "
                 f"{since}. Effect: k8s objects/volumes restore only from that "
                 f"point. Next try: {fmt(nxt)} UTC.")
-        vrows.append(f"{name:<22} {fmt(last_t):<12} {phase:<8} "
-                     f"{fmt(nxt):<12} {len(mine):>3}  {ttl_h // 24}d")
+        vrows.append([name, fmt(last_t), phase, fmt(nxt),
+                      str(len(mine)), f"{ttl_h // 24}d"])
 
     # ---------------- CNPG ----------------
     sbs = api("/apis/postgresql.cnpg.io/v1/scheduledbackups")["items"]
@@ -199,16 +213,14 @@ data:
                 (not last_t or last_t < prev - timedelta(minutes=5)):
             warnings.append(f":warning: CNPG `{cluster}` MISSED its "
                             f"{fmt(prev)} run. Next try: {fmt(nxt)} UTC.")
-        crows.append(f"{cluster:<22} {fmt(last_t):<12} {phase:<8} "
-                     f"{fmt(nxt):<12} {len(mine):>3}  "
-                     f"{'keep ' + str(keep) if keep else '-'}")
+        crows.append([cluster, fmt(last_t), phase, fmt(nxt), str(len(mine)),
+                      f"keep {keep}" if keep else "-"])
 
-    hdr = f"{'SCHEDULE':<22} {'LAST':<12} {'STATUS':<8} {'NEXT(UTC)':<12} {'#':>3}  RETAIN"
     msg = (f":floppy_disk: *Backup summary — {NOW.strftime('%Y-%m-%d %H:%M')} UTC*\n"
            f"*Velero → B2* (namespace objects + Longhorn volumes; NFS = TrueNAS)\n"
-           f"```\n{hdr}\n" + "\n".join(vrows) + "\n```\n"
+           f"```\n{table(vrows)}\n```\n"
            f"*CNPG snapshots* (postgres, local Longhorn; pruned daily 05:00 UTC)\n"
-           f"```\n{hdr}\n" + "\n".join(crows) + "\n```\n")
+           f"```\n{table(crows)}\n```\n")
     msg += ("\n".join(warnings) if warnings
             else ":white_check_mark: All schedules on time, nothing missed.")
 
