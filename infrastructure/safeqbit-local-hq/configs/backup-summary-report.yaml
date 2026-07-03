@@ -59,7 +59,14 @@ data:
     from datetime import datetime, timedelta, timezone
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
-    API_BASE = os.environ.get("API_BASE", "https://kubernetes.default.svc")
+    # In-cluster: use the env-injected API IP, not kubernetes.default.svc.
+    # The cluster's ndots:5 + local.safeqbit.com search domain makes short
+    # in-cluster names flap under musl resolvers (alpine images) — this job
+    # failed with "Name has no usable address" until switched to the IP.
+    # The apiserver cert carries the ClusterIP as an IP SAN, so TLS verifies.
+    API_BASE = os.environ.get("API_BASE") or (
+        "https://" + os.environ["KUBERNETES_SERVICE_HOST"] + ":"
+        + os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443"))
     NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
 
     # Keep in sync with the `prune` lines in cnpg-backup-retention.yaml.
