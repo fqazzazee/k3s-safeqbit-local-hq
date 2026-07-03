@@ -1,12 +1,16 @@
 # backup-summary-report.yaml
 # Weekly Slack digest of backup health: one message with every Velero
-# schedule and CNPG ScheduledBackup — last run status, next run, backup
-# counts, retention — plus warnings for anything missed, failed, or stale.
+# schedule and CNPG ScheduledBackup — last run status, data moved, next run,
+# backup counts, retention — plus B2 bucket usage vs the 10GB free tier and
+# warnings for anything missed, failed, or stale.
 #
 # Runs Mondays 08:00 America/New_York in the monitoring namespace (so it can
 # reuse the alertmanager-slack-webhook SealedSecret; SealedSecrets are
 # namespace-scoped). Reads velero.io and postgresql.cnpg.io resources
-# cluster-wide via a read-only ClusterRole.
+# cluster-wide via a read-only ClusterRole, plus the velero/cloud-credentials
+# secret (via a resourceName-scoped Role) to list the B2 bucket over the
+# S3 API for storage metrics. B2 has no public API for the account dashboard
+# (caps %, transaction counts) — bucket listing is what's available.
 #
 # Manual run:
 #   kubectl -n monitoring create job --from=cronjob/backup-summary-report report-now
@@ -27,7 +31,7 @@ metadata:
   name: backup-summary-report
 rules:
   - apiGroups: ["velero.io"]
-    resources: ["schedules", "backups"]
+    resources: ["schedules", "backups", "backupstoragelocations", "datauploads"]
     verbs: ["get", "list"]
   - apiGroups: ["postgresql.cnpg.io"]
     resources: ["scheduledbackups", "backups"]
@@ -46,6 +50,33 @@ subjects:
     name: backup-summary-report
     namespace: monitoring
 ---
+# Read exactly one secret: the B2 credentials Velero already uses, so the
+# report can list the bucket for storage metrics.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backup-summary-report-b2creds
+  namespace: velero
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["cloud-credentials"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backup-summary-report-b2creds
+  namespace: velero
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backup-summary-report-b2creds
+subjects:
+  - kind: ServiceAccount
+    name: backup-summary-report
+    namespace: monitoring
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -55,14 +86,15 @@ data:
   report.py: |
     #!/usr/bin/env python3
     """Post a one-message Slack digest of Velero + CNPG backup health."""
-    import json, os, ssl, sys, time, urllib.error, urllib.request
+    import base64, hashlib, hmac, json, os, ssl, sys, time
+    import urllib.error, urllib.parse, urllib.request
+    import xml.etree.ElementTree as ElementTree
     from datetime import datetime, timedelta, timezone
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
     # In-cluster: use the env-injected API IP, not kubernetes.default.svc.
     # The cluster's ndots:5 + local.safeqbit.com search domain makes short
-    # in-cluster names flap under musl resolvers (alpine images) — this job
-    # failed with "Name has no usable address" until switched to the IP.
+    # in-cluster names flap under musl resolvers (alpine images).
     # The apiserver cert carries the ClusterIP as an IP SAN, so TLS verifies.
     API_BASE = os.environ.get("API_BASE") or (
         "https://" + os.environ["KUBERNETES_SERVICE_HOST"] + ":"
@@ -72,6 +104,11 @@ data:
     # Keep in sync with the `prune` lines in cnpg-backup-retention.yaml.
     CNPG_KEEP = {"authentik": 10, "affine": 30, "netbox": 30,
                  "monitoring": 30, "guacamole": 10}
+    B2_FREE_TIER = 10 * 1024**3
+
+    ICON = {"OK": ":white_check_mark:", "PARTIAL": ":warning:",
+            "FAIL": ":x:", "BADCFG": ":x:", "RUNNING": ":hourglass_flowing_sand:",
+            "PAUSED": ":double_vertical_bar:", "-": ":new:"}
 
     def api(path):
         req = urllib.request.Request(API_BASE + path)
@@ -142,30 +179,99 @@ data:
         return dt - timedelta(hours=4 if dst_start <= dt < dst_end else 5)
 
     def fmt(dt):
-        return to_et(dt).strftime("%m-%d %H:%M") if dt else "never"
+        return to_et(dt).strftime("%a %m-%d %H:%M") if dt else "never"
 
-    HEADS = ["SCHEDULE", "LAST", "STATUS", "NEXT (ET)", "#", "RETAIN"]
+    def human(n):
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if n < 1024 or unit == "TiB":
+                return f"{n:,.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+            n /= 1024
 
-    def table(rows):
-        """ASCII-bordered table. ASCII only: Slack's fonts don't render
-        box-drawing chars at monospace width, which shears the grid."""
-        w = [max(len(HEADS[i]), *(len(r[i]) for r in rows)) for i in range(len(HEADS))]
-        rule = "+" + "+".join("-" * (w[i] + 2) for i in range(len(w))) + "+"
-        def row(cells):
-            padded = [(c.rjust(w[i]) if i == 4 else c.ljust(w[i]))
-                      for i, c in enumerate(cells)]
-            return "| " + " | ".join(padded) + " |"
-        return "\n".join([rule, row(HEADS), rule,
-                          *[row(r) for r in rows], rule])
+    # ---- B2 bucket usage via S3 ListObjectsV2 (SigV4, stdlib only) ----
+    def s3_list_page(host, bucket, region, ak, sk, token=None):
+        query = {"list-type": "2", "max-keys": "1000"}
+        if token:
+            query["continuation-token"] = token
+        qs = "&".join(f"{urllib.parse.quote(k, safe='')}"
+                      f"={urllib.parse.quote(v, safe='')}"
+                      for k, v in sorted(query.items()))
+        t = datetime.now(timezone.utc)
+        amzdate, datestamp = t.strftime("%Y%m%dT%H%M%SZ"), t.strftime("%Y%m%d")
+        payload_hash = hashlib.sha256(b"").hexdigest()
+        headers = {"host": host, "x-amz-content-sha256": payload_hash,
+                   "x-amz-date": amzdate}
+        signed = ";".join(sorted(headers))
+        canonical = "\n".join(
+            ["GET", f"/{bucket}", qs,
+             "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)),
+             signed, payload_hash])
+        scope = f"{datestamp}/{region}/s3/aws4_request"
+        to_sign = "\n".join(["AWS4-HMAC-SHA256", amzdate, scope,
+                             hashlib.sha256(canonical.encode()).hexdigest()])
+        def hm(key, msg):
+            return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+        key = hm(hm(hm(hm(("AWS4" + sk).encode(), datestamp), region), "s3"),
+                 "aws4_request")
+        sig = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+        req = urllib.request.Request(
+            f"https://{host}/{bucket}?{qs}",
+            headers={"Authorization":
+                     f"AWS4-HMAC-SHA256 Credential={ak}/{scope}, "
+                     f"SignedHeaders={signed}, Signature={sig}",
+                     "x-amz-date": amzdate,
+                     "x-amz-content-sha256": payload_hash})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.read()
+
+    def b2_usage():
+        """(total_bytes, object_count) or (None, None) if unavailable —
+        the report must still post if B2 is unreachable."""
+        try:
+            sec = api("/api/v1/namespaces/velero/secrets/cloud-credentials")
+            ini = base64.b64decode(sec["data"]["cloud"]).decode()
+            ak = sk = None
+            for line in ini.splitlines():
+                k, _, v = line.partition("=")
+                if k.strip() == "aws_access_key_id":
+                    ak = v.strip()
+                if k.strip() == "aws_secret_access_key":
+                    sk = v.strip()
+            bsl = api("/apis/velero.io/v1/namespaces/velero"
+                      "/backupstoragelocations/default")
+            bucket = bsl["spec"]["objectStorage"]["bucket"]
+            region = bsl["spec"]["config"]["region"]
+            host = urllib.parse.urlparse(bsl["spec"]["config"]["s3Url"]).netloc
+            total = count = 0
+            token = None
+            for _ in range(100):  # hard cap ~100k objects
+                root = ElementTree.fromstring(
+                    s3_list_page(host, bucket, region, ak, sk, token))
+                ns = root.tag.split("}")[0].strip("{") if "}" in root.tag else ""
+                def find(el, name):
+                    return el.find(f"{{{ns}}}{name}" if ns else name)
+                for c in root.iter(f"{{{ns}}}Contents" if ns else "Contents"):
+                    total += int(find(c, "Size").text)
+                    count += 1
+                trunc = find(root, "IsTruncated")
+                if trunc is None or trunc.text != "true":
+                    break
+                token = find(root, "NextContinuationToken").text
+            return total, count
+        except Exception as e:  # never let metrics kill the report
+            print(f"b2 usage unavailable: {e}", file=sys.stderr)
+            return None, None
 
     warnings = []
 
     # ---------------- Velero ----------------
     schedules = api("/apis/velero.io/v1/namespaces/velero/schedules")["items"]
     backups = api("/apis/velero.io/v1/namespaces/velero/backups")["items"]
+    # DataUploads are v2alpha1, unlike the rest of velero.io
+    datauploads = api("/apis/velero.io/v2alpha1/namespaces/velero/datauploads")["items"]
     PHASE = {"Completed": "OK", "PartiallyFailed": "PARTIAL", "Failed": "FAIL",
              "InProgress": "RUNNING", "FailedValidation": "BADCFG"}
-    vrows = []
+    vlines = []
+    healthy = 0
     for s in sorted(schedules, key=lambda x: x["metadata"]["name"]):
         name, cron = s["metadata"]["name"], s["spec"]["schedule"]
         mine = [b for b in backups if b["metadata"].get("labels", {})
@@ -178,6 +284,10 @@ data:
         ttl_h = int(s["spec"]["template"].get("ttl", "720h0m0s").split("h")[0])
         nxt, prev = cron_next(cron), cron_prev(cron)
         created = ts(s["metadata"]["creationTimestamp"])
+        moved = sum(int(d["status"].get("progress", {}).get("totalBytes", 0))
+                    for d in datauploads
+                    if last and d["metadata"].get("labels", {})
+                    .get("velero.io/backup-name") == last["metadata"]["name"])
         if s["spec"].get("paused"):
             phase = "PAUSED"
             warnings.append(f":warning: `{name}` is PAUSED — no backups run.")
@@ -196,17 +306,28 @@ data:
                 f":warning: `{name}` last run {phase}; last full success: "
                 f"{since}. Effect: k8s objects/volumes restore only from that "
                 f"point. Next try: {fmt(nxt)} ET.")
-        vrows.append([name, fmt(last_t), phase, fmt(nxt),
-                      str(len(mine)), f"{ttl_h // 24}d"])
+        if phase == "OK":
+            healthy += 1
+            detail = f"last {fmt(last_t)}"
+            if moved:
+                detail += f" ({human(moved)} moved)"
+        elif phase == "-":
+            detail = f"no backups yet, first run {fmt(nxt)}"
+        else:
+            detail = f"{phase} at {fmt(last_t)}"
+        vlines.append(f"{ICON.get(phase, ':grey_question:')} *{name}* — "
+                      f"{detail} · next {fmt(nxt)} · {len(mine)} kept · "
+                      f"TTL {ttl_h // 24}d")
 
     # ---------------- CNPG ----------------
     sbs = api("/apis/postgresql.cnpg.io/v1/scheduledbackups")["items"]
     cbs = api("/apis/postgresql.cnpg.io/v1/backups")["items"]
-    crows = []
+    clines = []
+    chealthy = 0
     for s in sorted(sbs, key=lambda x: x["metadata"]["namespace"]):
-        ns, cluster = s["metadata"]["namespace"], s["spec"]["cluster"]["name"]
+        ns_, cluster = s["metadata"]["namespace"], s["spec"]["cluster"]["name"]
         cron = " ".join(s["spec"]["schedule"].split()[1:])  # drop seconds field
-        mine = [b for b in cbs if b["metadata"]["namespace"] == ns
+        mine = [b for b in cbs if b["metadata"]["namespace"] == ns_
                 and b["spec"]["cluster"]["name"] == cluster]
         mine.sort(key=lambda b: b["metadata"]["creationTimestamp"])
         last = mine[-1] if mine else None
@@ -214,7 +335,7 @@ data:
         phase = {"completed": "OK", "failed": "FAIL"}.get(
             last["status"].get("phase", "?") if last else "-", "...")
         nxt, prev = cron_next(cron), cron_prev(cron)
-        keep = CNPG_KEEP.get(ns)
+        keep = CNPG_KEEP.get(ns_)
         created = ts(s["metadata"]["creationTimestamp"])
         if phase == "FAIL":
             warnings.append(f":warning: CNPG `{cluster}` last backup FAILED. "
@@ -223,15 +344,39 @@ data:
                 (not last_t or last_t < prev - timedelta(minutes=5)):
             warnings.append(f":warning: CNPG `{cluster}` MISSED its "
                             f"{fmt(prev)} run. Next try: {fmt(nxt)} ET.")
-        crows.append([cluster, fmt(last_t), phase, fmt(nxt), str(len(mine)),
-                      f"keep {keep}" if keep else "-"])
+        if phase == "OK":
+            chealthy += 1
+        kept = f"{len(mine)} kept" + (f" (max {keep})" if keep else "")
+        clines.append(f"{ICON.get(phase, ':grey_question:')} *{cluster}* — "
+                      f"last {fmt(last_t)} · next {fmt(nxt)} · {kept}")
 
-    msg = (f":floppy_disk: *Backup summary — {to_et(NOW).strftime('%Y-%m-%d %H:%M')} ET*\n"
-           f"*Velero → B2* (namespace objects + Longhorn volumes; NFS = TrueNAS)\n"
-           f"```\n{table(vrows)}\n```\n"
-           f"*CNPG snapshots* (postgres, local Longhorn; pruned daily ~01:00 ET)\n"
-           f"```\n{table(crows)}\n```\n")
-    msg += ("\n".join(warnings) if warnings
+    # ---------------- B2 + BSL ----------------
+    bsl_phase = api("/apis/velero.io/v1/namespaces/velero"
+                    "/backupstoragelocations/default")["status"].get("phase", "?")
+    b2_bytes, b2_objects = b2_usage()
+    if b2_bytes is not None:
+        pct = 100 * b2_bytes / B2_FREE_TIER
+        b2_icon = ":white_check_mark:" if pct < 80 else ":warning:"
+        b2_line = (f"{b2_icon} *B2 bucket*: {human(b2_bytes)} of 10 GiB free "
+                   f"tier ({pct:.0f}%) · {b2_objects:,} objects · "
+                   f"connection {bsl_phase}")
+        if pct >= 80:
+            warnings.append(
+                f":warning: B2 bucket at {pct:.0f}% of the 10 GiB free tier — "
+                f"expired-backup cleanup may lag TTLs; consider pruning or "
+                f"revisiting retention.")
+    else:
+        b2_line = (f":grey_question: *B2 bucket*: usage unavailable this run · "
+                   f"connection {bsl_phase}")
+
+    msg = (f":floppy_disk: *Backup summary — {to_et(NOW).strftime('%Y-%m-%d %H:%M')} ET*\n\n"
+           f"*Velero → B2* ({healthy}/{len(vlines)} healthy · namespace objects "
+           f"+ Longhorn volumes; NFS data = TrueNAS's job)\n"
+           + "\n".join(vlines) + "\n\n"
+           f"*CNPG snapshots* ({chealthy}/{len(clines)} healthy · postgres, "
+           f"local Longhorn, pruned daily ~01:00 ET)\n"
+           + "\n".join(clines) + "\n\n" + b2_line + "\n\n")
+    msg += ("*Needs attention:*\n" + "\n".join(warnings) if warnings
             else ":white_check_mark: All schedules on time, nothing missed.")
 
     if os.environ.get("DRY_RUN"):
@@ -270,11 +415,10 @@ spec:
         spec:
           serviceAccountName: backup-summary-report
           restartPolicy: Never
-          # ndots:1 so hooks.slack.com resolves as an absolute name. The
-          # cluster default (ndots:5 + local.safeqbit.com search domain)
-          # breaks multi-dot names under musl resolvers (python:alpine) —
-          # the Slack post failed with "Name has no usable address". The
-          # k8s API needs no DNS at all (contacted by ClusterIP).
+          # ndots:1 so hooks.slack.com / s3.*.backblazeb2.com resolve as
+          # absolute names. The cluster default (ndots:5 + local.safeqbit.com
+          # search domain) breaks multi-dot names under musl resolvers
+          # (python:alpine). The k8s API needs no DNS at all (ClusterIP).
           dnsConfig:
             options:
               - name: ndots
