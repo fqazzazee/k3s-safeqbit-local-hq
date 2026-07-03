@@ -233,6 +233,7 @@ covering a different "what if."
 
 | Layer | Tool | Protects against | Where it goes |
 |---|---|---|---|
+| 0 | **etcd snapshots** | Losing the cluster's "brain" - all Kubernetes state, incl. the secrets master key | Off-site object storage (weekly) |
 | 1 | **Longhorn snapshots** | "Oops, I deleted that an hour ago" | On the volume itself (in-cluster) |
 | 2 | **CNPG database snapshots** | A database corrupting or a disk being lost on a node | Longhorn (in-cluster, app-consistent) |
 | 3 | **Velero → Backblaze B2** | The whole cluster or site being lost | Off-site object storage |
@@ -242,9 +243,16 @@ A few details for the curious:
 
 - **Layer 2** takes a clean, application-consistent snapshot of each PostgreSQL database
   daily/weekly (it tells the database to flush first). A daily cleanup job prunes old ones.
+- **Layer 0** (added 2026-07) is the escape hatch for total loss: every Sunday each server
+  uploads a snapshot of etcd - the database Kubernetes itself lives in - to its own B2
+  bucket with its own credentials. One restore command brings back the entire cluster
+  state, including the one key that can decrypt every secret in this repo.
 - **Layer 3** (Velero) ships both the Kubernetes configuration *and* the volume data up to
   a [Backblaze B2](https://www.backblaze.com/cloud-storage) bucket off-site. Schedules are
-  staggered so only one app uploads per day, keeping costs predictable. Credentials for B2
+  staggered so only one app uploads per day, keeping costs predictable. Bulk file data on
+  the NAS (photo libraries, media, app files on NFS) is deliberately *excluded* - ZFS
+  snapshots + NAS replication + the NAS's own cloud backup already cover it, and
+  duplicating it into B2 would add cost without adding safety. Credentials for B2
   are stored encrypted in this repo (see *Security* below).
 
 ---
@@ -348,17 +356,23 @@ rebuild - operators first, then the things that depend on them - all in one pass
 
 ### Rebuilding from nothing
 
-If all three machines were wiped tomorrow, recovery is a short list:
+If all three machines were wiped tomorrow, recovery is a short list
+(full step-by-step: [workbook/node-bootstrap.md](workbook/node-bootstrap.md)):
 
-1. Fresh K3s install on the three nodes (same IPs, same labels).
-2. Restore the one sealed-secrets master key from my offline backup.
-3. Run `flux bootstrap github` pointed at this repo.
-4. Flux reconciles everything in order: platform → config → apps.
-5. Velero restores volume data from Backblaze B2 for apps that need it.
-6. The cluster is back to exactly what's committed here.
+1. Rebuild the nodes per the bootstrap doc - the OS-level pieces that live *outside* Git
+   (k3s config, the multipath blacklist, the flannel offload fix, the etcd-to-B2 upload).
+2. **Fast path:** restore the latest weekly etcd snapshot from B2 with one `k3s server
+   --cluster-reset` command - the entire cluster state comes back at once, including the
+   sealed-secrets master key, and Flux just resumes.
+   **Slow path** (no snapshot): restore the master key from my offline backup, then
+   `flux bootstrap github` against this repo and let Flux rebuild everything in order.
+3. Velero restores volume data from Backblaze B2 for apps that need it; bulk NFS data
+   is already sitting on the NAS (or its replica / cloud copy).
+4. The cluster is back to exactly what's committed here.
 
-The only things that live *outside* Git are: the master key (offline), Longhorn volume data
-(backed up to B2), and the NAS data (replicated to the second NAS).
+The things that live *outside* Git are: the node-local config (documented in the
+bootstrap doc), the master key (offline + inside every etcd snapshot), Longhorn volume
+data (backed up to B2), and the NAS data (replicated + cloud-backed).
 
 ---
 

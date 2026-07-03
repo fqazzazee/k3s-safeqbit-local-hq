@@ -16,6 +16,7 @@ A living document. Add entries as new patterns emerge.
 
 - [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
 - [Graceful Node Shutdown (kubelet)](#graceful-node-shutdown-kubelet)
+- [etcd Snapshots (local + B2)](#etcd-snapshots-local--b2)
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
 - [Longhorn Capacity & Disk Expansion](#longhorn-capacity--disk-expansion)
@@ -341,6 +342,31 @@ kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" \
 
 ---
 
+## etcd Snapshots (local + B2)
+
+k3s snapshots etcd **weekly (Sunday 00:00 UTC)** on every server node and
+uploads each snapshot to B2 (`k3s-safeqbit-etcd` bucket, `snapshots/`
+folder) via the `etcd-s3` block in `/etc/rancher/k3s/config.yaml`
+(node-local, contains the bucket-scoped B2 key — never in Git). Retention 8
+per node (~8 weeks); bucket lifecycle keeps deleted versions 30 days as an
+undelete window. Design rationale and restore procedure:
+[backup-strategy.md → Layer 0](backup-strategy.md#layer-0---etcd-snapshots-to-b2-control-plane);
+node config reference: [node-bootstrap.md](node-bootstrap.md).
+
+```bash
+# Verify uploads are happening (records appear after each scheduled run)
+kubectl get etcdsnapshotfiles | grep 's3://'
+
+# On-demand snapshot + upload (run on any server node)
+sudo k3s etcd-snapshot save
+# ("Unknown flag --tls-san" warning from this subcommand is harmless)
+
+# List what's on the nodes
+kubectl get etcdsnapshotfiles | grep 'file://'
+```
+
+---
+
 ## Flannel VXLAN Checksum Offload (Post-Reboot)
 
 **Symptom seen on 2026-05-27 after rebooting k3s-server-02:**
@@ -541,35 +567,37 @@ for all those volumes). Avoid unless many volumes on the node are affected.
 
 ## CoreDNS HA
 
-k3s deploys CoreDNS as an **Addon** (CR `addons.k3s.cattle.io/coredns`), not as a HelmChart, so `HelmChartConfig` overrides don't apply. The source manifest lives at `/var/lib/rancher/k3s/server/manifests/coredns.yaml` on every control-plane node and the Addon controller watches that file's checksum - editing the file makes k3s re-apply the new content.
+> **Superseded 2026-07-03 (PR #27).** The 2026-05-28 approach documented here
+> previously — editing `/var/lib/rancher/k3s/server/manifests/coredns.yaml`
+> on each node — **did not survive**: the k3s Addon controller's applied
+> state includes `replicas: 1`, and the late-June node reboots silently
+> reverted both the live patch and the file edits, leaving DNS on a single
+> pod while its PDB alerted. Do not use the file-edit approach.
 
-**Current persistent config (set 2026-05-28):**
-- `replicas: 3` in the Deployment spec (injected on line 88, before `revisionHistoryLimit: 0`)
-- The file already ships with `topologySpreadConstraints` on `kubernetes.io/hostname` with `whenUnsatisfiable: DoNotSchedule`, which enforces one pod per host
+**Current mechanism:** a Flux-managed **cluster-proportional-autoscaler**
+(`infrastructure/safeqbit-local-hq/configs/coredns-autoscaler.yaml`,
+image registry.k8s.io/cpa/cluster-proportional-autoscaler) targets
+`deployment/coredns` with linear params `nodesPerReplica: 1, min: 2, max: 3`
+→ 3 replicas, re-enforced every ~10s. When k3s re-applies its bundled
+manifest (any server restart or upgrade) and resets replicas to 1, the CPA
+corrects it within seconds — validated live during the 2026-07-03 rolling
+k3s restarts (three consecutive Addon re-applies, DNS stayed 3/3).
 
-**Verify the edit is in place on each control-plane node:**
+Host spread needs no configuration: the k3s-bundled template already carries
+hostname `topologySpreadConstraints` (`DoNotSchedule`) + required
+podAntiAffinity, so the 3 replicas always land one per node.
+
+**Verify:**
 ```bash
-for n in k3s-server-01 k3s-server-02 k3s-server-03; do
-  kubectl debug node/$n --image=busybox --profile=sysadmin -- sh -c \
-    'nsenter -t 1 -m -n -- grep -nE "^  replicas:" /var/lib/rancher/k3s/server/manifests/coredns.yaml'
-done
-# Each line should print:  88:  replicas: 3
+kubectl -n kube-system get deploy coredns              # 3/3
+kubectl -n kube-system get pods -l k8s-app=kube-dns -o wide   # one per node
+kubectl -n kube-system logs deploy/coredns-autoscaler --tail=5
 ```
 
-**If a node is missing the edit** (e.g., after a fresh node rebuild or k3s reinstall):
-```bash
-kubectl debug node/<node> --image=busybox --profile=sysadmin -- sh -c '
-  nsenter -t 1 -m -n -- sh -c "
-    F=/var/lib/rancher/k3s/server/manifests/coredns.yaml
-    grep -q \"^  replicas: 3$\" \$F && exit 0
-    cp \$F \${F}.bak.\$(date +%s)
-    sed -i \"/^  revisionHistoryLimit: 0$/i\\\\  replicas: 3\" \$F
-  "'
-```
-
-**After a k3s version upgrade:** k3s may regenerate `coredns.yaml` from its embedded template, wiping the edit. Re-check with the verify-loop above; re-inject if needed.
-
-**Long-term cleaner alternative (P3 in improvement-plan):** add `--disable=coredns` to k3s server config, deploy CoreDNS via Flux/Helm with our own values. Removes the need for node-local file edits entirely.
+**If CoreDNS is at 1 replica:** check the autoscaler pod first — if it's
+gone, Flux (kustomization `infrastructure-configs`) should recreate it; the
+scale fixes itself once the CPA runs. Never patch the coredns Deployment
+directly; the fix won't stick and the CPA makes it unnecessary.
 
 ---
 
