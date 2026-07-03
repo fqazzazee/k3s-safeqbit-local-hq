@@ -248,6 +248,15 @@ spec:
         spec:
           serviceAccountName: backup-summary-report
           restartPolicy: Never
+          # ndots:1 so hooks.slack.com resolves as an absolute name. The
+          # cluster default (ndots:5 + local.safeqbit.com search domain)
+          # breaks multi-dot names under musl resolvers (python:alpine) —
+          # the Slack post failed with "Name has no usable address". The
+          # k8s API needs no DNS at all (contacted by ClusterIP).
+          dnsConfig:
+            options:
+              - name: ndots
+                value: "1"
           containers:
             - name: report
               # Stdlib-only script; pinned digest-stable minor tag.
