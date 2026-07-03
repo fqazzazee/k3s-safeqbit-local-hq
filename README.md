@@ -144,8 +144,8 @@ Everything else, Kubernetes places wherever it fits.
 
 ### Networking
 
-The three nodes don't just plug into the home router - they sit on a purpose-built
-network designed the same way you'd lay one out in a small datacenter.
+The three nodes don't just plug into the home router. They sit on a purpose-built
+network segment.
 
 | Gear | Role |
 |---|---|
