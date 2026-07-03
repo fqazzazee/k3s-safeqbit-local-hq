@@ -86,15 +86,16 @@ All Velero schedules use `snapshotMoveData: true`, which:
 
 | Schedule | Cron | Days | TTL | Namespace |
 |---|---|---|---|---|
-| `affine-weekly` | `0 3 * * 0` | Sundays 03:00 | 180d | affine |
-| `netbox-weekly` | `0 3 * * 3` | Wednesdays 03:00 | 180d | netbox |
-| `authentik-bimonthly` | `0 3 5,20 * *` | 5th + 20th 03:00 | 180d | authentik |
+| `immich-bimonthly` | `30 3 1,16 * *` | 1st + 16th 03:30 | 60d | immich |
+| `affine-weekly` | `0 3 * * 0` | Sundays 03:00 | 60d | affine |
+| `netbox-weekly` | `0 3 * * 3` | Wednesdays 03:00 | 60d | netbox |
+| `authentik-bimonthly` | `0 3 5,20 * *` | 5th + 20th 03:00 | 90d | authentik |
 | `vaultwarden-bimonthly` | `0 3 7,22 * *` | 7th + 22nd 03:00 | 180d | vaultwarden |
-| `monitoring-bimonthly` | `0 3 9,24 * *` | 9th + 24th 03:00 | 180d | monitoring |
-| `passzilla-bimonthly` | `0 3 11,26 * *` | 11th + 26th 03:00 | 180d | passzilla |
-| `photoprism-bimonthly` | `0 3 13,28 * *` | 13th + 28th 03:00 | 180d | photoprism |
-| `uptime-kuma-weekly` | `0 4 * * 0` | Sundays 04:00 | 180d | uptime-kuma |
-| `pulse-weekly` | `0 5 * * 0` | Sundays 05:00 | 180d | pulse |
+| `monitoring-bimonthly` | `0 3 9,24 * *` | 9th + 24th 03:00 | 60d | monitoring |
+| `passzilla-bimonthly` | `0 3 11,26 * *` | 11th + 26th 03:00 | 28d | passzilla |
+| `photoprism-bimonthly` | `0 3 13,28 * *` | 13th + 28th 03:00 | 60d | photoprism |
+| `uptime-kuma-weekly` | `0 4 * * 0` | Sundays 04:00 | 60d | uptime-kuma |
+| `pulse-weekly` | `0 5 * * 0` | Sundays 05:00 | 60d | pulse |
 | `guacamole-bimonthly` | `30 4 8,23 * *` | 8th + 23rd 04:30 | 28d (keep last 2) | guacamole |
 
 **Source of truth:** `infrastructure/safeqbit-local-hq/configs/velero-schedule-*.yaml`
@@ -123,6 +124,12 @@ rule skips any NFS-sourced volume. Rationale:
   or `/mnt/mach2/mach2nas/Media` (static). **Both datasets must stay covered
   by the TrueNAS snapshot/replication/cloud tasks — verify when changing NAS
   config.**
+
+**CNPG replica PVCs are skipped (2026-07-03).** The volume policy skips any
+PVC labeled `cnpg.io/instanceRole: replica` — primary and replica are
+near-identical, so uploading both doubled every DB backup. The operator keeps
+the label current across switchovers; restores bring back the primary and CNPG
+rebuilds the replica from it.
 
 **Namespaces NOT backed up by Velero:**
 
@@ -293,6 +300,7 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | 2026-05-27 | CNPG ScheduledBackup cron bug fixed (5-field → 6-field). Velero kopia maintenance bumped from 1h → 168h. Manually pruned 119 stale authentik Backup CRs to dodge 250-snapshot cap. |
 | 2026-05-28 | P2.1 + P2.2 - full schedule rewrite. Killed `daily-everything` + `weekly-everything`. Per-workload bi-monthly stagger introduced. TTL uniform 180d. CNPG ScheduledBackups added for netbox-cnpg and grafana-cnpg. `cnpg-backup-retention` CronJob deployed. |
 | 2026-05-29 | P2.5 - alerts on Velero backup failures, Longhorn snapshot-count approach to 250 cap, CNPG replication lag/exporter health. Added ServiceMonitors for Longhorn (was unscraped) and Velero (was unscraped). |
+| 2026-07-03 | B2 tuning round 2. (1) immich-bimonthly schedule added — immich had NO backup (plain-Deployment postgres, no CNPG layer; ~470MB) — 1st+16th 03:30, 60d TTL, model-cache PVC excluded via label. (2) CNPG replica PVCs skipped via pvcLabels volume policy (halves DB upload churn). (3) TTLs tuned per workload: 180d→60d for netbox/affine/monitoring/photoprism/uptime-kuma/pulse, 180d→90d authentik, 180d→28d passzilla; vaultwarden stays 180d (tiny + critical), guacamole stays 28d/keep-2. Existing Backup CRs keep their original 180d expirations; only new backups get the shorter TTLs. |
 | 2026-07-03 | Prometheus TSDB excluded from Velero (volume policy: skip ≥20Gi; only other ≥20Gi volume is guacamole-recordings, already NFS-skipped). Metrics history = accepted DR loss. Unblocks monitoring-bimonthly going fully green on 07-09 without blowing the B2 10GiB free tier (bucket at ~2.8GiB). Same day: BSL polling cut 1m→1h (B2 Class C cap emails), Velero success notifications + weekly Slack backup digest added, netbox-housekeeping CronJob unwedged (image script never exits; now runs manage.py directly + activeDeadlineSeconds). |
 | 2026-07-03 | NFS volume policy. All 10 Velero Schedules now reference the `velero-volume-policy` ConfigMap (skip all NFS volumes). Ends the standing PartiallyFailed status on netbox/authentik/guacamole/monitoring/photoprism backups — NFS data was never actually uploaded, only errored. NFS protection = TrueNAS (ZFS snapshots + inter-NAS replication + NAS cloud backup). Documented the copy-back-into-new-subdir step for NFS data after a Velero restore. Known residual: monitoring Longhorn DataUploads (Prometheus TSDB) still failing — scoping decision pending; grafana-cnpg PVCs still redundantly uploaded by Velero alongside CNPG snapshots. |
 | 2026-06-28 | Incident response. (1) `cnpg-backup-retention` was `ImagePullBackOff` ~30d (`bitnami/kubectl:1.34` removed from Docker Hub) → repinned to `alpine/k8s:1.34.1`; ran a manual prune (authentik 176→10). (2) `monitoring-default-kopia` was uninitialized → monitoring DataUploads PartiallyFailed ~6 weeks; fixed by deleting the stale `BackupRepository` CR to force re-init. (3) Longhorn scheduling ceiling (over-provisioning 100%) blocked all data-mover temp volumes after a Prometheus PVC expansion; reclaimed orphaned `sra-dev-demo` ns, then grew each node's sdb 150→250 GiB (`xfs_growfs`). (4) Added `LonghornNodeSchedulingCeiling` + self-healing `VeleroBackupPartiallyFailed` alerts; removed orphan `pangolin-bimonthly`. Full runbooks in [maintenance.md](maintenance.md). |
