@@ -105,6 +105,8 @@ spec:
                   prune affine      30    # daily × ~1 month
                   prune netbox      30    # daily × ~1 month
                   prune monitoring  30    # daily × ~1 month (grafana-cnpg)
+                  prune guacamole   10    # weekly × ~10 weeks (was missing;
+                                          # backups grew unbounded since 06-05)
 
                   echo "done"
               resources:
