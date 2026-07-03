@@ -1,0 +1,267 @@
+# backup-summary-report.yaml
+# Weekly Slack digest of backup health: one message with every Velero
+# schedule and CNPG ScheduledBackup — last run status, next run, backup
+# counts, retention — plus warnings for anything missed, failed, or stale.
+#
+# Runs Mondays 08:00 America/New_York in the monitoring namespace (so it can
+# reuse the alertmanager-slack-webhook SealedSecret; SealedSecrets are
+# namespace-scoped). Reads velero.io and postgresql.cnpg.io resources
+# cluster-wide via a read-only ClusterRole.
+#
+# Manual run:
+#   kubectl -n monitoring create job --from=cronjob/backup-summary-report report-now
+#
+# Local test (prints instead of posting):
+#   kubectl proxy &
+#   API_BASE=http://127.0.0.1:8001 DRY_RUN=1 python3 <script below>
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-summary-report
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-summary-report
+rules:
+  - apiGroups: ["velero.io"]
+    resources: ["schedules", "backups"]
+    verbs: ["get", "list"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["scheduledbackups", "backups"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backup-summary-report
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: backup-summary-report
+subjects:
+  - kind: ServiceAccount
+    name: backup-summary-report
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-summary-report-script
+  namespace: monitoring
+data:
+  report.py: |
+    #!/usr/bin/env python3
+    """Post a one-message Slack digest of Velero + CNPG backup health."""
+    import json, os, ssl, sys, time, urllib.error, urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    API_BASE = os.environ.get("API_BASE", "https://kubernetes.default.svc")
+    NOW = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+
+    # Keep in sync with the `prune` lines in cnpg-backup-retention.yaml.
+    CNPG_KEEP = {"authentik": 10, "affine": 30, "netbox": 30,
+                 "monitoring": 30, "guacamole": 10}
+
+    def api(path):
+        req = urllib.request.Request(API_BASE + path)
+        ctx = None
+        if API_BASE.startswith("https"):
+            tok = open(f"{SA}/token").read()
+            req.add_header("Authorization", f"Bearer {tok}")
+            ctx = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+        # Retry 429/5xx: API priority-and-fairness throttles bursts of
+        # list calls; transient by design.
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                if e.code not in (429, 500, 503) or attempt == 4:
+                    raise
+                time.sleep(2 * (attempt + 1))
+
+    # --- minimal 5-field cron (UTC): supports "*", "a,b", "*/n", plain ints
+    def _match(field, val, base=0):
+        if field == "*":
+            return True
+        for part in field.split(","):
+            if part.startswith("*/"):
+                if (val - base) % int(part[2:]) == 0:
+                    return True
+            elif int(part) == val or (int(part) == 7 and val == 0):
+                return True  # dow 7 == Sunday == 0
+        return False
+
+    def _cron_hits(cron, t):
+        m, h, dom, mon, dow = cron.split()
+        return (_match(m, t.minute) and _match(h, t.hour)
+                and _match(mon, t.month, 1)
+                # standard cron: dom and dow are OR'd when both restricted
+                and ((_match(dom, t.day, 1) and dom != "*") or
+                     (_match(dow, t.isoweekday() % 7) and dow != "*") or
+                     (dom == "*" and dow == "*")))
+
+    def cron_next(cron, frm=NOW):
+        t = frm + timedelta(minutes=1)
+        for _ in range(60 * 24 * 35):
+            if _cron_hits(cron, t):
+                return t
+            t += timedelta(minutes=1)
+        return None
+
+    def cron_prev(cron, frm=NOW):
+        t = frm
+        for _ in range(60 * 24 * 35):
+            if _cron_hits(cron, t):
+                return t
+            t -= timedelta(minutes=1)
+        return None
+
+    def ts(s):
+        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+    def fmt(dt):
+        return dt.strftime("%m-%d %H:%M") if dt else "never"
+
+    warnings = []
+
+    # ---------------- Velero ----------------
+    schedules = api("/apis/velero.io/v1/namespaces/velero/schedules")["items"]
+    backups = api("/apis/velero.io/v1/namespaces/velero/backups")["items"]
+    PHASE = {"Completed": "OK", "PartiallyFailed": "PARTIAL", "Failed": "FAIL",
+             "InProgress": "RUNNING", "FailedValidation": "BADCFG"}
+    vrows = []
+    for s in sorted(schedules, key=lambda x: x["metadata"]["name"]):
+        name, cron = s["metadata"]["name"], s["spec"]["schedule"]
+        mine = [b for b in backups if b["metadata"].get("labels", {})
+                .get("velero.io/schedule-name") == name]
+        mine.sort(key=lambda b: b["status"].get("startTimestamp", ""))
+        last = mine[-1] if mine else None
+        last_t = ts(last["status"]["startTimestamp"]) if last and \
+            last["status"].get("startTimestamp") else None
+        phase = PHASE.get(last["status"].get("phase", "?"), "?") if last else "-"
+        ttl_h = int(s["spec"]["template"].get("ttl", "720h0m0s").split("h")[0])
+        nxt, prev = cron_next(cron), cron_prev(cron)
+        created = ts(s["metadata"]["creationTimestamp"])
+        if s["spec"].get("paused"):
+            phase = "PAUSED"
+            warnings.append(f":warning: `{name}` is PAUSED — no backups run.")
+        # missed = most recent expected fire produced no backup (2h grace).
+        # A fire slot older than the schedule itself doesn't count (a
+        # young schedule hasn't had its first run yet).
+        elif prev and prev > created and NOW > prev + timedelta(hours=2) and \
+                (not last_t or last_t < prev - timedelta(minutes=5)):
+            warnings.append(
+                f":warning: `{name}` MISSED its {fmt(prev)} run "
+                f"(last actual: {fmt(last_t)}). Next try: {fmt(nxt)} UTC.")
+        ok = [b for b in mine if b["status"].get("phase") == "Completed"]
+        if phase in ("PARTIAL", "FAIL", "BADCFG"):
+            since = fmt(ts(ok[-1]["status"]["startTimestamp"])) if ok else "never"
+            warnings.append(
+                f":warning: `{name}` last run {phase}; last full success: "
+                f"{since}. Effect: k8s objects/volumes restore only from that "
+                f"point. Next try: {fmt(nxt)} UTC.")
+        vrows.append(f"{name:<22} {fmt(last_t):<12} {phase:<8} "
+                     f"{fmt(nxt):<12} {len(mine):>3}  {ttl_h // 24}d")
+
+    # ---------------- CNPG ----------------
+    sbs = api("/apis/postgresql.cnpg.io/v1/scheduledbackups")["items"]
+    cbs = api("/apis/postgresql.cnpg.io/v1/backups")["items"]
+    crows = []
+    for s in sorted(sbs, key=lambda x: x["metadata"]["namespace"]):
+        ns, cluster = s["metadata"]["namespace"], s["spec"]["cluster"]["name"]
+        cron = " ".join(s["spec"]["schedule"].split()[1:])  # drop seconds field
+        mine = [b for b in cbs if b["metadata"]["namespace"] == ns
+                and b["spec"]["cluster"]["name"] == cluster]
+        mine.sort(key=lambda b: b["metadata"]["creationTimestamp"])
+        last = mine[-1] if mine else None
+        last_t = ts(last["metadata"]["creationTimestamp"]) if last else None
+        phase = {"completed": "OK", "failed": "FAIL"}.get(
+            last["status"].get("phase", "?") if last else "-", "...")
+        nxt, prev = cron_next(cron), cron_prev(cron)
+        keep = CNPG_KEEP.get(ns)
+        created = ts(s["metadata"]["creationTimestamp"])
+        if phase == "FAIL":
+            warnings.append(f":warning: CNPG `{cluster}` last backup FAILED. "
+                            f"Next try: {fmt(nxt)} UTC.")
+        if prev and prev > created and NOW > prev + timedelta(hours=2) and \
+                (not last_t or last_t < prev - timedelta(minutes=5)):
+            warnings.append(f":warning: CNPG `{cluster}` MISSED its "
+                            f"{fmt(prev)} run. Next try: {fmt(nxt)} UTC.")
+        crows.append(f"{cluster:<22} {fmt(last_t):<12} {phase:<8} "
+                     f"{fmt(nxt):<12} {len(mine):>3}  "
+                     f"{'keep ' + str(keep) if keep else '-'}")
+
+    hdr = f"{'SCHEDULE':<22} {'LAST':<12} {'STATUS':<8} {'NEXT(UTC)':<12} {'#':>3}  RETAIN"
+    msg = (f":floppy_disk: *Backup summary — {NOW.strftime('%Y-%m-%d %H:%M')} UTC*\n"
+           f"*Velero → B2* (namespace objects + Longhorn volumes; NFS = TrueNAS)\n"
+           f"```\n{hdr}\n" + "\n".join(vrows) + "\n```\n"
+           f"*CNPG snapshots* (postgres, local Longhorn; pruned daily 05:00 UTC)\n"
+           f"```\n{hdr}\n" + "\n".join(crows) + "\n```\n")
+    msg += ("\n".join(warnings) if warnings
+            else ":white_check_mark: All schedules on time, nothing missed.")
+
+    if os.environ.get("DRY_RUN"):
+        print(msg)
+        sys.exit(0)
+    req = urllib.request.Request(
+        os.environ["SLACK_WEBHOOK_URL"],
+        data=json.dumps({"text": msg}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        body = r.read().decode()
+        if body != "ok":
+            print(f"slack post failed: {body}", file=sys.stderr)
+            sys.exit(1)
+    print("report posted")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-summary-report
+  namespace: monitoring
+spec:
+  schedule: "0 8 * * 1"
+  timeZone: America/New_York
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Hard stop so a hung job can never wedge the schedule (see the
+      # netbox-housekeeping incident: stuck Active job + Forbid = silently
+      # never runs again).
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: backup-summary-report
+          restartPolicy: Never
+          containers:
+            - name: report
+              # Stdlib-only script; pinned digest-stable minor tag.
+              image: python:3.13-alpine
+              command: ["python3", "/scripts/report.py"]
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: alertmanager-slack-webhook
+                      key: webhook-url
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+          volumes:
+            - name: script
+              configMap:
+                name: backup-summary-report-script
