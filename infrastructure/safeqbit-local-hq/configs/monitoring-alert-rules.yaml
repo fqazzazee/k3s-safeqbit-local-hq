@@ -160,3 +160,17 @@ spec:
           annotations:
             summary: "Velero schedule {{ $labels.schedule }} partially failed (no full success since)"
             description: "Schedule {{ $labels.schedule }} had a PartiallyFailed backup in the last 16d and has not had a fully successful backup since — volume data was likely NOT captured. Check its DataUploads and BackupRepository in namespace velero. Clears automatically once a backup fully succeeds."
+
+        - alert: VeleroBackupSucceeded
+          # Positive confirmation, not a problem alert. The counter only
+          # increments on a FULLY successful backup (PartiallyFailed and
+          # Failed have their own counters), so this is a true all-clear.
+          # Fires as severity=info for the life of the 45m window; the
+          # Alertmanager info route delivers exactly one Slack message per
+          # event (send_resolved: false) and the alert then resolves silently.
+          expr: increase(velero_backup_success_total{schedule!=""}[45m]) > 0
+          labels:
+            severity: info
+          annotations:
+            summary: "Velero backup completed: {{ $labels.schedule }}"
+            description: "Schedule {{ $labels.schedule }} finished a fully successful backup (all volume data uploaded to B2)."

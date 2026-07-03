@@ -233,6 +233,14 @@ spec:
             - matchers:
                 - alertname = "Watchdog"
               receiver: 'null'
+            # Info = positive confirmations (e.g. VeleroBackupSucceeded).
+            # One message per event: no resolved follow-up, and repeat_interval
+            # far exceeds the alert's firing window so it never re-sends.
+            - matchers:
+                - severity = "info"
+              receiver: 'slack-info'
+              group_wait: 1m
+              repeat_interval: 24h
             # Critical → fire faster
             - matchers:
                 - severity = "critical"
@@ -255,6 +263,14 @@ spec:
                   *Summary:* {{ .Annotations.summary }}
                   *Description:* {{ .Annotations.description }}
                   {{ if .Annotations.runbook_url }}*Runbook:* {{ .Annotations.runbook_url }}{{ end }}
+                  {{ end }}
+          - name: 'slack-info'
+            slack_configs:
+              - send_resolved: false
+                title: '✅ {{ .CommonLabels.alertname }}'
+                text: |-
+                  {{ range .Alerts -}}
+                  {{ .Annotations.summary }}
                   {{ end }}
     prometheus-windows-exporter:
       enabled: false
