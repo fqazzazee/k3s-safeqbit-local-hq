@@ -179,11 +179,12 @@ spec:
             memory: 64Mi
           limits:
             memory: 256Mi
-      # Mount the Slack webhook from a SealedSecret so it never lands in git
-      # or Helm history. Referenced in alertmanager config below as `$(SLACK_WEBHOOK_URL)`.
-      # See configs/alertmanager-slack.yaml for the SealedSecret stub.
-      secrets:
-        - alertmanager-slack-webhook
+        # Mount the Slack webhook from a SealedSecret so it never lands in git
+        # or Helm history. Must live under alertmanagerSpec (not alertmanager:)
+        # or the chart silently ignores it and nothing is mounted.
+        # See configs/alertmanager-slack.yaml for the SealedSecret stub.
+        secrets:
+          - alertmanager-slack-webhook
       # Inline Alertmanager configuration. The chart will template this into
       # the `alertmanager-monitoring-kube-prometheus-alertmanager` Secret.
       config:
