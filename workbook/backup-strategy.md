@@ -206,21 +206,29 @@ Not on any schedule directly; populated by:
 
 ## Layer 0 - etcd snapshots to B2 (control plane)
 
-**Added 2026-07-03 (P1.2).** k3s takes an etcd snapshot every 12h (00:00/12:00
-UTC) on each of the 3 server nodes and — via `etcd-s3` config — uploads each
-to B2 as well. etcd is the cluster's full state: every object, PVC binding,
+**Added 2026-07-03 (P1.2).** k3s takes an etcd snapshot **weekly (Sunday
+00:00 UTC)** on each of the 3 server nodes and — via `etcd-s3` config —
+uploads each to B2 as well. Weekly is deliberate: this is the THIRD recovery
+layer (git/Flux → Proxmox VM backups of the server VMs → etcd-s3), and the
+one irreplaceable item (the sealed-secrets private key) never changes. Note
+the VM-backup layer restores etcd awkwardly (single restored VM = stale etcd
+member needing manual rejoin; all three from different moments = quorum
+mess) — the etcd snapshot stays the clean cluster-state restore path. etcd is the cluster's full state: every object, PVC binding,
 and critically the **sealed-secrets private key** (exists only in etcd; without
 it every SealedSecret in this repo is undecryptable).
 
 - **Bucket:** `k3s-safeqbit-etcd` (separate from the Velero bucket, with an
   application key scoped to it alone — the Velero credentials cannot touch
-  etcd snapshots and vice versa). Lifecycle must stay "keep only last version"
-  or k3s's pruning leaves hidden versions accumulating forever.
+  etcd snapshots and vice versa).
 - **Config:** `/etc/rancher/k3s/config.yaml` on each server node (root-only,
   0600 — contains the B2 key, deliberately NOT in git). Fields: `etcd-s3: true`,
   endpoint/region `s3.us-east-005.backblazeb2.com`/`us-east-005`, bucket,
-  `etcd-s3-folder: snapshots`, `etcd-snapshot-retention: 10` (~5 days x 3
-  nodes x ~30-120MB ≈ 2-3GB).
+  `etcd-s3-folder: snapshots`, `etcd-snapshot-retention: 8` (8 weeks of
+  weekly snapshots per node), `etcd-snapshot-schedule-cron: "0 0 * * 0"`.
+- **Bucket lifecycle:** "keep prior versions for 30 days" — k3s pruning
+  deletes ~3 objects/week; the 30-day hidden tail (~1GB) makes any deletion
+  done with the node-side key undoable from the B2 console (account creds,
+  not the stolen key) for a month. Steady state ≈ 2GB live + 1GB tail.
 - **Verify:** `kubectl get etcdsnapshotfiles | grep s3://` — S3-flavored
   records appear next to the `file://` ones after each scheduled snapshot.
   On-demand test: `sudo k3s etcd-snapshot save` on any server node.
