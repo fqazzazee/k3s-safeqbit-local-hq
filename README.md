@@ -441,7 +441,7 @@ learn.
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
 | [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine |
-| [Pulse](https://github.com/rcourtman/Pulse) | Single-pane-of-glass monitoring for the Proxmox hosts, this k3s cluster, and the Docker host |
+| [Pulse](https://github.com/rcourtman/Pulse) | Single-pane-of-glass monitoring for the Proxmox hosts, this k3s cluster, and my legacy Docker host environment |
 
 ### Platform components (the plumbing)
 
