@@ -1,0 +1,257 @@
+# cluster-summary-report.yaml
+# Daily 09:00 ET Slack digest of overall cluster health: nodes (CPU/mem),
+# workload readiness + restarts, Longhorn storage + volume health, PVCs
+# nearing full, per-node network volume, Velero activity in the last 24h,
+# and currently-firing alerts.
+#
+# Everything comes from Prometheus (kube-state-metrics, node-exporter,
+# Longhorn, Velero are all already scraped) — no RBAC needed at all; the
+# job only talks to the Prometheus service and the Slack webhook.
+# Companion to backup-summary-report.yaml (Mondays 08:00 ET, backup deep-dive).
+#
+# Not included (not scraped today): ingress-nginx request/error rates,
+# cert-manager expiry. Add ServiceMonitors first if ever wanted.
+#
+# Manual run:
+#   kubectl -n monitoring create job --from=cronjob/cluster-summary-report summary-now
+#
+# Local test (prints instead of posting):
+#   PROM_BASE=https://prometheus.local.safeqbit.com DRY_RUN=1 python3 <script>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-summary-report-script
+  namespace: monitoring
+data:
+  report.py: |
+    #!/usr/bin/env python3
+    """Post a one-message Slack digest of daily cluster health."""
+    import json, os, sys, urllib.parse, urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    # Trailing dot = absolute name; survives the cluster's ndots/search-domain
+    # quirks under musl (see project DNS notes).
+    PROM = os.environ.get(
+        "PROM_BASE",
+        "http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local.:9090")
+    NOW = datetime.now(timezone.utc)
+
+    def promq(q):
+        url = f"{PROM}/api/v1/query?query={urllib.parse.quote(q, safe='')}"
+        with urllib.request.urlopen(url, timeout=30) as r:
+            d = json.load(r)
+        if d.get("status") != "success":
+            raise RuntimeError(f"promql failed: {q[:60]}")
+        return d["data"]["result"]
+
+    def val(r):
+        return float(r["value"][1])
+
+    def human(n):
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if abs(n) < 1024 or unit == "TiB":
+                return f"{n:,.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+            n /= 1024
+
+    def to_et(dt):
+        def nth_sunday(month, n):
+            first = datetime(dt.year, month, 1, tzinfo=timezone.utc)
+            return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+        dst_start = nth_sunday(3, 2).replace(hour=7)
+        dst_end = nth_sunday(11, 1).replace(hour=6)
+        return dt - timedelta(hours=4 if dst_start <= dt < dst_end else 5)
+
+    sections = []
+
+    def section(title, build):
+        """Each section is independent — one broken query must not kill the report."""
+        try:
+            sections.append(build())
+        except Exception as e:
+            sections.append(f"{title}: :grey_question: data unavailable ({type(e).__name__})")
+
+    # ---------- Nodes ----------
+    def nodes():
+        ready = {r["metric"]["node"] for r in promq(
+            'kube_node_status_condition{condition="Ready",status="true"} == 1')}
+        allnodes = {r["metric"]["node"] for r in promq("kube_node_info")}
+        cpu = {r["metric"]["nodename"]: val(r) for r in promq(
+            '100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[10m])))'
+            ' * on(instance) group_left(nodename) node_uname_info')}
+        mem = {r["metric"]["nodename"]: val(r) for r in promq(
+            '100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)'
+            ' * on(instance) group_left(nodename) node_uname_info')}
+        lines = [f"*Nodes* ({len(ready)}/{len(allnodes)} Ready)"]
+        for n in sorted(allnodes):
+            icon = ":white_check_mark:" if n in ready else ":x:"
+            lines.append(f"{icon} *{n}* — CPU {cpu.get(n, 0):.0f}% · mem {mem.get(n, 0):.0f}%")
+        return "\n".join(lines)
+    section("*Nodes*", nodes)
+
+    # ---------- Workloads ----------
+    def workloads():
+        n_dep = int(val(promq("count(kube_deployment_spec_replicas)")[0]))
+        n_sts = int(val(promq("count(kube_statefulset_replicas)")[0]))
+        n_ds = int(val(promq("count(kube_daemonset_status_desired_number_scheduled)")[0]))
+        bad = []
+        for r in promq("kube_deployment_status_replicas_available < kube_deployment_spec_replicas"):
+            m = r["metric"]
+            bad.append(f"deploy {m['namespace']}/{m['deployment']}")
+        for r in promq("kube_statefulset_status_replicas_ready < kube_statefulset_replicas"):
+            m = r["metric"]
+            bad.append(f"sts {m['namespace']}/{m['statefulset']}")
+        for r in promq("kube_daemonset_status_number_ready < kube_daemonset_status_desired_number_scheduled"):
+            m = r["metric"]
+            bad.append(f"ds {m['namespace']}/{m['daemonset']}")
+        stuck = [f"{r['metric']['namespace']}/{r['metric']['pod']} ({r['metric']['phase']})"
+                 for r in promq('kube_pod_status_phase{phase=~"Pending|Failed|Unknown"} == 1')]
+        restarts = sorted(
+            ((r["metric"]["namespace"], r["metric"]["pod"], val(r)) for r in promq(
+                "sum by (namespace,pod) (increase(kube_pod_container_status_restarts_total[24h])) > 0.5")),
+            key=lambda x: -x[2])
+        lines = [f"*Workloads* ({n_dep} deployments · {n_sts} statefulsets · {n_ds} daemonsets)"]
+        if not bad and not stuck:
+            lines.append(":white_check_mark: all fully available, no stuck pods")
+        for b in bad[:8]:
+            lines.append(f":warning: {b} below desired replicas")
+        for p in stuck[:5]:
+            lines.append(f":warning: pod {p}")
+        if restarts:
+            top = " · ".join(f"{ns}/{p} ×{int(c)}" for ns, p, c in restarts[:4])
+            lines.append(f":arrows_counterclockwise: restarts last 24h: {top}")
+        else:
+            lines.append(":white_check_mark: zero container restarts in 24h")
+        return "\n".join(lines)
+    section("*Workloads*", workloads)
+
+    # ---------- Storage ----------
+    def storage():
+        usage = {r["metric"].get("node", "?"): val(r) for r in promq("longhorn_node_storage_usage_bytes")}
+        cap = {r["metric"].get("node", "?"): val(r) for r in promq("longhorn_node_storage_capacity_bytes")}
+        states = {}
+        for r in promq("count by (state) (longhorn_volume_robustness == 1)"):
+            states[r["metric"]["state"]] = int(val(r))
+        vol_bits = " · ".join(f"{v} {k}" for k, v in sorted(states.items()))
+        healthy_only = set(states) <= {"healthy"}
+        icon = ":white_check_mark:" if healthy_only else ":warning:"
+        lines = [f"*Storage* — Longhorn volumes: {icon} {vol_bits}"]
+        for n in sorted(cap):
+            pct = 100 * usage.get(n, 0) / cap[n] if cap[n] else 0
+            lines.append(f"• {n}: {human(usage.get(n, 0))} / {human(cap[n])} ({pct:.0f}%)")
+        full = sorted(((r["metric"]["namespace"], r["metric"]["persistentvolumeclaim"], val(r))
+                       for r in promq(
+            "kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.8")),
+            key=lambda x: -x[2])
+        for ns, pvc, frac in full[:5]:
+            lines.append(f":warning: PVC {ns}/{pvc} at {frac * 100:.0f}%")
+        return "\n".join(lines)
+    section("*Storage*", storage)
+
+    # ---------- Network ----------
+    def network():
+        phys = 'device=~"en.*|eth.*"'
+        rx = {r["metric"]["nodename"]: val(r) for r in promq(
+            f"sum by (nodename) (increase(node_network_receive_bytes_total{{{phys}}}[24h])"
+            " * on(instance) group_left(nodename) node_uname_info)")}
+        tx = {r["metric"]["nodename"]: val(r) for r in promq(
+            f"sum by (nodename) (increase(node_network_transmit_bytes_total{{{phys}}}[24h])"
+            " * on(instance) group_left(nodename) node_uname_info)")}
+        lines = ["*Network* (24h per node, physical NICs)"]
+        for n in sorted(rx):
+            lines.append(f"• {n}: ↓ {human(rx[n])} · ↑ {human(tx.get(n, 0))}")
+        return "\n".join(lines)
+    section("*Network*", network)
+
+    # ---------- Backups (24h) ----------
+    def backups():
+        def cnt(q):
+            r = promq(q)
+            return int(sum(val(x) for x in r))
+        ok = cnt("sum(increase(velero_backup_success_total[24h]))")
+        part = cnt("sum(increase(velero_backup_partial_failure_total[24h]))")
+        fail = cnt("sum(increase(velero_backup_failure_total[24h]))")
+        if ok + part + fail == 0:
+            body = "no Velero runs scheduled in the last 24h"
+        else:
+            bits = [f"{ok} ok"] + ([f"{part} partial"] if part else []) + ([f"{fail} failed"] if fail else [])
+            body = " · ".join(bits)
+        icon = ":white_check_mark:" if part + fail == 0 else ":warning:"
+        return f"*Backups (24h)* — {icon} {body} _(full digest: Mondays 08:00)_"
+    section("*Backups*", backups)
+
+    # ---------- Firing alerts ----------
+    def alerts():
+        firing = promq('count by (alertname, severity) (ALERTS{alertstate="firing", alertname!="Watchdog"})')
+        if not firing:
+            return "*Alerts* — :white_check_mark: nothing firing"
+        lines = [f"*Alerts* — :rotating_light: {len(firing)} firing"]
+        for r in sorted(firing, key=lambda x: x["metric"].get("severity", "")):
+            m = r["metric"]
+            lines.append(f"• {m.get('severity', '?')}: {m['alertname']} ×{int(val(r))}")
+        return "\n".join(lines)
+    section("*Alerts*", alerts)
+
+    msg = (f":clipboard: *Cluster daily summary — "
+           f"{to_et(NOW).strftime('%a %Y-%m-%d %H:%M')} ET*\n\n"
+           + "\n\n".join(sections))
+
+    if os.environ.get("DRY_RUN"):
+        print(msg)
+        sys.exit(0)
+    req = urllib.request.Request(
+        os.environ["SLACK_WEBHOOK_URL"],
+        data=json.dumps({"text": msg}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        if r.read().decode() != "ok":
+            sys.exit(1)
+    print("report posted")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cluster-summary-report
+  namespace: monitoring
+spec:
+  schedule: "0 9 * * *"
+  timeZone: America/New_York
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: Never
+          # ndots:1 so hooks.slack.com resolves absolutely under musl; the
+          # Prometheus URL uses a trailing-dot FQDN for the same reason.
+          dnsConfig:
+            options:
+              - name: ndots
+                value: "1"
+          containers:
+            - name: report
+              image: python:3.13-alpine
+              command: ["python3", "/scripts/report.py"]
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: alertmanager-slack-webhook
+                      key: webhook-url
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+          volumes:
+            - name: script
+              configMap:
+                name: cluster-summary-report-script
