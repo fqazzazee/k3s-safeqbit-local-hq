@@ -94,7 +94,18 @@ cleared the standing `KubePdbNotEnoughHealthyPods` alert.
 
 ## P1 - Single point of failure
 
-### ☐ P1.2 Ship etcd snapshots off-cluster
+### ☑ P1.2 Ship etcd snapshots off-cluster
+
+**Closed:** 2026-07-03 - option 1 (k3s native `etcd-s3`) to a **dedicated** B2
+bucket `k3s-safeqbit-etcd` with an application key scoped to that bucket only
+(blast-radius separation from the Velero credentials). Config appended to
+`/etc/rancher/k3s/config.yaml` on all 3 server nodes (root-only 0600, key not
+in git), rolling `systemctl restart k3s` with zero workload impact — and the
+restarts doubled as the first live validation that the CoreDNS autoscaler
+(P0.2) survives a k3s Addon re-apply. Weekly (Sun 00:00 UTC), retention 8 per node
+≈ 8 weeks of reach-back ≈ 2GB live + ~1GB lifecycle tail. Verified end-to-end with an on-demand `k3s etcd-snapshot
+save` → `s3://k3s-safeqbit-etcd/snapshots/…` record. Full doc: backup-strategy.md
+"Layer 0". Frequency reduced to weekly same day (VM backups of the server VMs cover the middle layer); retention 8; bucket lifecycle "keep prior versions 30 days".
 
 **Why:** k3s's default behavior is to take an etcd snapshot every 12 hours and keep 5, stored at `/var/lib/rancher/k3s/server/db/snapshots/` on each control-plane node. All snapshots are local. If the Proxmox host fire/corrupts/ransoms all 3 VMs simultaneously (shared storage, shared host, shared backup snapshot, shared malware), there's no off-cluster recovery point. Without etcd, the entire cluster config is gone - every Deployment, Service, Secret, PV must be reconstructed from the Flux repo, which doesn't include things like SealedSecret-decrypted state, in-cluster CRs etc.
 
