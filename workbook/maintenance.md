@@ -1007,16 +1007,26 @@ traffic through the ingress hostnames is gated.
 port-forward (see *Verifying alerts* below), which bypasses the ingress
 entirely.
 
-Troubleshooting:
+Troubleshooting (both gotchas below were hit live on 2026-07-04):
+- **500 on every page** → `auth-url` MUST hairpin through the ingress
+  hostname (`https://prometheus.local.safeqbit.com/outpost.goauthentik.io/auth/nginx`),
+  NOT `authentik-server.authentik.svc...`. The embedded outpost routes to
+  its proxy by Host header (which nginx sets from the auth-url); with the
+  service DNS the auth subrequest falls through to Django and 404s → nginx
+  turns that into 500. This is also why the Authentik docs show an
+  `auth-snippet` (X-Forwarded-Host) — blocked by our ingress-nginx at
+  default risk settings, hence the hairpin instead.
+- **Login redirect goes to a wrong/old host** → the embedded outpost's
+  `authentik_host` config (Outposts → authentik Embedded Outpost → Edit)
+  builds the OAuth authorize URL. After the Docker→k3s migration it still
+  held `https://10.10.12.29:9443`; it must be
+  `https://authentik01.local.safeqbit.com`.
 - **404 after login redirect** → the application isn't assigned to the
   embedded outpost, or `authentik-outpost-monitoring` Ingress is missing.
 - **Redirect loop** → provider's external host doesn't exactly match the
   ingress hostname (scheme + host, no trailing slash).
 - **502/"upstream sent too big header"** → `proxy-buffer-size: 16k`
   annotation missing on the protected ingress.
-- Deliberately NO `auth-snippet` annotation (Authentik docs show one):
-  our ingress-nginx blocks snippets at default risk settings, and
-  ingress-nginx already sends `X-Original-URL`, which the outpost uses.
 
 ### Verifying alerts
 
