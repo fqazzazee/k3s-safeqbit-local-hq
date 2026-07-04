@@ -1,5 +1,6 @@
 # cluster-slack-bot.yaml
-# On-demand cluster queries from Slack: /cluster summary|backups|pods|nodes|alerts
+# On-demand cluster queries from Slack:
+#   /cluster summary|backups|pods|deploys|nodes|logs|events|top|pvcs|ingresses|alerts
 #
 # Uses Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to Slack and
 # receives slash commands over it. Nothing is exposed inbound — the cluster
@@ -12,11 +13,15 @@
 #     pointed at the slash command's response_url — same report, delivered
 #     to wherever the command was typed (visible only to the invoker).
 #     Zero duplication with the CronJobs.
-#   - `pods` / `nodes` hit the K8s API read-only; `alerts` queries Prometheus.
+#   - The kubectl-style commands hit the K8s API read-only; `alerts` and
+#     `top` query Prometheus.
 #   - STRICTLY read-only RBAC: a compromised Slack token can look, not touch.
 #     No write verbs anywhere, by design — do not add restart/delete commands.
+#   - `logs` ships pod log tails into Slack (ephemeral, invoker-only, but
+#     Slack-hosted) — keep that in mind for apps that log secrets.
 #
-# Secret `cluster-slack-bot-tokens` (SealedSecret below) keys:
+# Secret `cluster-slack-bot-tokens` (SealedSecret in
+# cluster-slack-bot-tokens.yaml) keys:
 #   bot-token  (xoxb-…)  app-token (xapp-…)
 #   allowed-user-ids     optional comma-separated Slack user IDs; empty/absent
 #                        = anyone in the workspace may invoke.
@@ -32,14 +37,20 @@ metadata:
   namespace: monitoring
 
 ---
-# Bot's own permissions: pods + nodes, read-only.
+# Bot's own permissions — read-only, no write verbs.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: cluster-slack-bot
 rules:
   - apiGroups: [""]
-    resources: ["pods", "nodes"]
+    resources: ["pods", "pods/log", "nodes", "events", "persistentvolumeclaims"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
     verbs: ["get", "list"]
 
 ---
@@ -116,27 +127,40 @@ data:
                os.environ.get("ALLOWED_SLACK_USER_IDS", "").split(",") if u.strip()}
     NOW = lambda: datetime.now(timezone.utc)
 
-    USAGE = (":robot_face: *cluster bot* — read-only. Usage:\n"
-             "• `/cluster summary` — the daily health digest, on demand\n"
-             "• `/cluster backups` — the weekly backup digest, on demand (~30s)\n"
-             "• `/cluster pods [namespace]` — pod health, all namespaces or one\n"
-             "• `/cluster nodes` — node readiness, versions, load\n"
-             "• `/cluster alerts` — currently firing Prometheus alerts")
+    USAGE = "\n".join([
+        ":robot_face: *cluster bot* — read-only. Each command with the kubectl you'd type:",
+        "",
+        ":bar_chart: `/cluster summary` — daily health digest, on demand",
+        ":floppy_disk: `/cluster backups` — weekly backup digest (~30s, lists B2)",
+        ":package: `/cluster pods [ns]` — pod health · `kubectl get pods -A` / `-n <ns>`",
+        ":rocket: `/cluster deploys [ns]` — deployments/statefulsets/daemonsets · `kubectl get deploy,sts,ds -A`",
+        ":computer: `/cluster nodes` — readiness, version, CPU · `kubectl get nodes -o wide`",
+        ":scroll: `/cluster logs <ns> <pod> [container] [lines]` — log tail, pod prefix ok · `kubectl logs -n <ns> <pod> --tail=30`",
+        ":zap: `/cluster events [ns]` — recent Warning events · `kubectl get events -A --field-selector type!=Normal`",
+        ":fire: `/cluster top [ns]` — top CPU/memory pods · `kubectl top pods -A`",
+        ":minidisc: `/cluster pvcs [ns]` — volume claims · `kubectl get pvc -A`",
+        ":globe_with_meridians: `/cluster ingresses` — hostname → service map · `kubectl get ingress -A`",
+        ":bell: `/cluster alerts` — firing Prometheus alerts",
+        ":question: `/cluster help` — this list",
+    ])
 
-    def k8s(path):
+    def k8s_raw(path, timeout=30):
         tok = open(f"{SA_DIR}/token").read()
         ctx = ssl.create_default_context(cafile=f"{SA_DIR}/ca.crt")
         req = urllib.request.Request(f"{APISERVER}{path}",
                                      headers={"Authorization": f"Bearer {tok}"})
         for attempt in range(4):
             try:
-                with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
-                    return json.load(r)
+                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                    return r.read().decode(errors="replace")
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 503) and attempt < 3:
                     time.sleep(2 ** attempt)
                     continue
                 raise
+
+    def k8s(path):
+        return json.loads(k8s_raw(path))
 
     def promq(q):
         url = f"{PROM}/api/v1/query?query={urllib.parse.quote(q, safe='')}"
@@ -152,12 +176,24 @@ data:
                                      {"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15)
 
-    def age(ts):
-        d = NOW() - datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    def ts(s):
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return datetime.fromtimestamp(0, timezone.utc)
+
+    def age(s):
+        d = NOW() - ts(s)
         if d.days:
             return f"{d.days}d"
         h = d.seconds // 3600
         return f"{h}h" if h else f"{d.seconds // 60}m"
+
+    def human(n):
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if abs(n) < 1024 or unit == "TiB":
+                return f"{n:,.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+            n /= 1024
 
     # ---------- command implementations ----------
 
@@ -187,6 +223,13 @@ data:
         return (f"{p['metadata']['name']}  {ready}/{len(cs)}  {phase}"
                 f"  {age(p['metadata']['creationTimestamp'])}{r}")
 
+    def healthy(p):
+        return (p["status"].get("phase") in ("Running", "Succeeded")
+                and all(c.get("ready") or
+                        c.get("state", {}).get("terminated", {})
+                         .get("reason") == "Completed"
+                        for c in p["status"].get("containerStatuses", [])))
+
     def pods(rurl, args):
         ns = args[0] if args else None
         path = f"/api/v1/namespaces/{ns}/pods" if ns else "/api/v1/pods"
@@ -194,11 +237,6 @@ data:
         if not items:
             post(rurl, f":shrug: no pods{' in `' + ns + '`' if ns else ''}")
             return
-        healthy = lambda p: (p["status"].get("phase") in ("Running", "Succeeded")
-                             and all(c.get("ready") or
-                                     c.get("state", {}).get("terminated", {})
-                                      .get("reason") == "Completed"
-                                     for c in p["status"].get("containerStatuses", [])))
         bad = [p for p in items if not healthy(p)]
         if ns:
             lines = [f":package: *{ns}* — {len(items)} pods, "
@@ -222,6 +260,36 @@ data:
             lines.append("_`/cluster pods <namespace>` for a full listing_")
         post(rurl, "\n".join(lines))
 
+    def deploys(rurl, args):
+        ns = args[0] if args else None
+        base = f"/apis/apps/v1/namespaces/{ns}" if ns else "/apis/apps/v1"
+        out = []
+        kinds = [("deployments", ":rocket:", "Deployments"),
+                 ("statefulsets", ":moyai:", "StatefulSets"),
+                 ("daemonsets", ":busts_in_silhouette:", "DaemonSets")]
+        for res, icon, title in kinds:
+            items = k8s(f"{base}/{res}")["items"]
+            if not items:
+                continue
+            rows = []
+            for d in items:
+                st, meta = d.get("status", {}), d["metadata"]
+                if res == "daemonsets":
+                    ready, want = st.get("numberReady", 0), st.get("desiredNumberScheduled", 0)
+                else:
+                    ready, want = st.get("readyReplicas", 0) or 0, d["spec"].get("replicas", 0)
+                ok = ready == want and want > 0
+                mark = ":white_check_mark:" if ok else (
+                    ":red_circle:" if ready == 0 else ":warning:")
+                rows.append((not ok, meta["namespace"], meta["name"],
+                             f"{mark} `{meta['namespace']}` *{meta['name']}*  "
+                             f"{ready}/{want}  {age(meta['creationTimestamp'])}"))
+            rows.sort()          # unhealthy first, then ns/name
+            rows.sort(key=lambda r: not r[0])
+            out.append(f"{icon} *{title}* ({len(items)})")
+            out += [r[3] for r in rows[:60]]
+        post(rurl, "\n".join(out) if out else ":shrug: nothing found")
+
     def nodes(rurl, args):
         items = k8s("/api/v1/nodes")["items"]
         load = {}
@@ -229,7 +297,7 @@ data:
             names = {r["metric"]["instance"]: r["metric"]["nodename"]
                      for r in promq("node_uname_info")}
             load = {names.get(r["metric"]["instance"], ""):
-                    f' — cpu {float(r["value"][1]):.0f}%'
+                    f' — :fire: cpu {float(r["value"][1]):.0f}%'
                     for r in promq('100 * (1 - avg by (instance) '
                                    '(rate(node_cpu_seconds_total{mode="idle"}[10m])))')}
         except Exception:
@@ -246,6 +314,134 @@ data:
                          f"up {age(n['metadata']['creationTimestamp'])}"
                          f"{load.get(name, '')}")
         post(rurl, "\n".join(lines))
+
+    def logs(rurl, args):
+        if len(args) < 2:
+            post(rurl, ":scroll: usage: `/cluster logs <namespace> <pod> "
+                       "[container] [lines]` — pod name prefix is enough")
+            return
+        ns, name = args[0], args[1]
+        container, lines_n = None, 30
+        for a in args[2:]:
+            if a.isdigit():
+                lines_n = min(int(a), 200)
+            else:
+                container = a
+        all_pods = k8s(f"/api/v1/namespaces/{ns}/pods")["items"]
+        names = [p["metadata"]["name"] for p in all_pods]
+        if name not in names:
+            matches = [n for n in names if n.startswith(name)]
+            if len(matches) == 1:
+                name = matches[0]
+            elif matches:
+                post(rurl, ":mag: several matches — be more specific:\n" +
+                     "\n".join(f"• `{m}`" for m in matches[:20]))
+                return
+            else:
+                post(rurl, f":shrug: no pod `{name}*` in `{ns}`")
+                return
+        pod = next(p for p in all_pods if p["metadata"]["name"] == name)
+        containers = [c["name"] for c in pod["spec"]["containers"]]
+        if not container:
+            if len(containers) > 1:
+                post(rurl, f":scroll: `{name}` has several containers — pick one:\n" +
+                     "\n".join(f"• `/cluster logs {ns} {name} {c}`"
+                               for c in containers))
+                return
+            container = containers[0]
+        q = urllib.parse.urlencode(
+            {"container": container, "tailLines": lines_n, "timestamps": "true"})
+        text = k8s_raw(f"/api/v1/namespaces/{ns}/pods/{name}/log?{q}") or ""
+        if not text.strip():
+            text = "(no output)"
+        if len(text) > 11000:
+            text = "…(truncated)…\n" + text[-11000:]
+        post(rurl, f":scroll: *{ns}/{name}* `{container}` — last {lines_n} lines\n"
+                   f"```{text}```")
+
+    def events(rurl, args):
+        ns = args[0] if args else None
+        path = (f"/api/v1/namespaces/{ns}/events" if ns
+                else "/api/v1/events") + "?limit=500"
+        items = k8s(path)["items"]
+        warn = [e for e in items if e.get("type") != "Normal"]
+        when = lambda e: (e.get("lastTimestamp") or e.get("eventTime")
+                          or e["metadata"]["creationTimestamp"] or "")
+        warn.sort(key=lambda e: ts(when(e)), reverse=True)
+        if not warn:
+            post(rurl, ":white_check_mark: no Warning events"
+                       f"{' in `' + ns + '`' if ns else ''}")
+            return
+        lines = [f":zap: *{len(warn)} Warning event(s)*"
+                 f"{' in `' + ns + '`' if ns else ''} — newest first"]
+        for e in warn[:25]:
+            obj = e.get("involvedObject", {})
+            cnt = e.get("count") or 1
+            lines.append(
+                f":warning: `{obj.get('namespace', '-')}` "
+                f"*{e.get('reason', '?')}* {obj.get('kind', '?')}/"
+                f"{obj.get('name', '?')}"
+                f"{f' ×{cnt}' if cnt > 1 else ''} ({age(when(e))} ago)\n"
+                f"        _{(e.get('message') or '').strip()[:160]}_")
+        post(rurl, "\n".join(lines))
+
+    def top(rurl, args):
+        nsf = f'namespace="{args[0]}",' if args else ""
+        cpu = promq(f'topk(10, sum by (namespace, pod) '
+                    f'(rate(container_cpu_usage_seconds_total'
+                    f'{{{nsf}container!="",pod!=""}}[5m])))')
+        mem = promq(f'topk(10, sum by (namespace, pod) '
+                    f'(container_memory_working_set_bytes'
+                    f'{{{nsf}container!="",pod!=""}}))')
+        lines = [f":fire: *Top CPU* (cores, 5m avg)"
+                 f"{' in `' + args[0] + '`' if args else ''}"]
+        lines += [f"  :hot_pepper: `{r['metric']['namespace']}/{r['metric']['pod']}`"
+                  f"  {float(r['value'][1]):.2f}"
+                  for r in sorted(cpu, key=lambda r: -float(r["value"][1]))]
+        lines.append(":brain: *Top memory* (working set)")
+        lines += [f"  :package: `{r['metric']['namespace']}/{r['metric']['pod']}`"
+                  f"  {human(float(r['value'][1]))}"
+                  for r in sorted(mem, key=lambda r: -float(r["value"][1]))]
+        post(rurl, "\n".join(lines))
+
+    def pvcs(rurl, args):
+        ns = args[0] if args else None
+        path = (f"/api/v1/namespaces/{ns}/persistentvolumeclaims" if ns
+                else "/api/v1/persistentvolumeclaims")
+        items = k8s(path)["items"]
+        if not items:
+            post(rurl, ":shrug: no PVCs found")
+            return
+        icons = {"Bound": ":white_check_mark:", "Pending": ":hourglass:",
+                 "Lost": ":red_circle:"}
+        lines = [f":minidisc: *{len(items)} PVCs*"]
+        for p in sorted(items, key=lambda p: (p["metadata"]["namespace"],
+                                              p["metadata"]["name"])):
+            phase = p["status"].get("phase", "?")
+            cap = p["status"].get("capacity", {}).get(
+                "storage", p["spec"]["resources"]["requests"].get("storage", "?"))
+            sc = p["spec"].get("storageClassName") or "(static)"
+            lines.append(f"{icons.get(phase, ':grey_question:')} "
+                         f"`{p['metadata']['namespace']}` "
+                         f"*{p['metadata']['name']}*  {cap}  _{sc}_")
+        post(rurl, "\n".join(lines[:120]))
+
+    def ingresses(rurl, args):
+        items = k8s("/apis/networking.k8s.io/v1/ingresses")["items"]
+        rows = []
+        for i in items:
+            ns = i["metadata"]["namespace"]
+            for rule in i["spec"].get("rules", []):
+                host = rule.get("host", "*")
+                paths = rule.get("http", {}).get("paths", [])
+                svc = (paths[0].get("backend", {}).get("service", {})
+                       if paths else {})
+                rows.append((host, f":globe_with_meridians: `https://{host}"
+                             f"{paths[0].get('path', '') if paths else ''}` → "
+                             f"`{ns}/{svc.get('name', '?')}`"))
+        rows.sort()
+        post(rurl, f":globe_with_meridians: *{len(rows)} ingress routes*\n"
+                   + "\n".join(r[1] for r in rows[:80]))
 
     def alerts(rurl, args):
         res = promq('ALERTS{alertstate="firing"}')
@@ -270,9 +466,19 @@ data:
         "summary": run_report("/reports/cluster/report.py", "cluster summary"),
         "backups": run_report("/reports/backup/report.py", "backup digest"),
         "pods": pods,
+        "deploys": deploys,
         "nodes": nodes,
+        "logs": logs,
+        "events": events,
+        "top": top,
+        "pvcs": pvcs,
+        "ingresses": ingresses,
         "alerts": alerts,
     }
+    ALIASES = {"deploy": "deploys", "deployments": "deploys", "log": "logs",
+               "event": "events", "pvc": "pvcs", "ingress": "ingresses",
+               "backup": "backups", "pod": "pods", "node": "nodes",
+               "alert": "alerts", "commands": "help", "list": "help"}
 
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
@@ -280,6 +486,7 @@ data:
     def cluster_cmd(ack, command):
         args = (command.get("text") or "").split()
         sub = args[0].lower() if args else "help"
+        sub = ALIASES.get(sub, sub)
         if ALLOWED and command.get("user_id") not in ALLOWED:
             ack(":no_entry: you are not authorized to use this bot")
             return
