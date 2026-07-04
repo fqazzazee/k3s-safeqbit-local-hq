@@ -1,6 +1,7 @@
 # cluster-slack-bot.yaml
 # On-demand cluster queries from Slack:
-#   /cluster summary|backups|pods|deploys|nodes|logs|events|top|pvcs|ingresses|alerts
+#   /cluster summary|backups|pods|deploys|nodes|logs|describe|events|top|pvcs|
+#            ingresses|flux|velero|certs|cnpg|restarts|alerts
 #
 # Uses Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to Slack and
 # receives slash commands over it. Nothing is exposed inbound — the cluster
@@ -51,6 +52,18 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
     verbs: ["get", "list"]
 
 ---
@@ -136,8 +149,14 @@ data:
         ":rocket: `/cluster deploys [ns]` — deployments/statefulsets/daemonsets · `kubectl get deploy,sts,ds -A`",
         ":computer: `/cluster nodes` — readiness, version, CPU · `kubectl get nodes -o wide`",
         ":scroll: `/cluster logs <ns> <pod> [container] [lines]` — log tail, pod prefix ok · `kubectl logs -n <ns> <pod> --tail=30`",
+        ":mag: `/cluster describe <ns> <pod>` — pod detail + its events, pod prefix ok · `kubectl describe pod -n <ns> <pod>`",
         ":zap: `/cluster events [ns]` — recent Warning events · `kubectl get events -A --field-selector type!=Normal`",
         ":fire: `/cluster top [ns]` — top CPU/memory pods · `kubectl top pods -A`",
+        ":repeat: `/cluster restarts [ns]` — pods restarted in the last 24h",
+        ":arrows_counterclockwise: `/cluster flux` — GitOps sync status · `flux get all -A`",
+        ":card_file_box: `/cluster velero [n]` — last n Velero backups · `kubectl -n velero get backups.velero.io`",
+        ":lock: `/cluster certs` — TLS certificate expiries · `kubectl get certificates -A`",
+        ":elephant: `/cluster cnpg` — database clusters: primary, lag, last backup · `kubectl get clusters.postgresql.cnpg.io -A`",
         ":minidisc: `/cluster pvcs [ns]` — volume claims · `kubectl get pvc -A`",
         ":globe_with_meridians: `/cluster ingresses` — hostname → service map · `kubectl get ingress -A`",
         ":bell: `/cluster alerts` — firing Prometheus alerts",
@@ -315,32 +334,38 @@ data:
                          f"{load.get(name, '')}")
         post(rurl, "\n".join(lines))
 
+    def resolve_pod(ns, name):
+        """Find a pod by exact name or unique prefix.
+        Returns (pod, None) or (None, user-facing message)."""
+        all_pods = k8s(f"/api/v1/namespaces/{ns}/pods")["items"]
+        by_name = {p["metadata"]["name"]: p for p in all_pods}
+        if name in by_name:
+            return by_name[name], None
+        matches = [n for n in by_name if n.startswith(name)]
+        if len(matches) == 1:
+            return by_name[matches[0]], None
+        if matches:
+            return None, (":mag: several matches — be more specific:\n" +
+                          "\n".join(f"• `{m}`" for m in sorted(matches)[:20]))
+        return None, f":shrug: no pod `{name}*` in `{ns}`"
+
     def logs(rurl, args):
         if len(args) < 2:
             post(rurl, ":scroll: usage: `/cluster logs <namespace> <pod> "
                        "[container] [lines]` — pod name prefix is enough")
             return
-        ns, name = args[0], args[1]
+        ns = args[0]
         container, lines_n = None, 30
         for a in args[2:]:
             if a.isdigit():
                 lines_n = min(int(a), 200)
             else:
                 container = a
-        all_pods = k8s(f"/api/v1/namespaces/{ns}/pods")["items"]
-        names = [p["metadata"]["name"] for p in all_pods]
-        if name not in names:
-            matches = [n for n in names if n.startswith(name)]
-            if len(matches) == 1:
-                name = matches[0]
-            elif matches:
-                post(rurl, ":mag: several matches — be more specific:\n" +
-                     "\n".join(f"• `{m}`" for m in matches[:20]))
-                return
-            else:
-                post(rurl, f":shrug: no pod `{name}*` in `{ns}`")
-                return
-        pod = next(p for p in all_pods if p["metadata"]["name"] == name)
+        pod, err = resolve_pod(ns, args[1])
+        if err:
+            post(rurl, err)
+            return
+        name = pod["metadata"]["name"]
         containers = [c["name"] for c in pod["spec"]["containers"]]
         if not container:
             if len(containers) > 1:
@@ -443,6 +468,187 @@ data:
         post(rurl, f":globe_with_meridians: *{len(rows)} ingress routes*\n"
                    + "\n".join(r[1] for r in rows[:80]))
 
+    def describe(rurl, args):
+        if len(args) < 2:
+            post(rurl, ":mag: usage: `/cluster describe <namespace> <pod>` "
+                       "— pod name prefix is enough")
+            return
+        ns = args[0]
+        pod, err = resolve_pod(ns, args[1])
+        if err:
+            post(rurl, err)
+            return
+        name = pod["metadata"]["name"]
+        st, spec = pod["status"], pod["spec"]
+        lines = [f":mag: *{ns}/{name}*",
+                 f":computer: node `{spec.get('nodeName', '?')}`  ·  "
+                 f"ip `{st.get('podIP', '?')}`  ·  {st.get('qosClass', '?')}  ·  "
+                 f"started {age(st.get('startTime', pod['metadata']['creationTimestamp']))} ago"]
+        stat = {c["name"]: c for c in st.get("containerStatuses", [])}
+        for c in spec["containers"]:
+            s = stat.get(c["name"], {})
+            state = s.get("state", {})
+            if "running" in state:
+                cur = f"running {age(state['running']['startedAt'])}"
+            elif "waiting" in state:
+                cur = f"waiting: {state['waiting'].get('reason', '?')}"
+            elif "terminated" in state:
+                cur = f"terminated: {state['terminated'].get('reason', '?')}"
+            else:
+                cur = "?"
+            icon = ":white_check_mark:" if s.get("ready") else ":warning:"
+            row = (f"{icon} `{c['name']}`  {c['image'].split('@')[0]}  ·  {cur}")
+            if s.get("restartCount"):
+                row += f"  ·  :repeat: {s['restartCount']}"
+            last = s.get("lastState", {}).get("terminated")
+            if last:
+                row += (f"\n        _last exit: {last.get('reason', '?')} "
+                        f"(code {last.get('exitCode')}), "
+                        f"{age(last.get('finishedAt', ''))} ago_")
+            lines.append(row)
+        for c in st.get("conditions", []):
+            if c.get("status") != "True":
+                lines.append(f":warning: condition *{c['type']}*: "
+                             f"{(c.get('message') or c.get('reason') or '')[:120]}")
+        try:
+            q = urllib.parse.urlencode(
+                {"fieldSelector": f"involvedObject.name={name}"})
+            evs = k8s(f"/api/v1/namespaces/{ns}/events?{q}")["items"]
+            evs.sort(key=lambda e: ts(e.get("lastTimestamp")
+                                      or e["metadata"]["creationTimestamp"]),
+                     reverse=True)
+            if evs:
+                lines.append(":zap: *recent events:*")
+                for e in evs[:5]:
+                    w = e.get("lastTimestamp") or e["metadata"]["creationTimestamp"]
+                    lines.append(f"  • {e.get('reason', '?')} ({age(w)} ago): "
+                                 f"{(e.get('message') or '').strip()[:120]}")
+        except Exception:
+            pass
+        lines.append(f"_logs: `/cluster logs {ns} {name}`_")
+        post(rurl, "\n".join(lines))
+
+    def flux(rurl, args):
+        out = [":arrows_counterclockwise: *Flux sync status*"]
+        for group_ver, res, icon, title in [
+            ("kustomize.toolkit.fluxcd.io/v1", "kustomizations",
+             ":gear:", "Kustomizations"),
+            ("helm.toolkit.fluxcd.io/v2", "helmreleases",
+             ":package:", "HelmReleases"),
+        ]:
+            items = k8s(f"/apis/{group_ver}/{res}")["items"]
+            if not items:
+                continue
+            out.append(f"{icon} *{title}* ({len(items)})")
+            for i in sorted(items, key=lambda i: (i["metadata"]["namespace"],
+                                                  i["metadata"]["name"])):
+                st = i.get("status", {})
+                conds = {c["type"]: c for c in st.get("conditions", [])}
+                ready = conds.get("Ready", {})
+                ok = ready.get("status") == "True"
+                susp = i.get("spec", {}).get("suspend", False)
+                mark = (":double_vertical_bar:" if susp else
+                        ":white_check_mark:" if ok else ":red_circle:")
+                rev = (st.get("lastAppliedRevision")
+                       or st.get("lastAttemptedRevision") or "")
+                if "@sha1:" in rev:
+                    branch, _, sha = rev.partition("@sha1:")
+                    rev = f"{branch}@{sha[:7]}"
+                row = f"{mark} `{i['metadata']['namespace']}` *{i['metadata']['name']}*"
+                if susp:
+                    row += "  _suspended_"
+                elif rev:
+                    row += f"  `{rev}`"
+                if not ok and not susp:
+                    row += f"\n        _{(ready.get('message') or '')[:150]}_"
+                out.append(row)
+        post(rurl, "\n".join(out))
+
+    def velero(rurl, args):
+        n = min(int(args[0]), 30) if args and args[0].isdigit() else 12
+        items = k8s("/apis/velero.io/v1/namespaces/velero/backups")["items"]
+        items.sort(key=lambda b: b["metadata"]["creationTimestamp"], reverse=True)
+        icons = {"Completed": ":white_check_mark:",
+                 "PartiallyFailed": ":warning:", "Failed": ":red_circle:",
+                 "InProgress": ":hourglass_flowing_sand:",
+                 "Deleting": ":wastebasket:"}
+        lines = [f":card_file_box: *last {min(n, len(items))} Velero backups* "
+                 f"(of {len(items)} kept)"]
+        for b in items[:n]:
+            st = b.get("status", {})
+            ph = st.get("phase", "?")
+            extra = ""
+            if st.get("errors"):
+                extra += f"  :x: {st['errors']} err"
+            if st.get("warnings"):
+                extra += f"  :warning: {st['warnings']} warn"
+            lines.append(f"{icons.get(ph, ':grey_question:')} "
+                         f"*{b['metadata']['name']}*  {ph}  "
+                         f"{age(b['metadata']['creationTimestamp'])} ago{extra}")
+        post(rurl, "\n".join(lines))
+
+    def certs(rurl, args):
+        items = k8s("/apis/cert-manager.io/v1/certificates")["items"]
+        rows = []
+        for c in items:
+            st = c.get("status", {})
+            conds = {x["type"]: x for x in st.get("conditions", [])}
+            ok = conds.get("Ready", {}).get("status") == "True"
+            na = st.get("notAfter")
+            days = (ts(na) - NOW()).days if na else -1
+            icon = (":red_circle:" if not ok or days < 7 else
+                    ":warning:" if days < 21 else ":white_check_mark:")
+            rows.append((days, f"{icon} `{c['metadata']['namespace']}` "
+                         f"*{c['metadata']['name']}*  "
+                         f"{'expires in ' + str(days) + 'd' if na else 'no cert issued'}"
+                         f"{'' if ok else '  NOT READY'}"))
+        rows.sort(key=lambda r: r[0])
+        post(rurl, f":lock: *{len(rows)} certificates* — soonest expiry first\n"
+                   + "\n".join(r[1] for r in rows[:60]))
+
+    def cnpg(rurl, args):
+        items = k8s("/apis/postgresql.cnpg.io/v1/clusters")["items"]
+        lag = {}
+        try:
+            lag = {r["metric"]["namespace"]: float(r["value"][1])
+                   for r in promq("max by (namespace) (cnpg_pg_replication_lag)")}
+        except Exception:
+            pass
+        lines = [f":elephant: *{len(items)} CNPG database clusters*"]
+        for c in sorted(items, key=lambda c: c["metadata"]["namespace"]):
+            ns = c["metadata"]["namespace"]
+            st = c.get("status", {})
+            ready = st.get("readyInstances", 0)
+            want = c["spec"].get("instances", 0)
+            phase = st.get("phase", "?")
+            ok = ready == want and "healthy" in phase.lower()
+            icon = ":white_check_mark:" if ok else ":warning:"
+            l = lag.get(ns)
+            lagtxt = f"  ·  lag {l:.0f}s" if (l is not None and want > 1) else ""
+            lb = st.get("lastSuccessfulBackup")
+            lbtxt = f"  ·  :card_file_box: {age(lb)} ago" if lb else ""
+            lines.append(f"{icon} `{ns}` *{c['metadata']['name']}*  {ready}/{want}"
+                         f"  ·  primary `{st.get('currentPrimary', '?')}`"
+                         f"{lagtxt}{lbtxt}"
+                         + ("" if ok else f"\n        _{phase[:120]}_"))
+        post(rurl, "\n".join(lines))
+
+    def restarts(rurl, args):
+        nsf = f'{{namespace="{args[0]}"}}' if args else ""
+        res = promq(f"sum by (namespace, pod) (increase("
+                    f"kube_pod_container_status_restarts_total{nsf}[24h])) > 0")
+        if not res:
+            post(rurl, ":white_check_mark: no container restarts in the last 24h"
+                       f"{' in `' + args[0] + '`' if args else ''}")
+            return
+        res.sort(key=lambda r: -float(r["value"][1]))
+        lines = [f":repeat: *{len(res)} pod(s) restarted in the last 24h*"]
+        for r in res[:30]:
+            m = r["metric"]
+            lines.append(f":warning: `{m['namespace']}/{m['pod']}`  "
+                         f"×{float(r['value'][1]):.0f}")
+        post(rurl, "\n".join(lines))
+
     def alerts(rurl, args):
         res = promq('ALERTS{alertstate="firing"}')
         if not res:
@@ -469,8 +675,14 @@ data:
         "deploys": deploys,
         "nodes": nodes,
         "logs": logs,
+        "describe": describe,
         "events": events,
         "top": top,
+        "restarts": restarts,
+        "flux": flux,
+        "velero": velero,
+        "certs": certs,
+        "cnpg": cnpg,
         "pvcs": pvcs,
         "ingresses": ingresses,
         "alerts": alerts,
@@ -478,7 +690,10 @@ data:
     ALIASES = {"deploy": "deploys", "deployments": "deploys", "log": "logs",
                "event": "events", "pvc": "pvcs", "ingress": "ingresses",
                "backup": "backups", "pod": "pods", "node": "nodes",
-               "alert": "alerts", "commands": "help", "list": "help"}
+               "alert": "alerts", "desc": "describe", "restart": "restarts",
+               "gitops": "flux", "cert": "certs", "certificates": "certs",
+               "db": "cnpg", "databases": "cnpg",
+               "commands": "help", "list": "help"}
 
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
 

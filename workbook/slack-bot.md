@@ -25,8 +25,14 @@ Free-tier Slack feature (no subscription; counts as 1 of the free plan's
 /cluster deploys [ns]                    deployments/statefulsets/daemonsets ready-vs-desired
 /cluster nodes                           readiness, kubelet version, CPU load
 /cluster logs <ns> <pod> [ctr] [lines]   log tail (pod name PREFIX is enough; default 30, max 200)
+/cluster describe <ns> <pod>             pod detail: containers, restarts w/ last exit, its events
 /cluster events [ns]                     recent Warning events, newest first
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
+/cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
+/cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
+/cluster velero [n]                      last n Velero backups: phase, errors, age (default 12)
+/cluster certs                           cert-manager expiries, soonest first (red <7d, amber <21d)
+/cluster cnpg                            DB clusters: ready, primary, replication lag, last backup
 /cluster pvcs [ns]                       volume claims: status, capacity, storageclass
 /cluster ingresses                       hostname → service map
 /cluster alerts                          currently firing Prometheus alerts
@@ -47,8 +53,9 @@ the CronJobs and the bot share one copy of the report code.
 ## Security posture
 
 - **Read-only by design.** The bot's RBAC is `get,list` on pods, pods/log,
-  nodes, events, PVCs, deployments/statefulsets/daemonsets and ingresses,
-  plus reuse of the `backup-summary-report` ClusterRole and the
+  nodes, events, PVCs, deployments/statefulsets/daemonsets, ingresses,
+  Flux kustomizations/helmreleases, cert-manager certificates and CNPG
+  clusters, plus reuse of the `backup-summary-report` ClusterRole and the
   velero `cloud-credentials` read Role. No write verbs anywhere — a leaked
   Slack token can look at the cluster, never touch it. Do not add
   restart/delete commands.
