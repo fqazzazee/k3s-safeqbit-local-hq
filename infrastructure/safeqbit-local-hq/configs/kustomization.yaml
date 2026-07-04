@@ -34,5 +34,6 @@ resources:
   - alertmanager-slack.yaml
   - cnpg-backup-retention.yaml
   - backup-summary-report.yaml
+  - cluster-summary-report.yaml
   - monitoring-servicemonitors.yaml
   - monitoring-alert-rules.yaml
