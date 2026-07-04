@@ -72,6 +72,17 @@ spec:
         ingressClassName: nginx
         annotations:
           cert-manager.io/cluster-issuer: letsencrypt-prod
+          # Authentik forward auth (embedded outpost, nginx flavor). The
+          # /outpost.goauthentik.io path route lives in
+          # configs/monitoring-forward-auth.yaml. Guards ONLY ingress
+          # traffic — Grafana datasources, the summary CronJobs and
+          # Alertmanager->Slack all use in-cluster/outbound paths.
+          nginx.ingress.kubernetes.io/auth-url: http://authentik-server.authentik.svc.cluster.local/outpost.goauthentik.io/auth/nginx
+          nginx.ingress.kubernetes.io/auth-signin: https://prometheus.local.safeqbit.com/outpost.goauthentik.io/start?rd=$escaped_request_uri
+          nginx.ingress.kubernetes.io/auth-response-headers: Set-Cookie,X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid
+          # Authentik's auth responses carry large cookies; default 4k
+          # proxy buffers can throw "upstream sent too big header".
+          nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
         hosts:
           - prometheus.local.safeqbit.com
         tls:
@@ -182,6 +193,11 @@ spec:
         ingressClassName: nginx
         annotations:
           cert-manager.io/cluster-issuer: letsencrypt-prod
+          # Authentik forward auth — see the prometheus ingress notes above.
+          nginx.ingress.kubernetes.io/auth-url: http://authentik-server.authentik.svc.cluster.local/outpost.goauthentik.io/auth/nginx
+          nginx.ingress.kubernetes.io/auth-signin: https://alertmanager.local.safeqbit.com/outpost.goauthentik.io/start?rd=$escaped_request_uri
+          nginx.ingress.kubernetes.io/auth-response-headers: Set-Cookie,X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid
+          nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
         hosts:
           - alertmanager.local.safeqbit.com
         tls:

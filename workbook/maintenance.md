@@ -980,6 +980,44 @@ kubeProxy:
 # ...same for the other two
 ```
 
+### Authentik forward auth on Prometheus & Alertmanager (2026-07-04)
+
+Neither app has native auth, so the ingresses require an Authentik login
+(ingress-nginx `auth_request` → the **embedded outpost** served by
+`authentik-server`). Pieces:
+
+- **Git**: `auth-url` / `auth-signin` / `auth-response-headers` +
+  `proxy-buffer-size` annotations on both ingresses
+  (`controllers/monitoring.yaml`), and the `/outpost.goauthentik.io` path
+  route (`configs/monitoring-forward-auth.yaml`, Ingress
+  `authentik-outpost-monitoring` in ns `authentik`).
+- **Authentik UI only (NOT in Git — recreate after a Path-B rebuild)**: two
+  Proxy Providers in *forward auth (single application)* mode with external
+  hosts `https://prometheus.local.safeqbit.com` /
+  `https://alertmanager.local.safeqbit.com`, each with Unauthenticated Paths
+  `^/-/(healthy|ready)$` (keeps Uptime Kuma probes working); two Applications
+  (`prometheus`, `alertmanager`) bound to those providers; both apps assigned
+  to **Outposts → authentik Embedded Outpost**.
+
+What this does NOT touch: Alertmanager→Slack (outbound webhook), Grafana's
+datasources and the summary CronJobs (in-cluster service URLs). Only browser
+traffic through the ingress hostnames is gated.
+
+**If Authentik is down**, the UIs are unreachable via ingress — use a
+port-forward (see *Verifying alerts* below), which bypasses the ingress
+entirely.
+
+Troubleshooting:
+- **404 after login redirect** → the application isn't assigned to the
+  embedded outpost, or `authentik-outpost-monitoring` Ingress is missing.
+- **Redirect loop** → provider's external host doesn't exactly match the
+  ingress hostname (scheme + host, no trailing slash).
+- **502/"upstream sent too big header"** → `proxy-buffer-size: 16k`
+  annotation missing on the protected ingress.
+- Deliberately NO `auth-snippet` annotation (Authentik docs show one):
+  our ingress-nginx blocks snippets at default risk settings, and
+  ingress-nginx already sends `X-Original-URL`, which the outpost uses.
+
 ### Verifying alerts
 
 ```bash
