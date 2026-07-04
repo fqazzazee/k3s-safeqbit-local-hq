@@ -1,0 +1,57 @@
+# monitoring-forward-auth.yaml
+# Authentik forward-auth glue for the Prometheus and Alertmanager ingresses.
+#
+# Neither app has native OIDC, so authentication happens at the ingress:
+# ingress-nginx auth_request annotations (on the ingresses in
+# controllers/monitoring.yaml) ask Authentik's EMBEDDED outpost
+# (served by authentik-server itself — no extra deployment) whether the
+# browser session is logged in. Unauthenticated requests are redirected to
+# /outpost.goauthentik.io/start on the SAME host, and this Ingress is what
+# routes that path to Authentik. Without it the signin redirect 404s.
+#
+# No TLS block here on purpose: the prometheus-tls / alertmanager-tls
+# secrets live in the monitoring namespace and can't be referenced from
+# this one. nginx picks the host's cert from the monitoring ingresses that
+# declare it — this Ingress only contributes the path route.
+#
+# Authentik side (UI, not in Git): two Proxy Providers in
+# "forward auth (single application)" mode + two Applications, both
+# assigned to the embedded outpost. See workbook/maintenance.md.
+#
+# NOTE: the Authentik docs also suggest an auth-snippet annotation
+# (X-Forwarded-Host). Deliberately omitted — our ingress-nginx (v1.15)
+# blocks snippet annotations at default risk settings, and it works
+# without it because ingress-nginx sends X-Original-URL to the auth
+# endpoint, which the outpost's nginx flavor uses to match the app.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: authentik-outpost-monitoring
+  namespace: authentik
+  labels:
+    app.kubernetes.io/name: authentik
+    app.kubernetes.io/component: outpost-paths
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: prometheus.local.safeqbit.com
+      http:
+        paths:
+          - path: /outpost.goauthentik.io
+            pathType: Prefix
+            backend:
+              service:
+                name: authentik-server
+                port:
+                  number: 80
+    - host: alertmanager.local.safeqbit.com
+      http:
+        paths:
+          - path: /outpost.goauthentik.io
+            pathType: Prefix
+            backend:
+              service:
+                name: authentik-server
+                port:
+                  number: 80

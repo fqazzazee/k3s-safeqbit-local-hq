@@ -37,3 +37,4 @@ resources:
   - cluster-summary-report.yaml
   - monitoring-servicemonitors.yaml
   - monitoring-alert-rules.yaml
+  - monitoring-forward-auth.yaml
