@@ -79,13 +79,34 @@ data:
         cpu = {r["metric"]["nodename"]: val(r) for r in promq(
             '100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[10m])))'
             ' * on(instance) group_left(nodename) node_uname_info')}
-        mem = {r["metric"]["nodename"]: val(r) for r in promq(
-            '100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)'
-            ' * on(instance) group_left(nodename) node_uname_info')}
+        cores = {r["metric"]["node"]: val(r) for r in promq(
+            'kube_node_status_allocatable{resource="cpu"}')}
+        memt = {r["metric"]["nodename"]: val(r) for r in promq(
+            'node_memory_MemTotal_bytes * on(instance) group_left(nodename) node_uname_info')}
+        mema = {r["metric"]["nodename"]: val(r) for r in promq(
+            'node_memory_MemAvailable_bytes * on(instance) group_left(nodename) node_uname_info')}
+        pods = {r["metric"]["node"]: int(val(r)) for r in promq(
+            "count by (node) (kube_pod_info)")}
         lines = [f"*Nodes* ({len(ready)}/{len(allnodes)} Ready)"]
         for n in sorted(allnodes):
             icon = ":white_check_mark:" if n in ready else ":x:"
-            lines.append(f"{icon} *{n}* — CPU {cpu.get(n, 0):.0f}% · mem {mem.get(n, 0):.0f}%")
+            used = memt.get(n, 0) - mema.get(n, 0)
+            pct = 100 * used / memt[n] if memt.get(n) else 0
+            lines.append(
+                f"{icon} *{n}* — CPU {cpu.get(n, 0):.0f}% of {cores.get(n, 0):.0f} cores"
+                f" · mem {used / 2**30:.1f}/{memt.get(n, 0) / 2**30:.1f} GiB ({pct:.0f}%)"
+                f" · {pods.get(n, 0)} pods")
+        # scheduling headroom: requests vs allocatable
+        creq = val(promq('sum(kube_pod_container_resource_requests{resource="cpu"})')[0])
+        callo = val(promq('sum(kube_node_status_allocatable{resource="cpu"})')[0])
+        mreq = val(promq('sum(kube_pod_container_resource_requests{resource="memory"})')[0])
+        mallo = val(promq('sum(kube_node_status_allocatable{resource="memory"})')[0])
+        ptot = sum(pods.values())
+        pallo = int(val(promq('sum(kube_node_status_allocatable{resource="pods"})')[0]))
+        lines.append(
+            f"_Requested: CPU {creq:.1f}/{callo:.0f} cores ({100 * creq / callo:.0f}%)"
+            f" · mem {human(mreq)}/{human(mallo)} ({100 * mreq / mallo:.0f}%)"
+            f" · pods {ptot}/{pallo}_")
         return "\n".join(lines)
     section("*Nodes*", nodes)
 
@@ -122,6 +143,14 @@ data:
             lines.append(f":arrows_counterclockwise: restarts last 24h: {top}")
         else:
             lines.append(":white_check_mark: zero container restarts in 24h")
+        topcpu = promq('topk(3, sum by (namespace,pod) '
+                       '(rate(container_cpu_usage_seconds_total{container!=""}[10m])))')
+        topmem = promq('topk(3, sum by (namespace,pod) '
+                       '(container_memory_working_set_bytes{container!=""}))')
+        lines.append("_Top CPU: " + " · ".join(
+            f"{r['metric']['pod']} {val(r):.2f}c" for r in topcpu) + "_")
+        lines.append("_Top mem: " + " · ".join(
+            f"{r['metric']['pod']} {human(val(r))}" for r in topmem) + "_")
         return "\n".join(lines)
     section("*Workloads*", workloads)
 
@@ -145,6 +174,17 @@ data:
             key=lambda x: -x[2])
         for ns, pvc, frac in full[:5]:
             lines.append(f":warning: PVC {ns}/{pvc} at {frac * 100:.0f}%")
+        # Longhorn hard-caps 250 snapshots/volume (hit once, 2026-05-27)
+        snap = promq("topk(1, count by (volume) (longhorn_snapshot_actual_size_bytes))")
+        if snap:
+            n = int(val(snap[0]))
+            icon = ":warning:" if n > 200 else ":white_check_mark:"
+            lines.append(f"{icon} Longhorn snapshots: busiest volume {n}/250")
+        lag = promq("max(cnpg_pg_replication_lag)")
+        if lag:
+            l = val(lag[0])
+            icon = ":warning:" if l > 300 else ":white_check_mark:"
+            lines.append(f"{icon} CNPG replication: max lag {l:.0f}s")
         return "\n".join(lines)
     section("*Storage*", storage)
 
@@ -160,6 +200,12 @@ data:
         lines = ["*Network* (24h per node, physical NICs)"]
         for n in sorted(rx):
             lines.append(f"• {n}: ↓ {human(rx[n])} · ↑ {human(tx.get(n, 0))}")
+        errs = val(promq(
+            f"sum(increase(node_network_receive_errs_total{{{phys}}}[24h]))"
+            f" + sum(increase(node_network_transmit_errs_total{{{phys}}}[24h]))"
+            f" + sum(increase(node_network_receive_drop_total{{{phys}}}[24h]))")[0])
+        if errs >= 1:
+            lines.append(f":warning: {errs:.0f} NIC errors/drops in 24h")
         return "\n".join(lines)
     section("*Network*", network)
 
