@@ -77,7 +77,14 @@ spec:
           # configs/monitoring-forward-auth.yaml. Guards ONLY ingress
           # traffic — Grafana datasources, the summary CronJobs and
           # Alertmanager->Slack all use in-cluster/outbound paths.
-          nginx.ingress.kubernetes.io/auth-url: http://authentik-server.authentik.svc.cluster.local/outpost.goauthentik.io/auth/nginx
+          #
+          # auth-url deliberately hairpins through the ingress hostname
+          # rather than the authentik-server service DNS: the EMBEDDED
+          # outpost routes requests to its proxy by Host header, and
+          # nginx's auth subrequest sets Host from the auth-url. With the
+          # service DNS the subrequest fell through to Django and 404'd
+          # (surfaced as 500 on every page). Verified 2026-07-04.
+          nginx.ingress.kubernetes.io/auth-url: https://prometheus.local.safeqbit.com/outpost.goauthentik.io/auth/nginx
           nginx.ingress.kubernetes.io/auth-signin: https://prometheus.local.safeqbit.com/outpost.goauthentik.io/start?rd=$escaped_request_uri
           nginx.ingress.kubernetes.io/auth-response-headers: Set-Cookie,X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid
           # Authentik's auth responses carry large cookies; default 4k
@@ -193,8 +200,9 @@ spec:
         ingressClassName: nginx
         annotations:
           cert-manager.io/cluster-issuer: letsencrypt-prod
-          # Authentik forward auth — see the prometheus ingress notes above.
-          nginx.ingress.kubernetes.io/auth-url: http://authentik-server.authentik.svc.cluster.local/outpost.goauthentik.io/auth/nginx
+          # Authentik forward auth — see the prometheus ingress notes above
+          # (incl. why auth-url hairpins through the hostname).
+          nginx.ingress.kubernetes.io/auth-url: https://alertmanager.local.safeqbit.com/outpost.goauthentik.io/auth/nginx
           nginx.ingress.kubernetes.io/auth-signin: https://alertmanager.local.safeqbit.com/outpost.goauthentik.io/start?rd=$escaped_request_uri
           nginx.ingress.kubernetes.io/auth-response-headers: Set-Cookie,X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid
           nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
