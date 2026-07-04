@@ -19,12 +19,23 @@ Free-tier Slack feature (no subscription; counts as 1 of the free plan's
 ## Commands
 
 ```
-/cluster summary            the daily health digest, on demand
-/cluster backups            the weekly backup digest, on demand (~30s, B2 listing)
-/cluster pods [namespace]   pod health; all-ns overview or one-ns full listing
-/cluster nodes              readiness, kubelet version, CPU load
-/cluster alerts             currently firing Prometheus alerts
+/cluster summary                         daily health digest, on demand
+/cluster backups                         weekly backup digest, on demand (~30s, B2 listing)
+/cluster pods [ns]                       pod health; all-ns overview or one-ns full listing
+/cluster deploys [ns]                    deployments/statefulsets/daemonsets ready-vs-desired
+/cluster nodes                           readiness, kubelet version, CPU load
+/cluster logs <ns> <pod> [ctr] [lines]   log tail (pod name PREFIX is enough; default 30, max 200)
+/cluster events [ns]                     recent Warning events, newest first
+/cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
+/cluster pvcs [ns]                       volume claims: status, capacity, storageclass
+/cluster ingresses                       hostname → service map
+/cluster alerts                          currently firing Prometheus alerts
+/cluster help                            the list above with kubectl equivalents
 ```
+
+Singular/plural aliases work (`pod`, `deploy`, `log`, `event`, `pvc`,
+`ingress`…). `help` shows each command with the kubectl command you'd
+type on a terminal.
 
 Replies go through the slash command's `response_url` → visible **only to
 the invoker**, in whatever channel the command was typed. `summary` and
@@ -35,11 +46,14 @@ the CronJobs and the bot share one copy of the report code.
 
 ## Security posture
 
-- **Read-only by design.** The bot's RBAC is pods/nodes `get,list`, plus
-  reuse of the `backup-summary-report` ClusterRole and the
+- **Read-only by design.** The bot's RBAC is `get,list` on pods, pods/log,
+  nodes, events, PVCs, deployments/statefulsets/daemonsets and ingresses,
+  plus reuse of the `backup-summary-report` ClusterRole and the
   velero `cloud-credentials` read Role. No write verbs anywhere — a leaked
   Slack token can look at the cluster, never touch it. Do not add
   restart/delete commands.
+- `logs` ships pod log tails into Slack (ephemeral + invoker-only, but
+  Slack-hosted) — mind apps that log secrets.
 - `allowed-user-ids` key in the SealedSecret (comma-separated Slack user
   IDs) restricts who may invoke; empty/absent = anyone in the workspace.
 
