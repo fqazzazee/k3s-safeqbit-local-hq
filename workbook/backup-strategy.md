@@ -275,7 +275,7 @@ kubectl -n velero get bsl
 
 ## Restoring
 
-> ⚠️ **No restore drill has been run yet.** See P2.3 in [improvement-plan.md](improvement-plan.md). Test before you need it.
+> ⚠️ **No restore drill has been run yet.** The drill playbook now exists — [restore-drills.md](restore-drills.md) (P2.3) — but the first run is still pending. Test before you need it.
 
 ### Single-namespace restore from Velero
 ```bash
@@ -320,7 +320,7 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 
 - **No off-cluster CNPG backup target.** Layer 2 snapshots live on the same Longhorn volumes as the primary. Whole-Longhorn corruption loses both primary AND backups. Only Layer 3 (Velero → B2) protects against that scenario. See P3.1 in [improvement-plan.md](improvement-plan.md) for the future plan to switch CNPG to plugin-based Barman backups direct to S3.
 - **Single B2 backend.** B2 outage or transaction-cap exhaustion takes Layer 3 down. Cloudflare R2 was considered as an alternative (10M Class A ops free/month vs B2's 2,500/day) - see P2.2.
-- **Restore drills not run.** See P2.3.
+- **Restore drills not run.** Playbook drafted 2026-07-05 ([restore-drills.md](restore-drills.md)); first drill still pending. See P2.3.
 - **Prometheus TSDB (metrics history) has no off-site copy — deliberate.** Decided 2026-07-03: the 40Gi TSDB never fit the B2 10GiB free tier (its DataUploads had never once succeeded). The volume policy skips volumes ≥20Gi. After a full rebuild Grafana starts with empty graphs that refill over the 30d retention window; dashboards (git), alert rules (git), and Grafana's DB (CNPG + Velero) survive regardless. Revisit if the Velero target ever moves to NAS MinIO (no size pressure there).
 
 > Closed gaps (kept for context):

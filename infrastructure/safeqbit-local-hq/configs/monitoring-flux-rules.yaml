@@ -1,0 +1,66 @@
+# monitoring-flux-rules.yaml
+# GitOps drift / Flux reconciliation alerts (P3.5). Would have caught the
+# velero / nfs-provisioner / sealed-secrets nodeSelector issue automatically
+# instead of by manual inspection.
+#
+# Rides on gotk_resource_info, emitted by the shared kube-state-metrics via
+# the Custom Resource State config in controllers/monitoring.yaml (the old
+# gotk_reconcile_condition metric no longer exists in Flux v2.8+ — rules
+# written against it silently never fire).
+#
+# Label semantics (from KSM CRS):
+# - ready: "True" | "False" | "Unknown" (from the Ready condition).
+#   "Unknown" = reconcile in progress — deliberately not alerted on.
+# - suspended: "true" when spec.suspend is set; "" (absent) otherwise —
+#   hence the suspended!="true" filter, which matches both "" and "false".
+# - customresource_kind is added automatically by KSM (Kustomization,
+#   HelmRelease, GitRepository, ...).
+#
+# Prometheus picks this up via `release: monitoring` (ruleSelector). Routing:
+# warning → slack-default, info → slack-info (one ping, daily repeat) — all
+# wired in P1.4, no extra plumbing.
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: safeqbit-flux
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: flux
+      interval: 1m
+      rules:
+        - alert: FluxReconciliationFailure
+          # 15m (not 5m): avoids flapping during legitimately long reconciles
+          # and chart installs/upgrades (kube-prometheus-stack alone can take
+          # several minutes with force+recreate).
+          expr: |
+            max by (customresource_kind, exported_namespace, name) (
+              gotk_resource_info{ready="False", suspended!="true"}
+            ) == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Flux {{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} not ready"
+            description: "{{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} has been Ready=False for >15m. Run `flux get all -A` or `/cluster flux` in Slack, then check the controller logs (kustomize-controller / helm-controller in flux-system)."
+
+        - alert: FluxSuspended
+          # Reminder, not an emergency: suspends are a normal maintenance tool
+          # (see maintenance.md "Flux suspend/resume") but a forgotten suspend
+          # means the resource silently stops reconciling from git. 4h grace
+          # covers any hands-on maintenance window; the info route then pings
+          # once per day (repeat_interval 24h) until resumed.
+          expr: |
+            max by (customresource_kind, exported_namespace, name) (
+              gotk_resource_info{suspended="true"}
+            ) == 1
+          for: 4h
+          labels:
+            severity: info
+          annotations:
+            summary: "Flux {{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} suspended >4h — still intended?"
+            description: "{{ $labels.customresource_kind }} {{ $labels.exported_namespace }}/{{ $labels.name }} has spec.suspend=true for over 4h. If maintenance is done, resume it: flux resume {{ $labels.customresource_kind | toLower }} -n {{ $labels.exported_namespace }} {{ $labels.name }}"
