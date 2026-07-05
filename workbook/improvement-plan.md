@@ -215,7 +215,13 @@ Make this consistent with how the maintenance workbook documents node shutdown -
 
 ---
 
-### ☐ P2.3 Document and execute a quarterly restore drill
+### ◐ P2.3 Document and execute a quarterly restore drill
+
+**Started:** 2026-07-05 — the "document" half is done: [restore-drills.md](restore-drills.md)
+covers all four drills (Longhorn revert, Velero namespace restore, CNPG
+recovery, full DR rebuild) with non-destructive-first variants, per-drill pass
+criteria, a proposed quarterly rotation (Q3 2026 = Drill A + D-tabletop), and
+a results log. **Still open: actually running the first drill.**
 
 **Why:** Backups that haven't been tested aren't backups. We have multiple layers (CNPG ScheduledBackup → Longhorn snapshot, Velero → B2, etcd → local) but have never verified end-to-end recovery.
 
@@ -298,7 +304,7 @@ The cluster runs everything as default-allow. Kube-router netpol is already enfo
 
 Per top-N alerts (degraded volume, CNPG failover, etcd quorum loss, ingress 5xx spike), write a one-page runbook each. Reference from the alert annotation `runbook_url`.
 
-> P3.3 (image policy + SBOM) and P3.5 (Flux reconciliation alerts) were reviewed on 2026-05-29 and **deferred** rather than implemented. Full context + recommended approach moved to [Future considerations](#future-considerations) at the bottom of this page.
+> P3.3 (image policy + SBOM) and P3.5 (Flux reconciliation alerts) were reviewed on 2026-05-29 and **deferred** rather than implemented. Full context + recommended approach moved to [Future considerations](#future-considerations) at the bottom of this page. **P3.5 was subsequently implemented on 2026-07-05** (see its entry below).
 
 ---
 
@@ -346,7 +352,20 @@ Items reviewed and consciously **deferred** - recommended approach is captured s
 
 ---
 
-### ☐ P3.5 GitOps drift / Flux reconciliation alerts
+### ☑ P3.5 GitOps drift / Flux reconciliation alerts
+
+**Closed:** 2026-07-05 — implemented exactly per the scoped approach below.
+Shared kube-state-metrics taught to emit `gotk_resource_info` via
+`customResourceState` + `rbac.extraRules` in `controllers/monitoring.yaml`
+(the `collectors: []` / `--custom-resource-state-only` trap was avoided —
+standard `kube_*` metrics untouched). GVK list trimmed to installed CRDs:
+image.toolkit.fluxcd.io excluded (no image-automation controllers),
+notification kinds excluded (no Ready condition). Two alerts in new
+`configs/monitoring-flux-rules.yaml` (PrometheusRule `safeqbit-flux`):
+`FluxReconciliationFailure` (warning, Ready=False >15m, suspends excluded)
+and `FluxSuspended` (info, suspended >4h, daily reminder via the info route —
+pairs with the maintenance.md suspend/resume workflow so forgotten suspends
+can't silently rot).
 
 **Reviewed:** 2026-05-29 - deferred. Metric path fully scoped below; safe and low-effort whenever picked up.
 
