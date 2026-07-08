@@ -22,7 +22,7 @@
 > A small private cloud running in my home - three computers working together to host
 > my passwords, photos, notes, and a handful of other apps I'd rather not rent from a
 > big tech company. Everything here is defined in this repository, so the whole thing
-> can rebuild itself from scratch. Built and run by **Fadi Qazzazee**.
+> can rebuild itself from scratch.
 
 ---
 
