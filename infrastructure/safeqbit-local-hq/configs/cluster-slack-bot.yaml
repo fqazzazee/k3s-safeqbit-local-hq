@@ -176,6 +176,7 @@ data:
         ":mag: `/cluster describe <ns> <pod>` — pod detail + its events · `kubectl describe pod`",
         ":scroll: `/cluster logs <ns> <pod> [ctr] [lines] [prev] [grep <pat>]` — log tail · `kubectl logs`",
         ":zap: `/cluster events [ns]` — recent Warning events",
+        ":control_knobs: `/cluster ps [ns] [cpu|mem|net|io]` — task manager: per-workload (or per-pod) usage",
         ":fire: `/cluster top [ns]` — top CPU/memory pods · `kubectl top pods -A`",
         ":repeat: `/cluster restarts [ns]` — pods restarted in the last 24h",
         ":compass: `/cluster dns <name>` — resolve a hostname from inside the cluster",
@@ -1034,6 +1035,106 @@ data:
                      "check `/cluster silences`_")
         post(rurl, "\n".join(lines))
 
+    def compact(n):
+        """≤4-char human number for aligned columns: 823K, 1.9G, 12M, 0."""
+        if n < 1:
+            return "0"
+        for unit in ("", "K", "M", "G", "T"):
+            if n < 1000 or unit == "T":
+                return (f"{n:.0f}{unit}" if n >= 10 or unit == ""
+                        else f"{n:.1f}{unit}")
+            n /= 1024
+
+    PS_SORT = {"cpu": 2, "mem": 3, "memory": 3, "net": 4, "network": 4,
+               "io": 5, "disk": 5, "ssd": 5}
+
+    def ps(rurl, args):
+        """Task-manager view. Cluster-wide = one row per WORKLOAD
+        (deployment/sts/ds via the kube-prometheus-stack pod→owner
+        recording rule); with a namespace = one row per pod. Rendered as a
+        code block — Slack has no tables, monospace columns are the way
+        (which also means no emoji in the body)."""
+        ns, sort_key, limit = None, "cpu", 20
+        for a in args:
+            if a.lower() in PS_SORT:
+                sort_key = a.lower()
+            elif a.isdigit():
+                limit = min(int(a), 40)
+            else:
+                ns = a
+        nsf = f'namespace="{ns}",' if ns else ""
+
+        def vec(q):
+            return {(r["metric"]["namespace"], r["metric"]["pod"]):
+                    float(r["value"][1]) for r in promq(q)}
+
+        cpu = vec(f'sum by (namespace, pod) (rate('
+                  f'container_cpu_usage_seconds_total'
+                  f'{{{nsf}container!="",pod!=""}}[5m]))')
+        mem = vec(f'sum by (namespace, pod) ('
+                  f'container_memory_working_set_bytes'
+                  f'{{{nsf}container!="",pod!=""}})')
+        net = vec(f'sum by (namespace, pod) (rate('
+                  f'container_network_receive_bytes_total{{{nsf}pod!=""}}[5m])'
+                  f' + rate(container_network_transmit_bytes_total'
+                  f'{{{nsf}pod!=""}}[5m]))')
+        dio = vec(f'sum by (namespace, pod) (rate('
+                  f'container_fs_writes_bytes_total{{{nsf}container!=""}}[5m])'
+                  f' + rate(container_fs_reads_bytes_total'
+                  f'{{{nsf}container!=""}}[5m]))')
+
+        rows = []       # [name, pods|None, cpu, mem, net, io]
+        if ns:
+            for p in sorted({k[1] for k in cpu.keys() | mem.keys()}):
+                k = (ns, p)
+                rows.append([p, None, cpu.get(k, 0), mem.get(k, 0),
+                             net.get(k, 0), dio.get(k, 0)])
+            if not rows:
+                post(rurl, f":shrug: no pod metrics in `{ns}`")
+                return
+            title = f":control_knobs: *{ns}* — {len(rows)} pods"
+        else:
+            wl = {(r["metric"]["namespace"], r["metric"]["pod"]):
+                  (r["metric"]["namespace"], r["metric"]["workload"])
+                  for r in promq("namespace_workload_pod:kube_pod_owner:relabel")}
+            agg = {}
+            for k in cpu.keys() | mem.keys():
+                g = wl.get(k, k)        # bare pods/jobs group as themselves
+                a = agg.setdefault(g, [0, 0.0, 0.0, 0.0, 0.0])
+                a[0] += 1
+                a[1] += cpu.get(k, 0)
+                a[2] += mem.get(k, 0)
+                a[3] += net.get(k, 0)
+                a[4] += dio.get(k, 0)
+            for (ns_, w), a in agg.items():
+                rows.append([f"{ns_}/{w}", a[0]] + a[1:])
+            title = (f":control_knobs: *cluster task manager* — "
+                     f"{len(rows)} workloads, "
+                     f"{sum(a[0] for a in agg.values())} pods")
+        rows.sort(key=lambda r: -r[PS_SORT[sort_key]])
+        shown = rows[:limit]
+        name_w = min(max(len(r[0]) for r in shown), 34)
+        head = (f"{'NAME':<{name_w}} " + ("" if ns else "PODS ")
+                + f"{'CPU':>5} {'MEM':>5} {'NET/s':>6} {'DISK/s':>6}")
+        body = [head, "-" * len(head)]
+        for r in shown:
+            nm = r[0] if len(r[0]) <= name_w else r[0][:name_w - 1] + "…"
+            body.append(
+                f"{nm:<{name_w}} "
+                + ("" if r[1] is None else f"{r[1]:>4} ")
+                + f"{r[2]:>5.2f} {compact(r[3]):>5} "
+                  f"{compact(r[4]):>6} {compact(r[5]):>6}")
+        post(rurl, "\n".join([
+            f"{title}  ·  sorted by *{sort_key}*  ·  5m rates",
+            f"{'namespace' if ns else 'cluster'} load: "
+            f"{sum(r[2] for r in rows):.1f} cores  ·  "
+            f"{human(sum(r[3] for r in rows))} working set",
+            "```" + "\n".join(body) + "```",
+            "_`/cluster ps [ns] [cpu|mem|net|io] [rows]` · hostNetwork pods "
+            "(metallb, node-exporter…) count whole-node NICs in NET/s · "
+            "DISK/s = container-fs I/O, PVC traffic not always counted; "
+            "fullness: `/cluster storage`_"]))
+
     def storage(rurl, args):
         """PVC fullness from kubelet volume stats — `pvcs` shows requested
         size, this shows how full each volume actually is."""
@@ -1272,6 +1373,7 @@ data:
         "why": why,
         "events": events,
         "top": top,
+        "ps": ps,
         "restarts": restarts,
         "flux": flux,
         "velero": velero,
@@ -1294,6 +1396,7 @@ data:
                "gitops": "flux", "cert": "certs", "certificates": "certs",
                "db": "cnpg", "databases": "cnpg",
                "triage": "why", "debug": "why",
+               "taskmgr": "ps", "htop": "ps", "procs": "ps", "util": "ps",
                "volumes": "longhorn", "lh": "longhorn",
                "usage": "storage", "disk": "storage",
                "job": "jobs", "cron": "jobs", "cronjobs": "jobs",
