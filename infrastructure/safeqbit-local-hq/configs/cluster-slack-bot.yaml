@@ -1,26 +1,95 @@
-# cluster-slack-bot.yaml
-# On-demand cluster queries from Slack:
+# cluster-slack-bot.yaml — read-only /cluster slash-command bot
+#
+# Docs: workbook/slack-bot.md        (architecture, Slack app setup, ops)
+#       workbook/slack-bot-manual.md (usage playbooks: bot vs real commands)
+#
+# Commands (v4 + ps):
 #   /cluster summary|backups|pods|deploys|nodes [name]|logs|describe|why|
-#            events|top|pvcs|storage|ingresses|flux|velero [name]|certs|cnpg|
-#            restarts|alerts|silences|longhorn|jobs|etcd|dns
+#            events|top|ps|restarts|flux|velero [n|name]|certs|cnpg|pvcs|
+#            storage|longhorn|jobs|silences|etcd|dns|ingresses|alerts|help
 #
-# Uses Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to Slack and
-# receives slash commands over it. Nothing is exposed inbound — the cluster
-# stays LAN-only. Free-tier Slack feature (app-level token, no subscription).
+# ── How it works ──────────────────────────────────────────────────────────
+# TRANSPORT — Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to
+# Slack (slack-bolt SocketModeHandler) and receives slash commands over it.
+# Nothing is exposed inbound; the cluster stays LAN-only. Free-tier Slack
+# feature (app-level xapp token, no subscription).
 #
-# Design:
-#   - `summary` and `backups` run the EXISTING report scripts
-#     (cluster-summary-report-script / backup-summary-report-script
-#     ConfigMaps, mounted read-only) as subprocesses with SLACK_WEBHOOK_URL
-#     pointed at the slash command's response_url — same report, delivered
-#     to wherever the command was typed (visible only to the invoker).
-#     Zero duplication with the CronJobs.
-#   - The kubectl-style commands hit the K8s API read-only; `alerts` and
-#     `top` query Prometheus.
-#   - STRICTLY read-only RBAC: a compromised Slack token can look, not touch.
-#     No write verbs anywhere, by design — do not add restart/delete commands.
-#   - `logs` ships pod log tails into Slack (ephemeral, invoker-only, but
-#     Slack-hosted) — keep that in mind for apps that log secrets.
+# REQUEST LIFECYCLE (cluster_cmd, bottom of bot.py):
+#   1. Slack delivers the slash command over the WS.
+#   2. Optional allow-list check (ALLOWED_SLACK_USER_IDS from the Secret).
+#   3. ack() within Slack's hard 3-second deadline — prints the
+#      ":hourglass: gathering data…" placeholder.
+#   4. The handler runs (up to ~30s for `backups`) and POSTs the answer to
+#      the command's response_url → ephemeral, invoker-only, in whatever
+#      channel the command was typed. response_url allows 5 posts/30 min;
+#      each command uses 1-2.
+#
+# DATA SOURCES (all read-only):
+#   K8s API       k8s_raw()/k8s(): direct HTTPS to the apiserver with the
+#                 ServiceAccount token + CA (no kubectl in the image);
+#                 retries 429/500/503 with backoff. Core resources + CRDs:
+#                 Flux, cert-manager, CNPG, Velero (incl. podvolumebackups),
+#                 Longhorn (volumes/nodes/settings), k3s etcdsnapshotfiles.
+#   Prometheus    promq(): instant-query API on the in-cluster service
+#                 (PROM_BASE). Used by top, ps, restarts, alerts, storage +
+#                 the cpu/lag decorations in nodes/cnpg. `ps` additionally
+#                 depends on the kube-prometheus-stack recording rule
+#                 namespace_workload_pod:kube_pod_owner:relabel for its
+#                 pod→workload grouping.
+#   Alertmanager  silences: GET /api/v2/silences (ALERTMANAGER_BASE).
+#   Reports       summary/backups exec the EXISTING report ConfigMaps
+#                 (cluster-summary-report-script / backup-summary-report-
+#                 script, mounted under /reports) as subprocesses with
+#                 SLACK_WEBHOOK_URL=response_url — one copy of the report
+#                 code, shared with the CronJobs.
+#   dns           socket.getaddrinfo from THIS pod. NB: the pod runs
+#                 ndots=1 (dnsConfig below), so it does NOT reproduce the
+#                 app-pod ndots:5 search-domain flapping.
+#
+# OUTPUT CONVENTIONS (Slack mrkdwn — no tables, no colors):
+#   - Title line "<emoji> *Title* — context", blank line, rows; sections
+#     separated by blank lines; "·" as the field separator.
+#   - Status icons: white_check_mark / warning / red_circle, plus
+#     hourglass (in progress) and double_vertical_bar (suspended).
+#   - bar() renders ▰▰▰▱▱ meters for percentages (storage, longhorn,
+#     node headroom); pct_icon() picks the icon from amber/red thresholds.
+#   - Dense tables (`ps`): aligned monospace columns inside a ``` code
+#     block — the only way to fake a table in Slack; emoji don't render
+#     inside code blocks.
+#   - Every list view ends with an italic _hint_ to the natural next
+#     command. Long lists are truncated; post() clips at 39k chars
+#     (Slack's cap is ~40k).
+#   - Pod/backup/node name arguments accept a unique PREFIX (resolve_pod
+#     and friends) — nobody types 20-char hash suffixes on a phone.
+#
+# SECURITY:
+#   - STRICTLY read-only RBAC (get/list only, no write verbs, no secrets
+#     access): a leaked Slack token can look, never touch. Do NOT add
+#     restart/delete/scale commands. `silences` is a read-only GET; there
+#     is deliberately NO `curl <url>` command (SSRF — a Slack token must
+#     not become a LAN request proxy).
+#   - `logs`/`why` ship log tails into Slack (ephemeral + invoker-only,
+#     but Slack-hosted) — mind apps that log secrets.
+#   - allowed-user-ids in the Secret restricts invokers (empty = whole
+#     workspace may invoke).
+#
+# ── How it's built / how to change it ─────────────────────────────────────
+#   - One python file (bot.py in the ConfigMap below), stdlib + slack-bolt
+#     only. python:3.13-alpine pip-installs slack-bolt (pinned) at pod
+#     start: a PyPI outage delays (re)starts, never a running bot.
+#   - Single replica + Recreate: two bots would answer everything twice.
+#   - ADDING A COMMAND: write `def cmd(rurl, args)` that post()s once or
+#     twice; register it in HANDLERS (+ ALIASES); add a USAGE line; if it
+#     reads a new resource, add get/list to the ClusterRole below AND
+#     update workbook/slack-bot.md. Keep it read-only.
+#   - TESTING WITHOUT SLACK: every handler is a plain function taking
+#     (response_url, args) — exec bot.py up to `app = App(`, monkeypatch
+#     k8s_raw/promq/post with kubectl-get-raw shims, call handlers
+#     directly. This is how v4 and ps were verified against the live
+#     cluster pre-merge (harness pattern: workbook/slack-bot.md → Ops).
+#   - ROLLOUT: Flux applies this file, but the pod only reads /bot/bot.py
+#     at start — `kubectl -n monitoring rollout restart
+#     deploy/cluster-slack-bot` after every ConfigMap change.
 #
 # Secret `cluster-slack-bot-tokens` (SealedSecret in
 # cluster-slack-bot-tokens.yaml) keys:
@@ -198,6 +267,8 @@ data:
         ":question: `/cluster help` — this list",
     ])
 
+    # ---------- data-source clients (K8s API, Prometheus, Slack) ----------
+
     def k8s_raw(path, timeout=30):
         tok = open(f"{SA_DIR}/token").read()
         ctx = ssl.create_default_context(cafile=f"{SA_DIR}/ca.crt")
@@ -229,6 +300,8 @@ data:
         req = urllib.request.Request(response_url, body,
                                      {"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15)
+
+    # ---------- formatting helpers (ages, sizes, meters) ----------
 
     def ts(s):
         try:
@@ -1361,6 +1434,8 @@ data:
             post(rurl, "\n".join(lines))
         except socket.gaierror as e:
             post(rurl, f":x: `{name}` did not resolve: {e}")
+
+    # ---------- dispatch: verb → handler, aliases, Slack entrypoint ----------
 
     HANDLERS = {
         "summary": run_report("/reports/cluster/report.py", "cluster summary"),

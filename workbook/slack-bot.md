@@ -2,7 +2,12 @@
 
 **Created:** 2026-07-04. **v4:** 2026-07-07 (triage `why`, log `prev`/`grep`,
 Velero per-backup detail, Longhorn/storage/jobs/silences/etcd/dns, grouped
-help, formatting pass).
+help, formatting pass). **+ps** same day (task-manager view, PR #42).
+
+> **Usage playbooks** — which commands to run for which real incident,
+> and where the bot hands off to a terminal — live in the companion
+> **[slack-bot-manual.md](slack-bot-manual.md)**. This file covers
+> architecture, Slack app setup, and ops.
 
 A single-pod Slack bot for read-only cluster queries from Slack. Runs in
 **Socket Mode**: the pod opens an outbound WebSocket to Slack and receives
@@ -145,3 +150,38 @@ kubectl -n monitoring rollout restart deploy/cluster-slack-bot   # reconnect
   each command uses 1–2, so this never binds in practice.
 - Token rotation: regenerate in the Slack app UI, reseal, restart the
   deployment.
+- **After ANY change to the ConfigMap**: the pod only reads `/bot/bot.py`
+  at start — Flux applying the manifest is not enough, restart the
+  deployment.
+
+### Testing handlers without Slack (the harness pattern)
+
+Every command handler is a plain function `def cmd(response_url, args)`
+whose only side effect is `post()`. That makes the whole bot testable
+from a workstation with cluster read access, no Slack round-trip:
+
+```python
+# extract bot.py from the ConfigMap, then:
+src = open("bot.py").read()
+g = {}
+exec(src.split("app = App(")[0], g)      # defs only, no Slack bootstrap
+                                          # (stub slack_bolt in sys.modules,
+                                          #  set KUBERNETES_SERVICE_HOST)
+g["k8s_raw"] = lambda p, timeout=30: subprocess.run(
+    ["kubectl", "get", "--raw", p], capture_output=True, text=True,
+    check=True).stdout                    # my creds, read-only verbs only
+g["k8s"] = lambda p: json.loads(g["k8s_raw"](p))
+g["promq"] = ...   # kubectl get --raw the Prometheus service /proxy path
+g["post"] = lambda rurl, text: print(text)
+g["why"]("fake-url", ["monitoring", "grafana"])
+```
+
+Prometheus/Alertmanager go through the apiserver service proxy
+(`/api/v1/namespaces/monitoring/services/<svc>:<port>/proxy/…`). This is
+how v4 and `ps` were verified against the live cluster before merging —
+it caught three real bugs (duplicate wrong-namespace kubelet volume
+series, k3s vendor node-conditions misread, a blank-line glitch).
+One gap to know about: the shim raises `CalledProcessError` where the
+real `k8s_raw` raises `urllib.error.HTTPError`, so error-path handling
+(e.g. `logs prev` on a pod with no previous instance) needs a mental
+translation when it "fails" in the harness.
