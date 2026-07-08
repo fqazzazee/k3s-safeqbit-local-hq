@@ -1,6 +1,8 @@
 # Cluster Slack Bot — on-demand queries via `/cluster`
 
-**Created:** 2026-07-04.
+**Created:** 2026-07-04. **v4:** 2026-07-07 (triage `why`, log `prev`/`grep`,
+Velero per-backup detail, Longhorn/storage/jobs/silences/etcd/dns, grouped
+help, formatting pass).
 
 A single-pod Slack bot for read-only cluster queries from Slack. Runs in
 **Socket Mode**: the pod opens an outbound WebSocket to Slack and receives
@@ -23,25 +25,57 @@ Free-tier Slack feature (no subscription; counts as 1 of the free plan's
 /cluster backups                         weekly backup digest, on demand (~30s, B2 listing)
 /cluster pods [ns]                       pod health; all-ns overview or one-ns full listing
 /cluster deploys [ns]                    deployments/statefulsets/daemonsets ready-vs-desired
-/cluster nodes                           readiness, kubelet version, CPU load
+/cluster nodes [name]                    fleet view; with a name (prefix ok): conditions,
+                                         taints, requests-vs-allocatable headroom meters
 /cluster logs <ns> <pod> [ctr] [lines]   log tail (pod name PREFIX is enough; default 30, max 200)
+             [prev] [grep <pattern>]     prev = crashed instance's logs; grep filters
+                                         case-insensitively over the last 1000 lines
 /cluster describe <ns> <pod>             pod detail: containers, restarts w/ last exit, its events
+/cluster why <ns> <pod>                  ONE-SHOT TRIAGE: state + last exit + conditions +
+                                         events + crashed container's previous log tail
 /cluster events [ns]                     recent Warning events, newest first
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
-/cluster velero [n]                      last n Velero backups: phase, errors, age (default 12)
+/cluster velero [n | name]               last n backups (default 12); with a name (prefix ok):
+                                         errors, failureReason, expiry, per-volume PVB detail
 /cluster certs                           cert-manager expiries, soonest first (red <7d, amber <21d)
 /cluster cnpg                            DB clusters: ready, primary, replication lag, last backup
-/cluster pvcs [ns]                       volume claims: status, capacity, storageclass
+/cluster pvcs [ns]                       volume claims grouped by ns: status, capacity, class
+/cluster storage [n]                     n fullest volumes by used % (kubelet stats; red ≥90%)
+/cluster longhorn                        volume robustness + per-node disk used/scheduled
+                                         vs the over-provisioning limit
+/cluster jobs [ns]                       cronjob last run/success + lingering Failed jobs
+                                         (catches stale kopia-maintain jobs)
+/cluster silences                        active Alertmanager silences, soonest expiry first
+/cluster etcd                            Layer 0 check: etcd snapshots in B2 + node-local
+                                         (red if newest B2 snapshot older than 8d)
+/cluster dns <name>                      resolve a hostname from inside the cluster
 /cluster ingresses                       hostname → service map
 /cluster alerts                          currently firing Prometheus alerts
-/cluster help                            the list above with kubectl equivalents
+/cluster help                            all of the above, grouped, w/ kubectl equivalents
 ```
 
 Singular/plural aliases work (`pod`, `deploy`, `log`, `event`, `pvc`,
-`ingress`…). `help` shows each command with the kubectl command you'd
-type on a terminal.
+`ingress`…), plus `triage`/`debug`→why, `volumes`/`lh`→longhorn,
+`usage`/`disk`→storage, `cron`→jobs, `nslookup`/`resolve`→dns,
+`snapshots`→etcd. `help` shows each command with the kubectl command
+you'd type on a terminal.
+
+v4 caveats worth remembering:
+
+- `dns` resolves in the **bot pod, which runs ndots=1** — it will NOT
+  reproduce the ndots:5 search-domain flapping that default app pods hit
+  (see the DNS-amplification notes). It answers "does this name exist in
+  cluster DNS", not "will every pod resolve it".
+- `velero <name>` per-volume detail comes from PodVolumeBackup CRs, which
+  are pruned with their backup — older backups show CR-level status only.
+  Full logs still need `velero backup logs` in the velero pod.
+- `alerts` reads Prometheus `ALERTS`, which does not know about
+  Alertmanager silences — a silenced alert still shows as firing there;
+  cross-check with `silences`.
+- `silences` is read-only (GET on the Alertmanager API). Creating or
+  expiring silences stays in the Alertmanager UI, on purpose.
 
 Replies go through the slash command's `response_url` → visible **only to
 the invoker**, in whatever channel the command was typed. `summary` and
@@ -54,11 +88,14 @@ the CronJobs and the bot share one copy of the report code.
 
 - **Read-only by design.** The bot's RBAC is `get,list` on pods, pods/log,
   nodes, events, PVCs, deployments/statefulsets/daemonsets, ingresses,
-  Flux kustomizations/helmreleases, cert-manager certificates and CNPG
-  clusters, plus reuse of the `backup-summary-report` ClusterRole and the
-  velero `cloud-credentials` read Role. No write verbs anywhere — a leaked
-  Slack token can look at the cluster, never touch it. Do not add
-  restart/delete commands.
+  Flux kustomizations/helmreleases, cert-manager certificates, CNPG
+  clusters, batch jobs/cronjobs, Longhorn volumes/nodes/settings, k3s
+  etcdsnapshotfiles and velero podvolumebackups, plus reuse of the
+  `backup-summary-report` ClusterRole and the velero `cloud-credentials`
+  read Role. No write verbs anywhere — a leaked Slack token can look at
+  the cluster, never touch it. Do not add restart/delete commands.
+- `dns` was deliberately NOT extended to a `curl <url>` command — that
+  would turn a leaked Slack token into a LAN request proxy (SSRF).
 - `logs` ships pod log tails into Slack (ephemeral + invoker-only, but
   Slack-hosted) — mind apps that log secrets.
 - `allowed-user-ids` key in the SealedSecret (comma-separated Slack user
