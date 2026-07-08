@@ -34,6 +34,10 @@ Free-tier Slack feature (no subscription; counts as 1 of the free plan's
 /cluster why <ns> <pod>                  ONE-SHOT TRIAGE: state + last exit + conditions +
                                          events + crashed container's previous log tail
 /cluster events [ns]                     recent Warning events, newest first
+/cluster ps [ns] [cpu|mem|net|io] [n]    TASK MANAGER: per-workload usage table (per-pod
+                                         when a ns is given) — CPU, mem working set, net
+                                         and disk I/O rates in a monospace code block;
+                                         aliases taskmgr/htop/procs/util
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
@@ -63,6 +67,14 @@ Singular/plural aliases work (`pod`, `deploy`, `log`, `event`, `pvc`,
 you'd type on a terminal.
 
 v4 caveats worth remembering:
+
+- `ps` groups pods into workloads via the kube-prometheus-stack recording
+  rule `namespace_workload_pod:kube_pod_owner:relabel`; bare pods (e.g.
+  Longhorn instance-managers) appear as their own rows. hostNetwork pods
+  (metallb-speaker, node-exporter, flannel-offload…) report **whole-node**
+  NIC traffic as their NET/s. DISK/s is cAdvisor container-fs I/O — writes
+  to PVC block devices aren't always attributed. It renders in a code
+  block, so no emoji/colour inside the table (Slack limitation).
 
 - `dns` resolves in the **bot pod, which runs ndots=1** — it will NOT
   reproduce the ndots:5 search-domain flapping that default app pods hit
