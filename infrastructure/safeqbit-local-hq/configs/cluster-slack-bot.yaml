@@ -1163,12 +1163,20 @@ data:
                   f' + rate(container_fs_reads_bytes_total'
                   f'{{{nsf}container!=""}}[5m]))')
 
-        # pod → node placement (kube_pod_info, kube-state-metrics). Queried
-        # cluster-wide even in namespace mode so the common-prefix strip
-        # below always sees every node name: k3s-server-01/02/03 → 1/2/3.
+        # pod → node placement from the cAdvisor series' own node label —
+        # the SAME series the cpu/mem queries aggregate, so the join can
+        # never miss. (v1 used kube_pod_info, but KSM drops deleted pods
+        # instantly while cAdvisor series linger ~5 min in instant queries,
+        # so every pod churn produced "?" NODEs for its old/new pods.)
+        # Queried cluster-wide even in namespace mode so the common-prefix
+        # strip below always sees every node name: k3s-server-01/02/03 → 1/2/3.
         loc = {(r["metric"]["namespace"], r["metric"]["pod"]):
                r["metric"].get("node", "?")
-               for r in promq('kube_pod_info{pod!=""}')}
+               for r in promq('count by (namespace, pod, node) ('
+                              'container_memory_working_set_bytes'
+                              '{container!="",pod!=""} or '
+                              'container_cpu_usage_seconds_total'
+                              '{container!="",pod!=""})')}
         all_nodes = set(loc.values())
         pre = (os.path.commonprefix(sorted(all_nodes))
                if len(all_nodes) > 1 else "")
