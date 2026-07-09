@@ -1,0 +1,41 @@
+# velero-schedule-home-assistant.yaml
+# Weekly Velero backup of the home-assistant namespace to B2.
+#
+# Covers: home-assistant-config PVC — the entire HA state: integration
+# credentials and entity registry (.storage/), configuration.yaml + packages,
+# automations, dashboards, and the recorder SQLite DB. No CNPG / external
+# database; this PVC snapshot is the only off-cluster backup of the smart
+# climate system's config and every paired integration.
+#
+# Schedule: Sundays 06:00 UTC (03:00 affine, 04:00 uptime-kuma and 05:00
+# pulse are taken — this spreads the weekly snapshot load).
+# Retention: 60 days (~8 weekly restore points), matching uptime-kuma —
+# config-loss is noticed within days, not months.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: home-assistant-weekly
+  namespace: velero
+spec:
+  schedule: "0 6 * * 0"
+
+  template:
+    ttl: "1440h0m0s"   # 60 days
+    includedNamespaces:
+      - home-assistant
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false

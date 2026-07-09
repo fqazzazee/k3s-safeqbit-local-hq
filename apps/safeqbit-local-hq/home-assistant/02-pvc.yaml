@@ -1,0 +1,30 @@
+# 02-pvc.yaml
+# home-assistant-config (10Gi RWO) → /config
+#
+# This single volume IS the Home Assistant installation state:
+# configuration.yaml + packages, every integration's credentials and entity
+# registry (.storage/), the recorder SQLite DB (history), automations,
+# dashboards, and helper values (restore state). There is no external
+# database and no declarative source for the .storage content — treat this
+# PVC as the source of truth and keep the Velero schedule
+# (infrastructure/.../velero-schedule-home-assistant.yaml) backing it up.
+#
+# 10Gi: the recorder DB is the only thing that grows (purge_keep_days
+# defaults to 10). Longhorn RWO — single-writer, replicated across 3 nodes.
+# Expandable: kubectl patch pvc home-assistant-config -n home-assistant \
+#   -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: home-assistant-config
+  namespace: home-assistant
+  labels:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: config
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
