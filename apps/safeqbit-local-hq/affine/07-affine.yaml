@@ -42,6 +42,20 @@ spec:
         app.kubernetes.io/name: affine
         app.kubernetes.io/component: server
     spec:
+      # Single-replica by design (RWO Longhorn storage/config volumes) —
+      # availability = reschedule speed. Evict after 60s of node
+      # not-ready/unreachable instead of the 300s default; Longhorn's
+      # node-down-pod-deletion-policy force-releases the volumes so the new
+      # pod can attach elsewhere.
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
       initContainers:
         - name: wait-for-db
           image: postgres:16-alpine

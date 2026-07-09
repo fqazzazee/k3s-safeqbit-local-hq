@@ -37,6 +37,32 @@ A living document. Add entries as new patterns emerge.
 Use this procedure when taking a node offline for hardware changes - RAM, disk, NIC, BIOS update, etc.  
 **Estimated downtime per app:** 1-5 min for stateless pods, longer if Longhorn replicas must rebuild.
 
+### 0. Quick path — planned VM shutdown/reboot (the Proxmox-note version)
+
+For a plain shutdown or reboot of ONE VM with no hardware/volume work, the full
+procedure below is overkill: every Longhorn volume runs 3 replicas
+(`defaultReplicaCount: 3`), so steps 2 (replica juggling) and 3 (Flux suspend)
+are unnecessary. This short form lives in each VM's Notes field in Proxmox:
+
+```bash
+# BEFORE shutting down this VM — from any other node or the workstation:
+kubectl drain k3s-server-01 --ignore-daemonsets --delete-emptydir-data \
+  --grace-period=60 --timeout=300s
+kubectl get pods -A --field-selector=spec.nodeName=k3s-server-01   # only DaemonSets left
+# now shut the VM down (Proxmox shutdown = ACPI = clean k3s stop)
+
+# AFTER boot:
+kubectl get nodes                    # wait for Ready
+kubectl uncordon k3s-server-01
+# sanity: /cluster nodes and /cluster pods in Slack
+```
+
+Rules: one server at a time (etcd quorum is 2/3); if the drain hangs past
+5 min, see "If drain is stuck" below; for hardware/disk work use the full
+procedure from step 1.
+
+---
+
 ### 1. Pre-flight checks
 
 Verify the cluster is healthy before touching anything:
