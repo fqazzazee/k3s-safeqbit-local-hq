@@ -177,7 +177,8 @@ Restores are terminal-only, always: [restore-drills.md](restore-drills.md).
 |---|---|
 | What's eating CPU right now? | `/cluster ps` (default sort) |
 | Memory? network? disk io? | `/cluster ps mem` / `net` / `io` |
-| Inside one app? | `/cluster ps <ns>` — per-pod |
+| Inside one app? | `/cluster ps <ns>` — per-pod, with WORKLOAD column |
+| Everything, incl. idle workloads? | `/cluster ps all` — default is top-20 by sort key with a `+N more` trailer |
 | Is a node schedulable-full? | `/cluster nodes <name>` headroom meters |
 | Which volume fills next? | `/cluster storage` |
 | Who restarted overnight? | `/cluster restarts` |
