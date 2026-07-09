@@ -89,7 +89,10 @@ v4 caveats worth remembering:
 - `ps` groups pods into workloads via the kube-prometheus-stack recording
   rule `namespace_workload_pod:kube_pod_owner:relabel`; bare pods (e.g.
   Longhorn instance-managers) appear as their own rows. The NODE column
-  comes from `kube_pod_info` (kube-state-metrics) — no new RBAC needed. hostNetwork pods
+  reads the `node` label straight off the cAdvisor series the cpu/mem
+  queries aggregate (no new RBAC). Don't join via `kube_pod_info` for
+  this: KSM drops deleted pods instantly while cAdvisor series linger
+  ~5 min in instant queries, so pod churn shows "?" NODEs (the v1 bug). hostNetwork pods
   (metallb-speaker, node-exporter, flannel-offload…) report **whole-node**
   NIC traffic as their NET/s. DISK/s is cAdvisor container-fs I/O — writes
   to PVC block devices aren't always attributed. It renders in a code
@@ -155,7 +158,13 @@ the CronJobs and the bot share one copy of the report code.
 kubectl -n monitoring get pods -l app.kubernetes.io/name=cluster-slack-bot
 kubectl -n monitoring logs deploy/cluster-slack-bot --tail=50
 # healthy startup ends with a Bolt "connection established" / apps run log
-kubectl -n monitoring rollout restart deploy/cluster-slack-bot   # reconnect
+# Restart (reconnect, or pick up a bot.py ConfigMap change — pods don't
+# auto-restart on ConfigMap edits): delete pods one at a time. Do NOT use
+# `rollout restart` — it edits the pod template (restartedAt annotation),
+# which Flux's server-side apply strips on the next reconcile, rolling
+# everything a second time (observed 2026-07-08).
+kubectl -n monitoring delete pod <bot-pod-1>   # wait for its replacement to go 1/1…
+kubectl -n monitoring delete pod <bot-pod-2>   # …then the other, so one bot stays connected
 ```
 
 - The pod pip-installs `slack-bolt` at start — a PyPI outage delays
