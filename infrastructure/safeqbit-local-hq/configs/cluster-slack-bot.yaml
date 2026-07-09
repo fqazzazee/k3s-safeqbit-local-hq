@@ -77,7 +77,12 @@
 #   - One python file (bot.py in the ConfigMap below), stdlib + slack-bolt
 #     only. python:3.13-alpine pip-installs slack-bolt (pinned) at pod
 #     start: a PyPI outage delays (re)starts, never a running bot.
-#   - Single replica + Recreate: two bots would answer everything twice.
+#   - 2 replicas + RollingUpdate: Slack Socket Mode delivers each payload
+#     to exactly ONE of the open connections (its documented HA mechanism,
+#     ≤10 conns), so replicas do NOT duplicate answers — and the bot has no
+#     self-initiated posting (the scheduled reports are separate CronJobs).
+#     Two replicas keep /cluster alive through a node loss — the 2026-07-08
+#     server-01 outage took the bot down exactly when it was needed.
 #   - ADDING A COMMAND: write `def cmd(rurl, args)` that post()s once or
 #     twice; register it in HANDLERS (+ ALIASES); add a USAGE line; if it
 #     reads a new resource, add get/list to the ClusterRole below AND
@@ -245,7 +250,7 @@ data:
         ":mag: `/cluster describe <ns> <pod>` — pod detail + its events · `kubectl describe pod`",
         ":scroll: `/cluster logs <ns> <pod> [ctr] [lines] [prev] [grep <pat>]` — log tail · `kubectl logs`",
         ":zap: `/cluster events [ns]` — recent Warning events",
-        ":control_knobs: `/cluster ps [ns] [cpu|mem|net|io]` — task manager: per-workload (or per-pod) usage",
+        ":control_knobs: `/cluster ps [ns] [cpu|mem|net|io]` — task manager: per-workload (or per-pod) usage + node",
         ":fire: `/cluster top [ns]` — top CPU/memory pods · `kubectl top pods -A`",
         ":repeat: `/cluster restarts [ns]` — pods restarted in the last 24h",
         ":compass: `/cluster dns <name>` — resolve a hostname from inside the cluster",
@@ -1124,7 +1129,9 @@ data:
     def ps(rurl, args):
         """Task-manager view. Cluster-wide = one row per WORKLOAD
         (deployment/sts/ds via the kube-prometheus-stack pod→owner
-        recording rule); with a namespace = one row per pod. Rendered as a
+        recording rule); with a namespace = one row per pod. NODE column
+        shows placement (common hostname prefix stripped, so
+        k3s-server-01 → 1; "all" = a ds on every node). Rendered as a
         code block — Slack has no tables, monospace columns are the way
         (which also means no emoji in the body)."""
         ns, sort_key, limit = None, "cpu", 20
@@ -1156,12 +1163,24 @@ data:
                   f' + rate(container_fs_reads_bytes_total'
                   f'{{{nsf}container!=""}}[5m]))')
 
-        rows = []       # [name, pods|None, cpu, mem, net, io]
+        # pod → node placement (kube_pod_info, kube-state-metrics). Queried
+        # cluster-wide even in namespace mode so the common-prefix strip
+        # below always sees every node name: k3s-server-01/02/03 → 1/2/3.
+        loc = {(r["metric"]["namespace"], r["metric"]["pod"]):
+               r["metric"].get("node", "?")
+               for r in promq('kube_pod_info{pod!=""}')}
+        all_nodes = set(loc.values())
+        pre = (os.path.commonprefix(sorted(all_nodes))
+               if len(all_nodes) > 1 else "")
+        short = lambda n: n[len(pre):] or n
+
+        rows = []       # [name, pods|None, cpu, mem, net, io, node(s)]
         if ns:
             for p in sorted({k[1] for k in cpu.keys() | mem.keys()}):
                 k = (ns, p)
                 rows.append([p, None, cpu.get(k, 0), mem.get(k, 0),
-                             net.get(k, 0), dio.get(k, 0)])
+                             net.get(k, 0), dio.get(k, 0),
+                             short(loc.get(k, "?"))])
             if not rows:
                 post(rurl, f":shrug: no pod metrics in `{ns}`")
                 return
@@ -1170,7 +1189,7 @@ data:
             wl = {(r["metric"]["namespace"], r["metric"]["pod"]):
                   (r["metric"]["namespace"], r["metric"]["workload"])
                   for r in promq("namespace_workload_pod:kube_pod_owner:relabel")}
-            agg = {}
+            agg, where = {}, {}
             for k in cpu.keys() | mem.keys():
                 g = wl.get(k, k)        # bare pods/jobs group as themselves
                 a = agg.setdefault(g, [0, 0.0, 0.0, 0.0, 0.0])
@@ -1179,8 +1198,12 @@ data:
                 a[2] += mem.get(k, 0)
                 a[3] += net.get(k, 0)
                 a[4] += dio.get(k, 0)
+                where.setdefault(g, set()).add(short(loc.get(k, "?")))
             for (ns_, w), a in agg.items():
-                rows.append([f"{ns_}/{w}", a[0]] + a[1:])
+                nds = sorted(where[(ns_, w)])
+                rows.append([f"{ns_}/{w}", a[0]] + a[1:]
+                            + ["all" if len(nds) == len(all_nodes) > 1
+                               else ",".join(nds)])
             title = (f":control_knobs: *cluster task manager* — "
                      f"{len(rows)} workloads, "
                      f"{sum(a[0] for a in agg.values())} pods")
@@ -1188,7 +1211,7 @@ data:
         shown = rows[:limit]
         name_w = min(max(len(r[0]) for r in shown), 34)
         head = (f"{'NAME':<{name_w}} " + ("" if ns else "PODS ")
-                + f"{'CPU':>5} {'MEM':>5} {'NET/s':>6} {'DISK/s':>6}")
+                + f"{'CPU':>5} {'MEM':>5} {'NET/s':>6} {'DISK/s':>6} NODE")
         body = [head, "-" * len(head)]
         for r in shown:
             nm = r[0] if len(r[0]) <= name_w else r[0][:name_w - 1] + "…"
@@ -1196,14 +1219,15 @@ data:
                 f"{nm:<{name_w}} "
                 + ("" if r[1] is None else f"{r[1]:>4} ")
                 + f"{r[2]:>5.2f} {compact(r[3]):>5} "
-                  f"{compact(r[4]):>6} {compact(r[5]):>6}")
+                  f"{compact(r[4]):>6} {compact(r[5]):>6} {r[6]}")
         post(rurl, "\n".join([
             f"{title}  ·  sorted by *{sort_key}*  ·  5m rates",
             f"{'namespace' if ns else 'cluster'} load: "
             f"{sum(r[2] for r in rows):.1f} cores  ·  "
             f"{human(sum(r[3] for r in rows))} working set",
             "```" + "\n".join(body) + "```",
-            "_`/cluster ps [ns] [cpu|mem|net|io] [rows]` · hostNetwork pods "
+            "_`/cluster ps [ns] [cpu|mem|net|io] [rows]` · NODE = node "
+            "suffix (all = every node) · hostNetwork pods "
             "(metallb, node-exporter…) count whole-node NICs in NET/s · "
             "DISK/s = container-fs I/O, PVC traffic not always counted; "
             "fullness: `/cluster storage`_"]))
@@ -1514,10 +1538,14 @@ metadata:
   labels:
     app.kubernetes.io/name: cluster-slack-bot
 spec:
-  replicas: 1
-  # Single replica + Recreate: two bots = every command answered twice.
+  # 2 replicas so /cluster survives a single node loss (see the header
+  # note: Socket Mode delivers each payload to one connection — no double
+  # answers). Stateless, no PVC, so RollingUpdate is safe and keeps one
+  # bot connected through rollouts (Recreate would drop both, and the
+  # pip-install startup makes that a ~1 min gap).
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
   selector:
     matchLabels:
       app.kubernetes.io/name: cluster-slack-bot
