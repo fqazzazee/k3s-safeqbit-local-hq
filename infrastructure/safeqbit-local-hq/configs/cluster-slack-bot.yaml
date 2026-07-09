@@ -93,8 +93,10 @@
 #     directly. This is how v4 and ps were verified against the live
 #     cluster pre-merge (harness pattern: workbook/slack-bot.md → Ops).
 #   - ROLLOUT: Flux applies this file, but the pod only reads /bot/bot.py
-#     at start — `kubectl -n monitoring rollout restart
-#     deploy/cluster-slack-bot` after every ConfigMap change.
+#     at start — after every ConfigMap change delete the bot pods ONE AT A
+#     TIME (kubectl -n monitoring delete pod <a>, wait Ready, then <b>).
+#     Do NOT `rollout restart`: Flux SSA strips the restartedAt annotation
+#     and double-rolls the deployment (learned on #46).
 #
 # Secret `cluster-slack-bot-tokens` (SealedSecret in
 # cluster-slack-bot-tokens.yaml) keys:
@@ -250,7 +252,7 @@ data:
         ":mag: `/cluster describe <ns> <pod>` — pod detail + its events · `kubectl describe pod`",
         ":scroll: `/cluster logs <ns> <pod> [ctr] [lines] [prev] [grep <pat>]` — log tail · `kubectl logs`",
         ":zap: `/cluster events [ns]` — recent Warning events",
-        ":control_knobs: `/cluster ps [ns] [cpu|mem|net|io]` — task manager: per-workload (or per-pod) usage + node",
+        ":control_knobs: `/cluster ps [ns] [cpu|mem|net|io] [n|all]` — task manager: per-workload (or per-pod) usage + node",
         ":fire: `/cluster top [ns]` — top CPU/memory pods · `kubectl top pods -A`",
         ":repeat: `/cluster restarts [ns]` — pods restarted in the last 24h",
         ":compass: `/cluster dns <name>` — resolve a hostname from inside the cluster",
@@ -1129,17 +1131,24 @@ data:
     def ps(rurl, args):
         """Task-manager view. Cluster-wide = one row per WORKLOAD
         (deployment/sts/ds via the kube-prometheus-stack pod→owner
-        recording rule); with a namespace = one row per pod. NODE column
-        shows placement (common hostname prefix stripped, so
-        k3s-server-01 → 1; "all" = a ds on every node). Rendered as a
-        code block — Slack has no tables, monospace columns are the way
-        (which also means no emoji in the body)."""
+        recording rule) with NAMESPACE and WORKLOAD as separate columns;
+        with a namespace = one row per pod, each attributed to its
+        workload in a WORKLOAD column. Names are never truncated. NODE
+        column shows placement (common hostname prefix stripped, so
+        k3s-server-01 → 1; "all" = a ds on every node). Rows are capped
+        at the top-N by sort key (default 20) but the cut is VISIBLE
+        ("+N more" trailer) and "all" lifts it — a silent cap made idle
+        workloads (0.00 cpu, sorted last) look missing entirely.
+        Rendered as a code block — Slack has no tables, monospace
+        columns are the way (which also means no emoji in the body)."""
         ns, sort_key, limit = None, "cpu", 20
         for a in args:
             if a.lower() in PS_SORT:
                 sort_key = a.lower()
             elif a.isdigit():
-                limit = min(int(a), 40)
+                limit = min(int(a), 200)
+            elif a.lower() == "all":
+                limit = 10 ** 6
             else:
                 ns = a
         nsf = f'namespace="{ns}",' if ns else ""
@@ -1182,11 +1191,19 @@ data:
                if len(all_nodes) > 1 else "")
         short = lambda n: n[len(pre):] or n
 
-        rows = []       # [name, pods|None, cpu, mem, net, io, node(s)]
+        # pod → workload for both modes: the WORKLOAD column in namespace
+        # mode, the grouping key cluster-wide. Bare pods/jobs without an
+        # owner row fall back to their own pod name / "-".
+        wl = {(r["metric"]["namespace"], r["metric"]["pod"]):
+              r["metric"]["workload"]
+              for r in promq("namespace_workload_pod:kube_pod_owner:relabel")}
+
+        rows = []   # [(col1, workload), pods|None, cpu, mem, net, io, node(s)]
         if ns:
             for p in sorted({k[1] for k in cpu.keys() | mem.keys()}):
                 k = (ns, p)
-                rows.append([p, None, cpu.get(k, 0), mem.get(k, 0),
+                rows.append([(p, wl.get(k, "-")), None,
+                             cpu.get(k, 0), mem.get(k, 0),
                              net.get(k, 0), dio.get(k, 0),
                              short(loc.get(k, "?"))])
             if not rows:
@@ -1194,12 +1211,9 @@ data:
                 return
             title = f":control_knobs: *{ns}* — {len(rows)} pods"
         else:
-            wl = {(r["metric"]["namespace"], r["metric"]["pod"]):
-                  (r["metric"]["namespace"], r["metric"]["workload"])
-                  for r in promq("namespace_workload_pod:kube_pod_owner:relabel")}
             agg, where = {}, {}
             for k in cpu.keys() | mem.keys():
-                g = wl.get(k, k)        # bare pods/jobs group as themselves
+                g = (k[0], wl.get(k, k[1]))  # bare pods group as themselves
                 a = agg.setdefault(g, [0, 0.0, 0.0, 0.0, 0.0])
                 a[0] += 1
                 a[1] += cpu.get(k, 0)
@@ -1209,7 +1223,7 @@ data:
                 where.setdefault(g, set()).add(short(loc.get(k, "?")))
             for (ns_, w), a in agg.items():
                 nds = sorted(where[(ns_, w)])
-                rows.append([f"{ns_}/{w}", a[0]] + a[1:]
+                rows.append([(ns_, w), a[0]] + a[1:]
                             + ["all" if len(nds) == len(all_nodes) > 1
                                else ",".join(nds)])
             title = (f":control_knobs: *cluster task manager* — "
@@ -1217,24 +1231,29 @@ data:
                      f"{sum(a[0] for a in agg.values())} pods")
         rows.sort(key=lambda r: -r[PS_SORT[sort_key]])
         shown = rows[:limit]
-        name_w = min(max(len(r[0]) for r in shown), 34)
-        head = (f"{'NAME':<{name_w}} " + ("" if ns else "PODS ")
+        h1 = "POD" if ns else "NAMESPACE"
+        c1_w = max(max(len(r[0][0]) for r in shown), len(h1))
+        c2_w = max(max(len(r[0][1]) for r in shown), len("WORKLOAD"))
+        head = (f"{h1:<{c1_w}} {'WORKLOAD':<{c2_w}} "
+                + ("" if ns else "PODS ")
                 + f"{'CPU':>5} {'MEM':>5} {'NET/s':>6} {'DISK/s':>6} NODE")
         body = [head, "-" * len(head)]
         for r in shown:
-            nm = r[0] if len(r[0]) <= name_w else r[0][:name_w - 1] + "…"
             body.append(
-                f"{nm:<{name_w}} "
+                f"{r[0][0]:<{c1_w}} {r[0][1]:<{c2_w}} "
                 + ("" if r[1] is None else f"{r[1]:>4} ")
                 + f"{r[2]:>5.2f} {compact(r[3]):>5} "
                   f"{compact(r[4]):>6} {compact(r[5]):>6} {r[6]}")
+        if len(rows) > len(shown):
+            body.append(f"... +{len(rows) - len(shown)} more -- "
+                        f"/cluster ps {ns + ' ' if ns else ''}all")
         post(rurl, "\n".join([
             f"{title}  ·  sorted by *{sort_key}*  ·  5m rates",
             f"{'namespace' if ns else 'cluster'} load: "
             f"{sum(r[2] for r in rows):.1f} cores  ·  "
             f"{human(sum(r[3] for r in rows))} working set",
             "```" + "\n".join(body) + "```",
-            "_`/cluster ps [ns] [cpu|mem|net|io] [rows]` · NODE = node "
+            "_`/cluster ps [ns] [cpu|mem|net|io] [rows|all]` · NODE = node "
             "suffix (all = every node) · hostNetwork pods "
             "(metallb, node-exporter…) count whole-node NICs in NET/s · "
             "DISK/s = container-fs I/O, PVC traffic not always counted; "

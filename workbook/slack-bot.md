@@ -50,12 +50,18 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster why <ns> <pod>                  ONE-SHOT TRIAGE: state + last exit + conditions +
                                          events + crashed container's previous log tail
 /cluster events [ns]                     recent Warning events, newest first
-/cluster ps [ns] [cpu|mem|net|io] [n]    TASK MANAGER: per-workload usage table (per-pod
-                                         when a ns is given) — CPU, mem working set, net
-                                         and disk I/O rates + NODE placement (common
-                                         hostname prefix stripped: k3s-server-01 → 1;
-                                         "all" = on every node) in a monospace code
-                                         block; aliases taskmgr/htop/procs/util
+/cluster ps [ns] [cpu|mem|net|io] [n|all] TASK MANAGER: per-workload usage table (per-pod
+                                         when a ns is given) — NAMESPACE + WORKLOAD as
+                                         separate columns (POD + WORKLOAD in ns mode),
+                                         full names (never truncated), CPU, mem working
+                                         set, net and disk I/O rates + NODE placement
+                                         (common hostname prefix stripped:
+                                         k3s-server-01 → 1; "all" = on every node) in a
+                                         monospace code block. Shows top-n by sort key
+                                         (default 20) with a visible "+N more" trailer;
+                                         "all" lists everything — idle workloads sort
+                                         last on cpu, they are NOT missing, just below
+                                         the cut. Aliases taskmgr/htop/procs/util
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
