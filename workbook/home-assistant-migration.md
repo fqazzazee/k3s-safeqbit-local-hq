@@ -1,6 +1,6 @@
 # Home Assistant migration — Docker host → k3s
 
-**Status:** manifests + fixed data tarball ready, cutover pending
+**Status:** CUTOVER DONE 2026-07-09 (clean boot, 0 errors, cert issued) — soak until ~2026-07-16, then decommission the Docker container
 **Namespace:** `home-assistant` · **Hostname:** `home-assistant-01.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.4.1` (= exact Docker-host version; lift-and-shift)
 
 **Upgrade gate (2026-07-09):** Sensi is a HACS **custom component**
@@ -141,6 +141,14 @@ container, keep the tarball until the first successful Velero backup
 
 ## Gotchas learned / to remember
 
+- **ndots:1 is load-bearing (found during cutover, PR #49):** with the
+  default ndots:5, the HA image's musl resolver hard-fails ALL external
+  lookups via the `local.safeqbit.com` search-domain amplification (upstream
+  answers NOERROR/no-answer, musl stops). Broke Sensi (pip-installs
+  python-socketio at boot → "Setup failed") AND Jellyfin. Same fix as the
+  slack bot. Also: live `kubectl patch` does not survive — flux-system
+  re-applies apps.yaml (clears `suspend:`) and SSA strips out-of-Git fields;
+  such fixes must land via Git.
 - **Never lower the image tag** once a version has booted against the PVC —
   recorder schema migrations are one-way.
 - Restarts: normal `kubectl delete pod` is fine (Recreate + 120s
