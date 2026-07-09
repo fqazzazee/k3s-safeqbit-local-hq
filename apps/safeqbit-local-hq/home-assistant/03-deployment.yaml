@@ -55,6 +55,19 @@ spec:
           operator: Exists
           effect: NoExecute
           tolerationSeconds: 60
+      # ndots:1 — same treatment as the slack bot. The default ndots:5 +
+      # local.safeqbit.com search domain breaks external lookups in this
+      # image's musl resolver: the amplified query
+      # <name>.local.safeqbit.com returns NOERROR-with-no-answer upstream,
+      # musl stops there (EAI_NODATA, "Name has no usable address") and the
+      # real absolute query never runs. Verified 2026-07-09 during cutover:
+      # wheels.home-assistant.io / google.com unresolvable → Sensi (HACS)
+      # couldn't pip-install python-socketio → "Setup failed". HA never
+      # needs in-cluster short names (LAN/cloud only), so ndots:1 is safe.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
       # Give HA time to write recorder state and shut down cleanly — a hard
       # kill loses the last restore-state snapshot (helper slider/toggle
       # values). 120s is generous; normal shutdown is a few seconds.
