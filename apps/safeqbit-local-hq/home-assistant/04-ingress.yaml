@@ -1,5 +1,5 @@
 # 04-ingress.yaml
-# Ingress for Home Assistant at https://ha.local.safeqbit.com
+# Ingress for Home Assistant at https://home-assistant-01.local.safeqbit.com
 # cert-manager auto-issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
 #
 # The HA frontend runs entirely over a long-lived WebSocket — nginx upgrades
@@ -30,10 +30,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - ha.local.safeqbit.com
+        - home-assistant-01.local.safeqbit.com
       secretName: home-assistant-tls
   rules:
-    - host: ha.local.safeqbit.com
+    - host: home-assistant-01.local.safeqbit.com
       http:
         paths:
           - path: /

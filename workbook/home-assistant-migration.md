@@ -1,7 +1,7 @@
 # Home Assistant migration — Docker host → k3s
 
 **Status:** manifests + fixed data tarball ready, cutover pending
-**Namespace:** `home-assistant` · **Hostname:** `ha.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.4.1` (= exact Docker-host version; lift-and-shift)
+**Namespace:** `home-assistant` · **Hostname:** `home-assistant-01.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.4.1` (= exact Docker-host version; lift-and-shift)
 
 **Upgrade gate (2026-07-09):** Sensi is a HACS **custom component**
 (`custom_components/sensi`, iprak/sensi v2.1.4), plus HACS itself. Core was
@@ -45,7 +45,7 @@ match. Config tarred and staged on the workstation at
 
 Merge the manifests; Flux creates namespace/PVC/Deployment/Ingress. The pod
 boots with an empty `/config` and shows the onboarding screen — expected,
-we overwrite it in step 3. Verify `https://ha.local.safeqbit.com` serves the
+we overwrite it in step 3. Verify `https://home-assistant-01.local.safeqbit.com` serves the
 onboarding page (proves ingress + cert + PVC attach) but **do not complete
 onboarding**.
 
@@ -116,7 +116,7 @@ kubectl logs -n home-assistant deploy/home-assistant -f
 
 Checklist:
 
-- [ ] Login works at `ha.local.safeqbit.com` with existing credentials
+- [ ] Login works at `home-assistant-01.local.safeqbit.com` with existing credentials
 - [ ] Sensi thermostat online (cloud tokens carry over in `.storage`)
 - [ ] UniFi Protect camera streams (direct IP)
 - [ ] HTG3 room sensors updating
@@ -127,7 +127,7 @@ Checklist:
       integration shows it unavailable, set the TV's IP in the integration's
       options ("known hosts"). Only integration expected to need hand-holding.
 - [ ] Update Settings → System → Network → internal URL, and the mobile
-      app's server URL, to `https://ha.local.safeqbit.com`
+      app's server URL, to `https://home-assistant-01.local.safeqbit.com`
 - [ ] Paste `local-only/home-assistant/dashboard-apartment.yaml` via
       dashboard ⋮ → Raw configuration editor (adds Baby Comfort section)
 
