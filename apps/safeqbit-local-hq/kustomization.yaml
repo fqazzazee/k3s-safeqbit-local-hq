@@ -18,6 +18,7 @@ resources:
   - uptime-kuma
   - guacamole
   - pulse
+  - home-assistant
   # pangolin removed 2026-06-18 — moving to a standalone Linux VM (docker-compose).
   # The k3s/MetalLB topology forced a non-stock split (separate edge/gerbil IPs,
   # /ping sidecar, hairpin) and the in-cluster Newt connector can't carry data

@@ -1,0 +1,45 @@
+# 04-ingress.yaml
+# Ingress for Home Assistant at https://home-assistant-01.local.safeqbit.com
+# cert-manager auto-issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+#
+# The HA frontend runs entirely over a long-lived WebSocket — nginx upgrades
+# the connection automatically, but the default 60s proxy timeouts would tear
+# it down and make the UI reconnect constantly; the extended timeouts keep it
+# stable (same treatment as uptime-kuma).
+#
+# HA REJECTS proxied requests (400) unless configuration.yaml trusts the
+# proxy. The migrated config must contain:
+#   http:
+#     use_x_forwarded_for: true
+#     trusted_proxies:
+#       - 10.42.0.0/16   # k3s pod CIDR (ingress-nginx pods)
+# — applied during data copy, see workbook/home-assistant-migration.md.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: home-assistant
+  namespace: home-assistant
+  labels:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - home-assistant-01.local.safeqbit.com
+      secretName: home-assistant-tls
+  rules:
+    - host: home-assistant-01.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: home-assistant
+                port:
+                  number: 8123

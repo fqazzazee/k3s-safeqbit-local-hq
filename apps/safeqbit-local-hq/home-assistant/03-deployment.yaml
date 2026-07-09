@@ -1,0 +1,123 @@
+# 03-deployment.yaml
+# Home Assistant Core Deployment + ClusterIP Service.
+#
+# Single replica, embedded SQLite recorder on the config PVC — same class as
+# uptime-kuma/pulse: single-writer, do NOT scale. Availability = reschedule
+# speed (60s tolerations + Longhorn node-down-pod-deletion-policy), per the
+# node-loss doctrine.
+#
+# Image is pinned to 2026.4.1 — the EXACT version the Docker-host install was
+# running at migration time, so the cutover is a pure lift-and-shift. HA
+# migrates its DB schema forward on upgrade but CANNOT downgrade — never
+# lower this tag once a version has booted against the PVC.
+#
+# Upgrade gate: Sensi is a HACS custom component (iprak/sensi, v2.1.4 at
+# migration) — before bumping core, check that component's releases for
+# compatibility, then bump this tag and update HACS components together.
+# https://github.com/home-assistant/core/releases
+#
+# All devices reach HA over network/cloud (Sensi = cloud, UniFi Protect =
+# direct IP, HTG3 sensors = network/cloud) — no USB/Bluetooth passthrough,
+# no hostNetwork, no node pinning. One caveat: mDNS/zeroconf discovery does
+# not cross the pod network, so the cast integration (fofo TV) may need its
+# IP set manually under the integration's "known hosts" option; already
+# configured integrations otherwise carry over in .storage untouched.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: home-assistant
+  namespace: home-assistant
+  labels:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # Recreate: the config PVC is RWO Longhorn — RollingUpdate would deadlock
+  # on Multi-Attach — and two HA instances writing one SQLite DB corrupts it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: home-assistant
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: home-assistant
+        app.kubernetes.io/component: server
+    spec:
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+      # Give HA time to write recorder state and shut down cleanly — a hard
+      # kill loses the last restore-state snapshot (helper slider/toggle
+      # values). 120s is generous; normal shutdown is a few seconds.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: home-assistant
+          image: ghcr.io/home-assistant/home-assistant:2026.4.1
+          ports:
+            - containerPort: 8123
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          # / serves the frontend login page unauthenticated → clean 200.
+          # HA can take a while to boot when integrations are slow to set up,
+          # hence the startupProbe with a wide window instead of a huge
+          # initialDelay on liveness.
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8123
+            periodSeconds: 10
+            failureThreshold: 30   # up to 5 min to come up
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8123
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8123
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: home-assistant-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: home-assistant
+  namespace: home-assistant
+  labels:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+      protocol: TCP
