@@ -134,3 +134,36 @@ spec:
       port: 8123
       targetPort: 8123
       protocol: TCP
+---
+# LAN LoadBalancer — the IoT push endpoint (humans use the ingress).
+#
+# Sleeping Shelly devices (HTG3 H&T Gen3 room sensors) are not polled: they
+# wake every ~2h and PUSH to the outbound-websocket address provisioned into
+# each device — plain ws://<ip>:8123/api/shelly/ws. On the Docker host that
+# was the host IP; after the k3s migration they pushed into the void and
+# went unavailable ("Sleeping device did not update within 7200 seconds").
+# Device firmware can't follow the ingress path (TLS redirect + LE cert
+# validation), so HA keeps a stable plain-HTTP LAN IP. HA's *internal URL*
+# must be http://10.10.13.51:8123 so the Shelly integration provisions
+# future/re-woken devices with this address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: home-assistant-lan
+  namespace: home-assistant
+  labels:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: lan
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "10.10.13.51"
+    metallb.universe.tf/address-pool: "reserved-pool"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: home-assistant
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+      protocol: TCP
