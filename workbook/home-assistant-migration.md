@@ -161,3 +161,16 @@ manually after the soak: exec in the velero pod →
 - mDNS/zeroconf/SSDP discovery is dead on the pod network. Existing
   integrations keep working (config is in `.storage`); *new* discovery-based
   devices must be added by IP.
+- **Sleeping Shelly devices broke on cutover (found ~5h in):** the HTG3
+  H&T Gen3 sensors are push-not-poll — each device holds an
+  outbound-websocket target (`ws://<HA>:8123/api/shelly/ws`) pointing at
+  the old Docker host IP, so after migration they woke, failed, slept →
+  "Sleeping device did not update within 7200 seconds" → unavailable.
+  Fix: `home-assistant-lan` LoadBalancer Service at **10.10.13.51:8123**
+  (reserved-pool; device firmware can't do the ingress' TLS/redirect), HA
+  internal URL set to `http://10.10.13.51:8123`, then each sensor woken by
+  button-press and either its Shelly config entry reloaded in HA while
+  awake (HA re-provisions the ws target) or the address set directly in
+  the device web UI (Settings → Outbound Websocket). Any future HA IP/URL
+  move must repeat the wake+reprovision dance — sleeping devices never
+  fetch the new address on their own.
