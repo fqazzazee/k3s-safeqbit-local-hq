@@ -213,6 +213,13 @@ spec:
             hosts:
               - alertmanager.local.safeqbit.com
       alertmanagerSpec:
+        # HA pair: alerting must survive a single node loss (the 2026-07-08
+        # server-01 outage took the only replica down for ~50 min). The chart
+        # wires gossip clustering between replicas automatically — silences
+        # and notification dedup are shared. Hard anti-affinity so the two
+        # replicas can never land on the same node.
+        replicas: 2
+        podAntiAffinity: hard
         # Reachable URL for notification links ({{ .ExternalURL }} in Slack
         # messages). Without it links point at the in-cluster service URL.
         externalUrl: https://alertmanager.local.safeqbit.com

@@ -45,6 +45,13 @@ spec:
       # blocking the Prometheus volume from rebuilding to 3 replicas.
       orphanResourceAutoDeletion: replica-data
       orphanResourceAutoDeletionGracePeriod: 300
+      # When a node goes down, force-delete the stuck-Terminating pods whose
+      # RWO volumes are attached to it so they can reschedule and reattach on
+      # a healthy node. Default is do-nothing, which left alertmanager (and
+      # would leave every RWO singleton: prometheus, vaultwarden, uptime-kuma,
+      # affine, pulse…) down for the whole 2026-07-08 server-01 outage —
+      # a dead node can't cooperate in releasing its volume attachments.
+      nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
     persistence:
       defaultClass: true                  # longhorn IS the default StorageClass now
       defaultClassReplicaCount: 3

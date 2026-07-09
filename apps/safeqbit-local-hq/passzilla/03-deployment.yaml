@@ -17,6 +17,20 @@ spec:
       labels:
         app: passzilla
     spec:
+      # Single-replica by design (DB on RWO Longhorn) — availability =
+      # reschedule speed. Evict after 60s of node not-ready/unreachable
+      # instead of the 300s default; Longhorn's node-down-pod-deletion-policy
+      # force-releases the volume so the new pod can attach elsewhere.
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+
       securityContext:
         fsGroup: 1000
 

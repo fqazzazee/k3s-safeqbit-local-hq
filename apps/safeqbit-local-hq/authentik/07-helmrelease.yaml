@@ -50,7 +50,11 @@ spec:
         user: authentik
 
     server:
-      replicas: 1
+      # 2 replicas: authentik fronts Grafana/Prometheus/Alertmanager (forward
+      # auth) and is the OIDC IdP — losing it locks the dashboards mid-
+      # incident. Stateless: state lives in CNPG (2 instances), media/templates
+      # are RWX NFS, and 2025.x needs no Redis, so scaling is safe.
+      replicas: 2
       service:
         type: ClusterIP
       ingress:

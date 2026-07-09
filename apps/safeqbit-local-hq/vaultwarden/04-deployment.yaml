@@ -28,6 +28,20 @@ spec:
       labels:
         app: vaultwarden          # what the Service selector matches against
     spec:
+      # Single-replica by design (SQLite on RWO Longhorn) — availability =
+      # reschedule speed. Evict after 60s of node not-ready/unreachable
+      # instead of the 300s default; Longhorn's node-down-pod-deletion-policy
+      # force-releases the volume so the new pod can attach elsewhere.
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+
       # securityContext sets the UID/GID the container runs as. Vaultwarden's
       # official image runs as root by default, which is fine for our setup
       # because TrueNAS Maproot is configured to keep root as root server-side.
