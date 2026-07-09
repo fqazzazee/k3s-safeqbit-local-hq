@@ -3,17 +3,28 @@
 **Created:** 2026-07-04. **v4:** 2026-07-07 (triage `why`, log `prev`/`grep`,
 Velero per-backup detail, Longhorn/storage/jobs/silences/etcd/dns, grouped
 help, formatting pass). **+ps** same day (task-manager view, PR #42).
+**2026-07-08:** `ps` gained a NODE column (pod→node placement) and the bot
+went to **2 replicas** for node-loss HA (see "Replicas & HA" below).
 
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
 > **[slack-bot-manual.md](slack-bot-manual.md)**. This file covers
 > architecture, Slack app setup, and ops.
 
-A single-pod Slack bot for read-only cluster queries from Slack. Runs in
-**Socket Mode**: the pod opens an outbound WebSocket to Slack and receives
+A Slack bot for read-only cluster queries from Slack. Runs in
+**Socket Mode**: each pod opens an outbound WebSocket to Slack and receives
 slash commands over it — nothing inbound, the cluster stays LAN-only.
 Free-tier Slack feature (no subscription; counts as 1 of the free plan's
 10 workspace integrations, alongside the Alertmanager webhook).
+
+**Replicas & HA (2026-07-08):** 2 replicas + RollingUpdate. Safe because
+Socket Mode delivers each payload to exactly **one** of an app's open
+connections (its documented HA mechanism, up to 10) — replicas do not
+double-answer — and the bot has no self-initiated posting (the scheduled
+reports are separate CronJobs). Motivated by the 2026-07-08 server-01
+outage, which took the then-single bot down exactly when it was needed.
+If double answers ever DO appear, that assumption broke: drop back to
+`replicas: 1` and investigate before scaling again.
 
 | | |
 |---|---|
@@ -41,8 +52,10 @@ Free-tier Slack feature (no subscription; counts as 1 of the free plan's
 /cluster events [ns]                     recent Warning events, newest first
 /cluster ps [ns] [cpu|mem|net|io] [n]    TASK MANAGER: per-workload usage table (per-pod
                                          when a ns is given) — CPU, mem working set, net
-                                         and disk I/O rates in a monospace code block;
-                                         aliases taskmgr/htop/procs/util
+                                         and disk I/O rates + NODE placement (common
+                                         hostname prefix stripped: k3s-server-01 → 1;
+                                         "all" = on every node) in a monospace code
+                                         block; aliases taskmgr/htop/procs/util
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
@@ -75,7 +88,8 @@ v4 caveats worth remembering:
 
 - `ps` groups pods into workloads via the kube-prometheus-stack recording
   rule `namespace_workload_pod:kube_pod_owner:relabel`; bare pods (e.g.
-  Longhorn instance-managers) appear as their own rows. hostNetwork pods
+  Longhorn instance-managers) appear as their own rows. The NODE column
+  comes from `kube_pod_info` (kube-state-metrics) — no new RBAC needed. hostNetwork pods
   (metallb-speaker, node-exporter, flannel-offload…) report **whole-node**
   NIC traffic as their NET/s. DISK/s is cAdvisor container-fs I/O — writes
   to PVC block devices aren't always attributed. It renders in a code

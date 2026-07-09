@@ -32,7 +32,8 @@ Then narrow down:
                               instance hasn't failed yet — the reason is
                               always in the PREVIOUS one)
 /cluster logs <ns> <pod> grep <pattern>
-/cluster ps [ns]              task manager: who is eating cpu/mem/net/disk
+/cluster ps [ns]              task manager: who is eating cpu/mem/net/disk,
+                              and on which node (NODE column; all = every node)
 ```
 
 Pod names accept a unique prefix everywhere — `/cluster why monitoring
