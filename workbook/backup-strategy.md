@@ -97,6 +97,7 @@ All Velero schedules use `snapshotMoveData: true`, which:
 | `uptime-kuma-weekly` | `0 4 * * 0` | Sundays 04:00 | 60d | uptime-kuma |
 | `pulse-weekly` | `0 5 * * 0` | Sundays 05:00 | 60d | pulse |
 | `guacamole-bimonthly` | `30 4 8,23 * *` | 8th + 23rd 04:30 | 28d (keep last 2) | guacamole |
+| `home-assistant-bimonthly` | `0 6 3,18 * *` | 3rd + 18th 06:00 | 28d (keep last 2) | home-assistant |
 
 **Source of truth:** `infrastructure/safeqbit-local-hq/configs/velero-schedule-*.yaml`
 

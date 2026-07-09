@@ -137,7 +137,10 @@ Keep the Docker container **stopped but present** + the tarball as rollback.
 Rollback = `docker start <ha-container>` (and scale the k3s deploy to 0 —
 two live instances would fight over cloud sessions). After soak: remove the
 container, keep the tarball until the first successful Velero backup
-(`home-assistant-weekly`, Sundays 06:00 UTC, 60d TTL) is verified.
+(`home-assistant-bimonthly`, 3rd + 18th 06:00 UTC, 28d TTL = keep last 2)
+is verified. Since the next scheduled run may be weeks out, trigger one
+manually after the soak: exec in the velero pod →
+`velero backup create --from-schedule home-assistant-bimonthly`.
 
 ## Gotchas learned / to remember
 

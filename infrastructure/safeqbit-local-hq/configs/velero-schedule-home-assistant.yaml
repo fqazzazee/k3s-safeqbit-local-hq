@@ -1,5 +1,5 @@
 # velero-schedule-home-assistant.yaml
-# Weekly Velero backup of the home-assistant namespace to B2.
+# Bi-monthly Velero backup of the home-assistant namespace to B2.
 #
 # Covers: home-assistant-config PVC — the entire HA state: integration
 # credentials and entity registry (.storage/), configuration.yaml + packages,
@@ -7,20 +7,25 @@
 # database; this PVC snapshot is the only off-cluster backup of the smart
 # climate system's config and every paired integration.
 #
-# Schedule: Sundays 06:00 UTC (03:00 affine, 04:00 uptime-kuma and 05:00
-# pulse are taken — this spreads the weekly snapshot load).
-# Retention: 60 days (~8 weekly restore points), matching uptime-kuma —
-# config-loss is noticed within days, not months.
+# Schedule: 3rd and 18th at 06:00 UTC (free slot — the other bi-monthly
+# pairs 1,16 / 5,20 / 7,22 / 8,23 / 9,24 / 11,26 / 13,28 are taken).
+# Retention: 672h (28 days) -> keep last 2 bi-monthly backups, same policy
+# as guacamole. HA config changes are low-churn and config-loss is noticed
+# within days; history lives in the recorder DB and is expendable.
+#
+# Renamed from home-assistant-weekly 2026-07-09 (infrastructure-configs has
+# prune:false, so the old Schedule CR was deleted by hand — kubectl delete
+# is safe for Schedule CRs; it is Backup CRs that backup-sync resurrects).
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: home-assistant-weekly
+  name: home-assistant-bimonthly
   namespace: velero
 spec:
-  schedule: "0 6 * * 0"
+  schedule: "0 6 3,18 * *"
 
   template:
-    ttl: "1440h0m0s"   # 60 days
+    ttl: "672h0m0s"   # 28 days -> keep last 2 bi-monthly backups
     includedNamespaces:
       - home-assistant
     excludedResources:
