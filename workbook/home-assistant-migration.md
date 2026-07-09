@@ -1,7 +1,13 @@
 # Home Assistant migration — Docker host → k3s
 
-**Status:** manifests merged, data cutover pending
-**Namespace:** `home-assistant` · **Hostname:** `ha.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.7.1`
+**Status:** manifests + fixed data tarball ready, cutover pending
+**Namespace:** `home-assistant` · **Hostname:** `ha.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.4.1` (= exact Docker-host version; lift-and-shift)
+
+**Upgrade gate (2026-07-09):** Sensi is a HACS **custom component**
+(`custom_components/sensi`, iprak/sensi v2.1.4), plus HACS itself. Core was
+deliberately NOT bumped during migration (host ran 2026.4.1). To upgrade core
+later: check iprak/sensi compatibility → bump the image tag → update HACS
+components. Never downgrade the tag once booted.
 
 ## Why / shape
 
@@ -23,16 +29,17 @@ so we do the direct equivalent: stop container → tar → untar onto PVC.
 
 ## Cutover procedure
 
-### 0. Pre-flight (Docker host)
+### 0. Pre-flight — DONE 2026-07-09
 
-```sh
-# Version check — the k3s image tag must be >= this (HA migrates the DB
-# schema forward on boot and CANNOT downgrade):
-docker exec <ha-container> cat /config/.HA_VERSION
+Host `.HA_VERSION` = **2026.4.1** (frontend 20260325.6); image pinned to
+match. Config tarred and staged on the workstation at
+`local-only/home-assistant/` (git-ignored):
 
-# Find the /config bind mount on the host:
-docker inspect <ha-container> --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
-```
+- `ha-config.tar` — raw snapshot from the host (216M, wraps a `config/`
+  prefix; taken while HA was running — `-wal`/`-shm` present)
+- `ha-config-ready.tgz` — extracted, **fixes applied**, re-packed
+  root-relative (stream straight into `/config`), logs excluded
+- `fix-config.sh` — the fixes as an idempotent script (see step 3)
 
 ### 1. Let Flux deploy the app
 
@@ -50,41 +57,36 @@ kubectl scale deploy -n home-assistant home-assistant --replicas=0
 
 # Docker host — final state snapshot (graceful stop = restore-state saved):
 docker stop <ha-container>
-tar czf ha-config.tgz -C /path/to/ha-config .
-scp <docker-host>:ha-config.tgz .
 ```
 
-### 3. Fix the config INSIDE the tarball's source, or after extraction
+The staged `ha-config-ready.tgz` was tarred while HA was running — fine for
+everything except possibly the last few hours of recorder history (SQLite
+WAL not checkpointed; worst case HA moves a corrupt DB aside and starts
+fresh history — config/credentials unaffected). For a byte-perfect cutover,
+re-tar after the stop and re-apply fixes:
 
-Three edits, all in `configuration.yaml` unless noted — doing them now means
-first boot in k3s is already correct:
+```sh
+tar czf ha-config-fresh.tgz -C /path/to/ha-config .   # on the Docker host
+scp <docker-host>:ha-config-fresh.tgz . && mkdir fresh && tar xzf ha-config-fresh.tgz -C fresh
+sh local-only/home-assistant/fix-config.sh fresh
+tar czf ha-config-ready.tgz -C fresh --exclude='home-assistant.log*' .
+```
 
-1. **Trusted proxies** (mandatory — HA returns 400 behind ingress-nginx
-   without it):
+### 3. Config fixes — DONE (baked into `ha-config-ready.tgz`)
 
-   ```yaml
-   http:
-     use_x_forwarded_for: true
-     trusted_proxies:
-       - 10.42.0.0/16   # k3s pod CIDR (verified on cluster)
-   ```
+Applied by `local-only/home-assistant/fix-config.sh` (idempotent; re-run it
+if step 2 produced a fresh tar):
 
-2. **Packages enabled + baby comfort sensors** (see
-   `local-only/home-assistant/`): add under the existing `homeassistant:`
-   block (or create one — never a duplicate key):
-
-   ```yaml
-   homeassistant:
-     packages: !include_dir_named packages
-   ```
-
-   and copy `local-only/home-assistant/packages/baby_comfort.yaml` into
-   `packages/`.
-
-3. **Delete every `initial:` line** under `input_boolean:` / `input_number:`
-   / `input_select:` / `input_datetime:` — `initial:` re-applies on every
-   restart and is why sliders/toggles were resetting on the Docker host.
-   Without it HA restores last values from `.storage/core.restore_state`.
+1. **Trusted proxies**: `10.42.0.0/16` (k3s pod CIDR, verified) added to the
+   existing `http.trusted_proxies` list; old Docker-era proxy entries kept
+   (harmless). Without this HA 400s behind ingress-nginx.
+2. **Baby comfort sensors**: `baby_comfort.yaml` copied into `packages/`
+   (packages were already enabled — the whole smart-climate system lives in
+   `packages/smart_climate.yaml`).
+3. **Sliders-reset bug**: all 23 `initial:` lines deleted from
+   `packages/smart_climate.yaml` — `initial:` re-applies on every restart,
+   overriding restore-state. Without it HA restores last helper values from
+   `.storage/core.restore_state`.
 
 ### 4. Copy data onto the PVC
 
@@ -99,7 +101,7 @@ kubectl run -n home-assistant ha-copy --restart=Never \
 
 # Wipe what the empty first boot wrote (incl. dotfiles), then stream in:
 kubectl exec -n home-assistant ha-copy -- sh -c 'rm -rf /config/* /config/.[!.]* 2>/dev/null; true'
-kubectl exec -i -n home-assistant ha-copy -- tar xzf - -C /config < ha-config.tgz
+kubectl exec -i -n home-assistant ha-copy -- tar xzf - -C /config < local-only/home-assistant/ha-config-ready.tgz
 kubectl exec -n home-assistant ha-copy -- cat /config/.HA_VERSION   # sanity
 kubectl delete pod -n home-assistant ha-copy
 ```

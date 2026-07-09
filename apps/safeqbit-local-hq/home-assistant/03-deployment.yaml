@@ -6,11 +6,15 @@
 # speed (60s tolerations + Longhorn node-down-pod-deletion-policy), per the
 # node-loss doctrine.
 #
-# Image is pinned to an exact release. HA migrates its DB schema forward on
-# upgrade but CANNOT downgrade — never lower this tag once a version has
-# booted against the PVC. The tag must be >= the version the Docker-host
-# install was running at migration time (it was; migrated at 2026.7.1).
-# Bump deliberately after reading https://github.com/home-assistant/core/releases
+# Image is pinned to 2026.4.1 — the EXACT version the Docker-host install was
+# running at migration time, so the cutover is a pure lift-and-shift. HA
+# migrates its DB schema forward on upgrade but CANNOT downgrade — never
+# lower this tag once a version has booted against the PVC.
+#
+# Upgrade gate: Sensi is a HACS custom component (iprak/sensi, v2.1.4 at
+# migration) — before bumping core, check that component's releases for
+# compatibility, then bump this tag and update HACS components together.
+# https://github.com/home-assistant/core/releases
 #
 # All devices reach HA over network/cloud (Sensi = cloud, UniFi Protect =
 # direct IP, HTG3 sensors = network/cloud) — no USB/Bluetooth passthrough,
@@ -57,7 +61,7 @@ spec:
       terminationGracePeriodSeconds: 120
       containers:
         - name: home-assistant
-          image: ghcr.io/home-assistant/home-assistant:2026.7.1
+          image: ghcr.io/home-assistant/home-assistant:2026.4.1
           ports:
             - containerPort: 8123
               name: http
