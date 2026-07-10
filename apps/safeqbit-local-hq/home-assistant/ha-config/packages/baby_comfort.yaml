@@ -1,5 +1,8 @@
 # Baby comfort package — newborn skin & breathing comfort ratings per room.
-# Version: 1.1 — 2026-07-10
+# Version: 1.2 — 2026-07-10
+#   1.2: text labels derive from the comfort score, so words track the gauge
+#        colors — green ≥75 = Ideal, yellow 40–74 = Slightly …, red <40 =
+#        Too … (was: fixed cutoffs that let "Slightly warm" reach a 6 % score)
 #   1.1: broader bands (66–74 °F / 35–65 % ideal), 0–100 % comfort score
 #        sensors (gauge scale), best-room lists every green-zone room
 #   1.0: initial (2026-07-09)
@@ -23,7 +26,12 @@
 #   75–100 = comfortable · 40–74 = drifting, keep an eye · <40 = act now
 #
 # Rating order is deliberate: temperature alerts outrank humidity alerts,
-# hard alerts ("Too …") outrank soft ones ("Slightly …").
+# hard alerts ("Too …") outrank soft ones ("Slightly …"). Labels share the
+# score's thresholds, so in sensor units the tiers land at:
+#   Temperature: Ideal ≤74.75 °F / ≥65.25 °F · Slightly to 75.8 / 64.2 °F ·
+#                Too beyond that
+#   Humidity:    Ideal ≤66.25 % / ≥32.5 % · Slightly to 68 / 29 % ·
+#                Too beyond that
 #
 # Install: drop into config/packages/ (needs `homeassistant: packages:
 # !include_dir_named packages` in configuration.yaml), or paste the
@@ -38,15 +46,21 @@ template:
           {% set t = states('sensor.htg3_bedroom_temperature') | float(none) %}
           {% set h = states('sensor.htg3_bedroom_humidity') | float(none) %}
           {% if t is none or h is none %}Unknown
-          {% elif t > 77 %}Too warm
-          {% elif t < 63 %}Too cold
-          {% elif h > 70 %}Too humid
-          {% elif h < 25 %}Too dry
-          {% elif t > 74 %}Slightly warm
-          {% elif t < 66 %}Slightly cool
-          {% elif h > 65 %}Slightly humid
-          {% elif h < 35 %}Slightly dry
+          {% else %}
+          {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+          {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+          {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+          {% endif %}
+          {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+          {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+          {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+          {% endif %}
+          {% if ts < 0.4 %}{{ 'Too warm' if t > 74 else 'Too cold' }}
+          {% elif hs < 0.4 %}{{ 'Too humid' if h > 65 else 'Too dry' }}
+          {% elif ts < 0.75 %}{{ 'Slightly warm' if t > 74 else 'Slightly cool' }}
+          {% elif hs < 0.75 %}{{ 'Slightly humid' if h > 65 else 'Slightly dry' }}
           {% else %}Ideal
+          {% endif %}
           {% endif %}
         icon: >-
           {% set s = this.state %}
@@ -93,15 +107,21 @@ template:
           {% set t = states('sensor.htg3_livingroom_temperature') | float(none) %}
           {% set h = states('sensor.htg3_livingroom_humidity') | float(none) %}
           {% if t is none or h is none %}Unknown
-          {% elif t > 77 %}Too warm
-          {% elif t < 63 %}Too cold
-          {% elif h > 70 %}Too humid
-          {% elif h < 25 %}Too dry
-          {% elif t > 74 %}Slightly warm
-          {% elif t < 66 %}Slightly cool
-          {% elif h > 65 %}Slightly humid
-          {% elif h < 35 %}Slightly dry
+          {% else %}
+          {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+          {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+          {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+          {% endif %}
+          {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+          {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+          {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+          {% endif %}
+          {% if ts < 0.4 %}{{ 'Too warm' if t > 74 else 'Too cold' }}
+          {% elif hs < 0.4 %}{{ 'Too humid' if h > 65 else 'Too dry' }}
+          {% elif ts < 0.75 %}{{ 'Slightly warm' if t > 74 else 'Slightly cool' }}
+          {% elif hs < 0.75 %}{{ 'Slightly humid' if h > 65 else 'Slightly dry' }}
           {% else %}Ideal
+          {% endif %}
           {% endif %}
         icon: >-
           {% set s = this.state %}
@@ -147,15 +167,21 @@ template:
           {% set t = states('sensor.htg3_office_temperature') | float(none) %}
           {% set h = states('sensor.htg3_office_humidity') | float(none) %}
           {% if t is none or h is none %}Unknown
-          {% elif t > 77 %}Too warm
-          {% elif t < 63 %}Too cold
-          {% elif h > 70 %}Too humid
-          {% elif h < 25 %}Too dry
-          {% elif t > 74 %}Slightly warm
-          {% elif t < 66 %}Slightly cool
-          {% elif h > 65 %}Slightly humid
-          {% elif h < 35 %}Slightly dry
+          {% else %}
+          {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+          {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+          {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+          {% endif %}
+          {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+          {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+          {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+          {% endif %}
+          {% if ts < 0.4 %}{{ 'Too warm' if t > 74 else 'Too cold' }}
+          {% elif hs < 0.4 %}{{ 'Too humid' if h > 65 else 'Too dry' }}
+          {% elif ts < 0.75 %}{{ 'Slightly warm' if t > 74 else 'Slightly cool' }}
+          {% elif hs < 0.75 %}{{ 'Slightly humid' if h > 65 else 'Slightly dry' }}
           {% else %}Ideal
+          {% endif %}
           {% endif %}
         icon: >-
           {% set s = this.state %}
