@@ -1,0 +1,250 @@
+# Baby comfort package — newborn skin & breathing comfort ratings per room.
+# Version: 1.1 — 2026-07-10
+#   1.1: broader bands (66–74 °F / 35–65 % ideal), 0–100 % comfort score
+#        sensors (gauge scale), best-room lists every green-zone room
+#   1.0: initial (2026-07-09)
+#
+# Rates each room by combining its HTG3 temperature + humidity into one
+# plain-language state, a 0–100 % comfort score (for gauges/graphs), plus a
+# "best room right now" picker (the baby moves between rooms, so every room
+# gets a rating instead of pinning one).
+#
+# Ranges (newborn guidance, deliberately broad):
+#   Temperature: ideal 66–74 °F (centered on the AAP safe-sleep 68–72 °F;
+#                overheating is the bigger risk), acceptable 63–77 °F,
+#                alert outside that.
+#   Humidity:    ideal 35–65 % RH (skin + airway comfort), acceptable
+#                25–70 %, alert outside that (<25 dries skin/nasal passages,
+#                >70 encourages mold/dust mites).
+#
+# Comfort score scale: 100 % anywhere inside the ideal band, falling
+# linearly to 0 % at the alert boundary (worst of temp/humidity wins —
+# a room is only as comfortable as its worst factor).
+#   75–100 = comfortable · 40–74 = drifting, keep an eye · <40 = act now
+#
+# Rating order is deliberate: temperature alerts outrank humidity alerts,
+# hard alerts ("Too …") outrank soft ones ("Slightly …").
+#
+# Install: drop into config/packages/ (needs `homeassistant: packages:
+# !include_dir_named packages` in configuration.yaml), or paste the
+# `template:` block into your existing template config. Then
+# Developer Tools → YAML → Reload Template Entities.
+
+template:
+  - sensor:
+      - name: Baby Comfort Bedroom
+        unique_id: baby_comfort_bedroom
+        state: >-
+          {% set t = states('sensor.htg3_bedroom_temperature') | float(none) %}
+          {% set h = states('sensor.htg3_bedroom_humidity') | float(none) %}
+          {% if t is none or h is none %}Unknown
+          {% elif t > 77 %}Too warm
+          {% elif t < 63 %}Too cold
+          {% elif h > 70 %}Too humid
+          {% elif h < 25 %}Too dry
+          {% elif t > 74 %}Slightly warm
+          {% elif t < 66 %}Slightly cool
+          {% elif h > 65 %}Slightly humid
+          {% elif h < 35 %}Slightly dry
+          {% else %}Ideal
+          {% endif %}
+        icon: >-
+          {% set s = this.state %}
+          {% if s == 'Ideal' %}mdi:baby-face-outline
+          {% elif s in ['Too warm', 'Slightly warm'] %}mdi:thermometer-chevron-up
+          {% elif s in ['Too cold', 'Slightly cool'] %}mdi:thermometer-chevron-down
+          {% elif s in ['Too humid', 'Slightly humid'] %}mdi:water-plus
+          {% elif s in ['Too dry', 'Slightly dry'] %}mdi:water-minus
+          {% else %}mdi:help-circle-outline
+          {% endif %}
+        attributes:
+          temperature: "{{ states('sensor.htg3_bedroom_temperature') | float(none) }}"
+          humidity: "{{ states('sensor.htg3_bedroom_humidity') | float(none) }}"
+          # Distance from the 70 °F / 50 %RH sweet spot; 1 °F ≈ 5 %RH. Lower = better.
+          score: >-
+            {% set t = states('sensor.htg3_bedroom_temperature') | float(none) %}
+            {% set h = states('sensor.htg3_bedroom_humidity') | float(none) %}
+            {{ ((t - 70) | abs + ((h - 50) | abs) / 5) | round(1) if t is not none and h is not none else none }}
+
+      - name: Baby Comfort Score Bedroom
+        unique_id: baby_comfort_score_bedroom
+        unit_of_measurement: '%'
+        state_class: measurement
+        icon: mdi:gauge
+        availability: >-
+          {{ states('sensor.htg3_bedroom_temperature') | float(none) is not none
+             and states('sensor.htg3_bedroom_humidity') | float(none) is not none }}
+        state: >-
+          {% set t = states('sensor.htg3_bedroom_temperature') | float(0) %}
+          {% set h = states('sensor.htg3_bedroom_humidity') | float(0) %}
+          {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+          {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+          {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+          {% endif %}
+          {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+          {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+          {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+          {% endif %}
+          {{ ([ts, hs] | min * 100) | round(0) }}
+
+      - name: Baby Comfort Livingroom
+        unique_id: baby_comfort_livingroom
+        state: >-
+          {% set t = states('sensor.htg3_livingroom_temperature') | float(none) %}
+          {% set h = states('sensor.htg3_livingroom_humidity') | float(none) %}
+          {% if t is none or h is none %}Unknown
+          {% elif t > 77 %}Too warm
+          {% elif t < 63 %}Too cold
+          {% elif h > 70 %}Too humid
+          {% elif h < 25 %}Too dry
+          {% elif t > 74 %}Slightly warm
+          {% elif t < 66 %}Slightly cool
+          {% elif h > 65 %}Slightly humid
+          {% elif h < 35 %}Slightly dry
+          {% else %}Ideal
+          {% endif %}
+        icon: >-
+          {% set s = this.state %}
+          {% if s == 'Ideal' %}mdi:baby-face-outline
+          {% elif s in ['Too warm', 'Slightly warm'] %}mdi:thermometer-chevron-up
+          {% elif s in ['Too cold', 'Slightly cool'] %}mdi:thermometer-chevron-down
+          {% elif s in ['Too humid', 'Slightly humid'] %}mdi:water-plus
+          {% elif s in ['Too dry', 'Slightly dry'] %}mdi:water-minus
+          {% else %}mdi:help-circle-outline
+          {% endif %}
+        attributes:
+          temperature: "{{ states('sensor.htg3_livingroom_temperature') | float(none) }}"
+          humidity: "{{ states('sensor.htg3_livingroom_humidity') | float(none) }}"
+          score: >-
+            {% set t = states('sensor.htg3_livingroom_temperature') | float(none) %}
+            {% set h = states('sensor.htg3_livingroom_humidity') | float(none) %}
+            {{ ((t - 70) | abs + ((h - 50) | abs) / 5) | round(1) if t is not none and h is not none else none }}
+
+      - name: Baby Comfort Score Livingroom
+        unique_id: baby_comfort_score_livingroom
+        unit_of_measurement: '%'
+        state_class: measurement
+        icon: mdi:gauge
+        availability: >-
+          {{ states('sensor.htg3_livingroom_temperature') | float(none) is not none
+             and states('sensor.htg3_livingroom_humidity') | float(none) is not none }}
+        state: >-
+          {% set t = states('sensor.htg3_livingroom_temperature') | float(0) %}
+          {% set h = states('sensor.htg3_livingroom_humidity') | float(0) %}
+          {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+          {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+          {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+          {% endif %}
+          {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+          {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+          {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+          {% endif %}
+          {{ ([ts, hs] | min * 100) | round(0) }}
+
+      - name: Baby Comfort Office
+        unique_id: baby_comfort_office
+        state: >-
+          {% set t = states('sensor.htg3_office_temperature') | float(none) %}
+          {% set h = states('sensor.htg3_office_humidity') | float(none) %}
+          {% if t is none or h is none %}Unknown
+          {% elif t > 77 %}Too warm
+          {% elif t < 63 %}Too cold
+          {% elif h > 70 %}Too humid
+          {% elif h < 25 %}Too dry
+          {% elif t > 74 %}Slightly warm
+          {% elif t < 66 %}Slightly cool
+          {% elif h > 65 %}Slightly humid
+          {% elif h < 35 %}Slightly dry
+          {% else %}Ideal
+          {% endif %}
+        icon: >-
+          {% set s = this.state %}
+          {% if s == 'Ideal' %}mdi:baby-face-outline
+          {% elif s in ['Too warm', 'Slightly warm'] %}mdi:thermometer-chevron-up
+          {% elif s in ['Too cold', 'Slightly cool'] %}mdi:thermometer-chevron-down
+          {% elif s in ['Too humid', 'Slightly humid'] %}mdi:water-plus
+          {% elif s in ['Too dry', 'Slightly dry'] %}mdi:water-minus
+          {% else %}mdi:help-circle-outline
+          {% endif %}
+        attributes:
+          temperature: "{{ states('sensor.htg3_office_temperature') | float(none) }}"
+          humidity: "{{ states('sensor.htg3_office_humidity') | float(none) }}"
+          score: >-
+            {% set t = states('sensor.htg3_office_temperature') | float(none) %}
+            {% set h = states('sensor.htg3_office_humidity') | float(none) %}
+            {{ ((t - 70) | abs + ((h - 50) | abs) / 5) | round(1) if t is not none and h is not none else none }}
+
+      - name: Baby Comfort Score Office
+        unique_id: baby_comfort_score_office
+        unit_of_measurement: '%'
+        state_class: measurement
+        icon: mdi:gauge
+        availability: >-
+          {{ states('sensor.htg3_office_temperature') | float(none) is not none
+             and states('sensor.htg3_office_humidity') | float(none) is not none }}
+        state: >-
+          {% set t = states('sensor.htg3_office_temperature') | float(0) %}
+          {% set h = states('sensor.htg3_office_humidity') | float(0) %}
+          {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+          {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+          {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+          {% endif %}
+          {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+          {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+          {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+          {% endif %}
+          {{ ([ts, hs] | min * 100) | round(0) }}
+
+      # Every room currently in the green zone (comfort score ≥ 75), best
+      # first, joined "A, B & C". If none qualify, falls back to the
+      # closest room, marked "(closest)".
+      - name: Baby Best Room
+        unique_id: baby_best_room
+        icon: mdi:baby-face-outline
+        state: >-
+          {% set rooms = {'Bedroom': 'bedroom', 'Living room': 'livingroom', 'Office': 'office'} %}
+          {% set ns = namespace(green=[], best='unknown', best_s=-1) %}
+          {% for name, slug in rooms.items() %}
+            {% set t = states('sensor.htg3_' ~ slug ~ '_temperature') | float(none) %}
+            {% set h = states('sensor.htg3_' ~ slug ~ '_humidity') | float(none) %}
+            {% if t is not none and h is not none %}
+              {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+              {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+              {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+              {% endif %}
+              {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+              {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+              {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+              {% endif %}
+              {% set s = [ts, hs] | min * 100 %}
+              {% if s >= 75 %}{% set ns.green = ns.green + [(s, name)] %}{% endif %}
+              {% if s > ns.best_s %}{% set ns.best_s = s %}{% set ns.best = name %}{% endif %}
+            {% endif %}
+          {% endfor %}
+          {% set names = ns.green | sort(reverse=true) | map(attribute=1) | list %}
+          {% if names | length > 1 %}{{ names[:-1] | join(', ') ~ ' & ' ~ names[-1] }}
+          {% elif names | length == 1 %}{{ names[0] }}
+          {% elif ns.best != 'unknown' %}{{ ns.best }} (closest)
+          {% else %}unknown
+          {% endif %}
+        attributes:
+          # Per-room comfort score (%), same scale as the gauges.
+          scores: >-
+            {% set rooms = {'Bedroom': 'bedroom', 'Living room': 'livingroom', 'Office': 'office'} %}
+            {% set ns = namespace(m={}) %}
+            {% for name, slug in rooms.items() %}
+              {% set t = states('sensor.htg3_' ~ slug ~ '_temperature') | float(none) %}
+              {% set h = states('sensor.htg3_' ~ slug ~ '_humidity') | float(none) %}
+              {% if t is not none and h is not none %}
+                {% if 66 <= t <= 74 %}{% set ts = 1.0 %}
+                {% elif t < 66 %}{% set ts = [0, (t - 63) / 3] | max %}
+                {% else %}{% set ts = [0, (77 - t) / 3] | max %}
+                {% endif %}
+                {% if 35 <= h <= 65 %}{% set hs = 1.0 %}
+                {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
+                {% else %}{% set hs = [0, (70 - h) / 5] | max %}
+                {% endif %}
+                {% set ns.m = dict(ns.m, **{name: ([ts, hs] | min * 100) | round(0)}) %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.m }}

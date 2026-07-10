@@ -1,0 +1,1053 @@
+# Apartment dashboard.
+# Version: 1.2 — 2026-07-10
+#   1.2: sections merged (Climate & Rooms, Weather & Outside incl. Going
+#        Outside + sources/last-update footer); weather insight cards
+#   1.1: Baby Comfort hero w/ score gauges, tile/picture-glance design pass,
+#        multi-room comfy badge (2026-07-10)
+#   1.0: initial cleaned dashboard (2026-07-09)
+# Requires the template sensors from packages/baby_comfort.yaml
+# (sensor.baby_comfort_*, sensor.baby_comfort_score_*, sensor.baby_best_room)
+# and packages/weather_insights.yaml (sensor.weather_storm_watch,
+# sensor.weather_rain_watch, binary_sensor.weather_nice_day).
+# Apply via dashboard ⋮ → Raw configuration editor.
+title: Apartment
+views:
+  - title: Overview
+    path: overview
+    icon: mdi:home
+    type: sections
+    max_columns: 4
+    dense_section_placement: true
+    top_margin: false
+    badges:
+      - type: entity
+        entity: sensor.baby_best_room
+        name: Comfy rooms
+        icon: mdi:baby-face-outline
+      - type: entity
+        entity: climate.sensi_sensi_thermostat
+        name: Thermostat
+      - type: entity
+        entity: sensor.sun_next_dawn
+        name: Dawn
+      - type: entity
+        entity: media_player.fofo_tv
+      - type: entity
+        entity: sensor.backup_backup_manager_state
+        name: Backups
+    sections:
+      - type: grid
+        column_span: 4
+        cards:
+          - type: heading
+            heading: Baby Comfort
+            heading_style: title
+            icon: mdi:baby-face-outline
+            badges:
+              - type: entity
+                entity: sensor.baby_best_room
+                name: Comfy now
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.baby_comfort_score_bedroom
+                name: Bedroom
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  green: 75
+                  yellow: 40
+                  red: 0
+              - type: gauge
+                entity: sensor.baby_comfort_score_livingroom
+                name: Living
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  green: 75
+                  yellow: 40
+                  red: 0
+              - type: gauge
+                entity: sensor.baby_comfort_score_office
+                name: Office
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  green: 75
+                  yellow: 40
+                  red: 0
+            grid_options:
+              columns: full
+              rows: auto
+          - type: glance
+            columns: 3
+            entities:
+              - entity: sensor.baby_comfort_bedroom
+                name: Bedroom
+              - entity: sensor.baby_comfort_livingroom
+                name: Living
+              - entity: sensor.baby_comfort_office
+                name: Office
+            grid_options:
+              columns: full
+          - type: markdown
+            content: >-
+              **Scale**: 100 % = ideal band (**66–74 °F** · **35–65 % RH**),
+              falling to 0 % at the safety limits (63–77 °F · 25–70 % RH).
+              Overheating is the bigger risk for newborns — when unsure, choose
+              the cooler option and add a clothing layer.
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Climate & Rooms
+            heading_style: title
+            icon: mdi:home-thermometer
+          - type: tile
+            entity: sensor.climate_recommended_mode
+            name: Recommended
+            icon: mdi:thermostat-auto
+          - type: tile
+            entity: sensor.climate_priority_room_active
+            name: Prioritizing
+            icon: mdi:target
+          - type: tile
+            entity: binary_sensor.sensi_online
+            name: Sensi
+          - type: tile
+            entity: binary_sensor.htg3_sensors_healthy
+            name: Room Sensors
+          - type: markdown
+            content: >-
+              💡 {{ states('sensor.climate_recommended_mode_reason') }}
+            grid_options:
+              columns: full
+          - type: heading
+            heading: Rooms at a Glance
+            heading_style: subtitle
+            icon: mdi:home-floor-1
+          - type: glance
+            columns: 4
+            state_color: true
+            entities:
+              - entity: sensor.htg3_bedroom_temperature
+                name: Bedroom
+              - entity: sensor.htg3_livingroom_temperature
+                name: Living
+              - entity: sensor.htg3_office_temperature
+                name: Office
+              - entity: sensor.sensi_averaged_temperature
+                name: Sensi (avg)
+            grid_options:
+              columns: full
+          - type: glance
+            columns: 3
+            entities:
+              - entity: sensor.htg3_bedroom_humidity
+                name: Bedroom
+              - entity: sensor.htg3_livingroom_humidity
+                name: Living
+              - entity: sensor.htg3_office_humidity
+                name: Office
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Weather & Outside
+            heading_style: title
+            icon: mdi:weather-partly-cloudy
+          - type: weather-forecast
+            entity: weather.forecast_home
+            show_current: true
+            show_forecast: true
+            forecast_type: hourly
+            forecast_slots: 6
+            grid_options:
+              rows: auto
+              columns: full
+          - type: markdown
+            content: |-
+              {% set reason = state_attr('binary_sensor.weather_nice_day', 'reason') %}
+              {% set high = states('sensor.climate_forecast_high_today') | float(none) %}
+              {% set low = states('sensor.climate_forecast_low_tonight') | float(none) %}
+              {% set storm = states('sensor.weather_storm_watch') %}
+              {% set rain = states('sensor.weather_rain_watch') %}
+              {% if is_state('binary_sensor.weather_nice_day', 'on') %}### 🌞 Nice day!
+              {{ reason }}
+              {% elif reason %}### 🌥️ Today
+              {{ reason }}
+              {% endif %}
+
+              - 🌡️ High **{{ high | round(0) | int if high is not none else '?' }} °F** · overnight low **{{ low | round(0) | int if low is not none else '?' }} °F**
+              {% if storm in ['None in next 24 h'] %}- ✅ No storms in the next 24 h
+              {% elif storm not in ['unknown', 'unavailable'] %}- ⛈️ **Storm watch: {{ storm }}**
+              {% endif %}
+              {% if rain in ['Dry next 12 h'] %}- 👍 Dry for the next 12 h — leave the umbrella
+              {% elif rain not in ['unknown', 'unavailable'] %}- ☔ **Rain expected: {{ rain }}**
+              {% endif %}
+            grid_options:
+              columns: full
+          - type: heading
+            heading: Going Outside
+            heading_style: subtitle
+            icon: mdi:stroller
+            badges:
+              - type: entity
+                entity: binary_sensor.weather_nice_day
+                name: Nice day
+          - type: markdown
+            content: |-
+              {% set w = 'weather.forecast_home' %}
+              {% set cond = states(w) %}
+              {% set t = state_attr(w, 'temperature') | float(none) %}
+              {% if t is none %}
+              🛰️ Weather source is unavailable right now.
+              {% else %}
+              {% set emoji = {'sunny': '☀️', 'clear-night': '🌙', 'partlycloudy': '⛅', 'cloudy': '☁️', 'rainy': '🌧️', 'pouring': '💦', 'lightning': '⛈️', 'lightning-rainy': '⛈️', 'snowy': '❄️', 'snowy-rainy': '🌨️', 'hail': '🧊', 'fog': '🌫️', 'windy': '💨', 'windy-variant': '💨', 'exceptional': '⚠️'} %}
+              {% set hum = state_attr(w, 'humidity') | float(50) %}
+              {% set wind = state_attr(w, 'wind_speed') | float(0) %}
+              {% set uv = state_attr(w, 'uv_index') | float(0) %}
+              {% set dp = state_attr(w, 'dew_point') | float(55) %}
+              {% if t >= 80 %}
+              {% set feels = -42.379 + 2.04901523*t + 10.14333127*hum - 0.22475541*t*hum - 0.00683783*t*t - 0.05481717*hum*hum + 0.00122874*t*t*hum + 0.00085282*t*hum*hum - 0.00000199*t*t*hum*hum %}
+              {% elif t <= 50 and wind > 3 %}
+              {% set feels = 35.74 + 0.6215*t - 35.75*(wind**0.16) + 0.4275*t*(wind**0.16) %}
+              {% else %}
+              {% set feels = t %}
+              {% endif %}
+              {% set feels = feels | round(0) | int %}
+              ### {{ emoji.get(cond, '🌡️') }} {{ cond | replace('partlycloudy', 'partly cloudy') | replace('-', ' ') | title }} · {{ t | round(0) | int }} °F
+              **Feels like {{ feels }} °F** · 💨 {{ wind | round(0) | int }} mph · 💧 {{ hum | round(0) | int }} %
+
+              {% if feels >= 90 %}- 🥵 **Very hot** — stick to shade and hydrate; single thin layer for the baby, skip midday stroller runs
+              {% elif feels >= 80 %}- 😅 **Hot** — light clothing; keep the stroller shaded
+              {% elif feels >= 68 %}- 😎 **Pleasant** — perfect stroller weather
+              {% elif feels >= 55 %}- 🧥 **Mild** — light jacket; one extra layer for the baby
+              {% elif feels >= 40 %}- 🧣 **Cold** — bundle up; hat and blanket for the baby
+              {% else %}- 🥶 **Freezing** — keep outings short
+              {% endif %}
+              {% if dp >= 70 %}- 🫠 Muggy (dew point {{ dp | round(0) | int }} °F) — it will feel sticky
+              {% elif dp >= 65 %}- 💦 A touch humid (dew point {{ dp | round(0) | int }} °F)
+              {% endif %}
+              {% if is_state('sun.sun', 'above_horizon') and uv >= 6 %}- 🕶️ **UV {{ uv | round(1) }} — high**: sunscreen + hat, full shade for the baby
+              {% elif is_state('sun.sun', 'above_horizon') and uv >= 3 %}- 🧴 UV {{ uv | round(1) }} — moderate; sunscreen for longer outings
+              {% endif %}
+              {% if cond in ['rainy', 'pouring', 'lightning', 'lightning-rainy', 'hail'] %}- ☔ **Raining now** — take the umbrella
+              {% elif states('sensor.weather_rain_watch') not in ['Dry next 12 h', 'unknown', 'unavailable'] %}- ☔ Rain later ({{ states('sensor.weather_rain_watch') }}) — pack the umbrella
+              {% endif %}
+              {% if wind >= 20 %}- 💨 **Windy** — use the stroller wind cover
+              {% endif %}
+              {% set tin = states('sensor.sensi_averaged_temperature') | float(none) %}
+              {% if tin is not none %}
+              {% set d = (t - tin) | round(0) | int %}
+              - 🏠 {% if d > 0 %}**{{ d }} °F warmer** outside than inside{% elif d < 0 %}**{{ -d }} °F cooler** outside than inside{% else %}Same temperature outside as inside{% endif %}
+              {% endif %}
+              {% if is_state('sun.sun', 'above_horizon') %}- 🌇 Sunset at {{ as_timestamp(states('sensor.sun_next_setting')) | timestamp_custom('%I:%M %p') }}
+              {% else %}- 🌅 Sunrise at {{ as_timestamp(states('sensor.sun_next_rising')) | timestamp_custom('%I:%M %p') }}
+              {% endif %}
+              {% endif %}
+            grid_options:
+              columns: full
+          - type: markdown
+            content: |-
+              {% set w = states.weather.forecast_home %}
+              {% set fc = states.sensor.weather_storm_watch %}
+              🛈 *Sources: Met.no{% if w %} ({{ w.attributes.friendly_name }}){% endif %} · Sun · smart-climate forecast · Sensi/HTG3 indoor sensors.{% if w %} Weather updated {{ relative_time(w.last_updated) }} ago{% if fc and fc.state not in ['unknown', 'unavailable'] %} · forecast scan {{ relative_time(fc.last_updated) }} ago{% endif %}.{% endif %}*
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Front Door
+            heading_style: title
+            icon: mdi:door-closed
+          - type: picture-glance
+            camera_image: camera.hrp_g6i_frontdoor_high_resolution_channel
+            camera_view: auto
+            entities:
+              - entity: binary_sensor.hrp_g6i_frontdoor_motion
+              - entity: binary_sensor.hrp_g6i_frontdoor_person_detected
+              - entity: binary_sensor.hrp_g6i_frontdoor_is_dark
+            grid_options:
+              rows: auto
+              columns: full
+  - title: Smart Climate Controls
+    path: climate
+    icon: mdi:home-thermometer
+    type: sections
+    max_columns: 4
+    dense_section_placement: true
+    top_margin: false
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Status
+            heading_style: title
+            icon: mdi:information-outline
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.climate_period
+                name: Time Period
+              - entity: sensor.climate_priority_room_active
+                name: Currently Prioritizing
+                icon: mdi:target
+              - entity: sensor.climate_recommended_mode
+                name: Recommended Mode
+              - entity: sensor.climate_recommended_mode_reason
+                name: Reason
+                icon: mdi:lightbulb-question
+              - entity: sensor.climate_active_heat_target
+                name: Active Heat Target
+                icon: mdi:fire
+              - entity: sensor.climate_active_cool_target
+                name: Active Cool Target
+                icon: mdi:snowflake
+              - entity: binary_sensor.sensi_online
+                name: Sensi Connection
+              - entity: binary_sensor.htg3_sensors_healthy
+                name: Room Sensors Health
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Controls
+            heading_style: title
+            icon: mdi:toggle-switch
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_boolean.smart_climate_enabled
+                name: Smart Climate Enabled
+              - entity: input_boolean.smart_climate_auto_mode
+                name: Auto Mode Switching
+              - entity: input_select.climate_priority_room
+                name: Priority Room
+              - type: divider
+              - entity: input_boolean.climate_force_heat_tonight
+                name: Force Heat Tonight
+                secondary_info: last-changed
+              - entity: input_boolean.climate_force_cool_tonight
+                name: Force Cool Tonight
+                secondary_info: last-changed
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Thermostat
+            heading_style: title
+            icon: mdi:thermostat
+          - type: thermostat
+            entity: climate.sensi_sensi_thermostat
+            name: Sensi Thermostat
+            features:
+              - type: climate-hvac-modes
+            grid_options:
+              columns: full
+              rows: auto
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Current Readings
+            heading_style: title
+            icon: mdi:thermometer-lines
+          - type: glance
+            title: Room Temperatures
+            columns: 4
+            entities:
+              - entity: sensor.htg3_bedroom_temperature
+                name: Bedroom
+              - entity: sensor.htg3_livingroom_temperature
+                name: Living
+              - entity: sensor.htg3_office_temperature
+                name: Office
+              - entity: sensor.sensi_averaged_temperature
+                name: Sensi (avg)
+          - type: glance
+            title: Humidity
+            columns: 3
+            entities:
+              - entity: sensor.htg3_bedroom_humidity
+                name: Bedroom
+              - entity: sensor.htg3_livingroom_humidity
+                name: Living
+              - entity: sensor.htg3_office_humidity
+                name: Office
+          - type: glance
+            title: Baby Comfort
+            columns: 3
+            entities:
+              - entity: sensor.baby_comfort_bedroom
+                name: Bedroom
+              - entity: sensor.baby_comfort_livingroom
+                name: Living
+              - entity: sensor.baby_comfort_office
+                name: Office
+          - type: glance
+            title: Outside & Forecast
+            columns: 3
+            entities:
+              - entity: weather.forecast_home
+                name: Now
+              - entity: sensor.climate_forecast_high_today
+                name: High Today
+              - entity: sensor.climate_forecast_low_tonight
+                name: Low Tonight
+              - entity: binary_sensor.weather_nice_day
+                name: Nice Day
+              - entity: sensor.weather_storm_watch
+                name: Storm Watch
+              - entity: sensor.weather_rain_watch
+                name: Rain Watch
+      - type: grid
+        column_span: 4
+        cards:
+          - type: heading
+            heading: Diagnostic & Tuning
+            heading_style: title
+            icon: mdi:stethoscope
+          - type: markdown
+            content: >
+              {% set period = states('sensor.climate_period') %}
+
+              {% set force_heat =
+              is_state('input_boolean.climate_force_heat_tonight', 'on') %}
+
+              {% set force_cool =
+              is_state('input_boolean.climate_force_cool_tonight', 'on') %}
+
+              {% set outside_raw = state_attr('weather.forecast_home',
+              'temperature') %}
+
+              {% set outside_known = outside_raw is not none %}
+
+              {% set outside = outside_raw | float(60) %}
+
+              {% set fc_low = states('sensor.climate_forecast_low_tonight') |
+              float(60) %}
+
+              {% set fc_high = states('sensor.climate_forecast_high_today') |
+              float(60) %}
+
+              {% set heat_t =
+              states('input_number.climate_outdoor_heat_threshold') | float(55)
+              %}
+
+              {% set cool_t =
+              states('input_number.climate_outdoor_cool_threshold') | float(78)
+              %}
+
+              {% set deadband = states('input_number.climate_indoor_deadband') |
+              float(2) %}
+
+              {% set heat_target = states('sensor.climate_active_heat_target') |
+              float(68) %}
+
+              {% set cool_target = states('sensor.climate_active_cool_target') |
+              float(74) %}
+
+              {% set room_temp = states('sensor.climate_priority_temperature') |
+              float(70) %}
+
+              {% set offset = states('sensor.sensi_offset') | float(0) %}
+
+              {% set mode = states('sensor.sensi_hvac_mode_cache') %}
+
+              {% set recommended = states('sensor.climate_recommended_mode') %}
+
+              {% set reason = states('sensor.climate_recommended_mode_reason')
+              %}
+
+              {% set sp_min = states('input_number.climate_setpoint_min') |
+              float(65) %}
+
+              {% set sp_max = states('input_number.climate_setpoint_max') |
+              float(76) %}
+
+              {% set cur_sp = states('sensor.sensi_setpoint_cache') | float(70)
+              %}
+
+              {% set raw_heat_sp = heat_target + offset %}
+
+              {% set raw_cool_sp = cool_target + offset %}
+
+              {% set heat_clamped_i = [sp_min, [raw_heat_sp | round(0) | int,
+              sp_max] | min] | max %}
+
+              {% set cool_clamped_i = [sp_min, [raw_cool_sp | round(0) | int,
+              sp_max] | min] | max %}
+
+              {% set heat_is_clamped = (raw_heat_sp | round(0) | int) !=
+              heat_clamped_i %}
+
+              {% set cool_is_clamped = (raw_cool_sp | round(0) | int) !=
+              cool_clamped_i %}
+
+
+              ### Live Decision
+
+
+              **Recommended**: `{{ recommended }}` — {{ reason }}
+
+              **Current Sensi**: `{{ mode }}` @ **{{ cur_sp | int }}°F**{% if
+              mode != recommended %} ⚠️ mismatch (pending cooldown or retry){%
+              endif %}
+
+
+              ### Decision Tree Walk
+
+
+              | # | Check | Status |
+
+              |---|---|---|
+
+              | 1 | Night override (period: {{ period }}) | {% if period ==
+              'night' and force_heat %}🟢 force heat{% elif period == 'night'
+              and force_cool %}🟢 force cool{% else %}⚪{% endif %} |
+
+              | 2 | Outside < {{ heat_t | int }}°F ({% if outside_known %}{{
+              outside | round(1) }}{% else %}n/a{% endif %}) | {% if
+              outside_known and outside < heat_t %}🟢 heat{% else %}⚪{% endif %}
+              |
+
+              | 3 | Outside > {{ cool_t | int }}°F ({% if outside_known %}{{
+              outside | round(1) }}{% else %}n/a{% endif %}) | {% if
+              outside_known and outside > cool_t %}🟢 cool{% else %}⚪{% endif %}
+              |
+
+              | 4 | Indoor heat: room {{ room_temp }}°F < {{ (heat_target -
+              deadband) | round(1) }}°F | {% if room_temp < (heat_target -
+              deadband) %}🟢 heat{% else %}⚪{% endif %} |
+
+              | 5 | Indoor cool: room {{ room_temp }}°F > {{ (cool_target +
+              deadband) | round(1) }}°F | {% if room_temp > (cool_target +
+              deadband) %}🟢 cool{% else %}⚪{% endif %} |
+
+              | 6 | Pre-warm (night + fc low {{ fc_low | round(1) }}°F < {{
+              heat_t | int }}°F) | {% if period == 'night' and fc_low < heat_t
+              %}🟢 heat{% else %}⚪{% endif %} |
+
+              | 7 | Pre-cool (day + fc high {{ fc_high | round(1) }}°F > {{
+              cool_t | int }}°F) | {% if period == 'day' and fc_high > cool_t
+              %}🟢 cool{% else %}⚪{% endif %} |
+
+
+              ### Key Numbers
+
+
+              - **Priority room**: {{ room_temp }}°F
+
+              - **Offset** (Sensi − room): {{ offset }}°F{% if (offset | abs) >
+              3 %} ⚠️ large{% endif %}
+
+              - **Heat trigger below**: {{ (heat_target - deadband) | round(1)
+              }}°F • **Cool trigger above**: {{ (cool_target + deadband) |
+              round(1) }}°F
+
+              - **Dead zone**: {{ (cool_target + deadband - heat_target +
+              deadband) | round(1) }}°F wide ({{ (heat_target - deadband) |
+              round(1) }} → {{ (cool_target + deadband) | round(1) }}°F)
+
+              - **Heat setpoint math**: {{ heat_target }} + ({{ offset }}) = {{
+              raw_heat_sp | round(1) }}°F → send {{ heat_clamped_i }}°F{% if
+              heat_is_clamped %} ⚠️ CLAMPED{% endif %}
+
+              - **Cool setpoint math**: {{ cool_target }} + ({{ offset }}) = {{
+              raw_cool_sp | round(1) }}°F → send {{ cool_clamped_i }}°F{% if
+              cool_is_clamped %} ⚠️ CLAMPED{% endif %}
+
+
+              ### Tuning Suggestions
+
+
+              {% set cool_gap = room_temp - cool_target %}
+
+              {% set heat_gap = heat_target - room_temp %}
+
+              {% set target_diff = cool_target - heat_target %}
+
+              {% set ns = namespace(any_suggestion=false) %}
+
+
+              {% if cool_gap > 0 and cool_gap <= deadband %}
+
+              {% set ns.any_suggestion = true %}
+
+              - 🌡️ **Room is {{ cool_gap | round(1) }}°F above cool target but
+              within deadband** — cooling won't engage until room exceeds {{
+              (cool_target + deadband) | round(1) }}°F. To cool now:
+                - Lower cool target to ≤ **{{ (room_temp - deadband) | round(0) | int }}°F**, or
+                - Reduce deadband below **{{ cool_gap | round(1) }}°F**
+              {% endif %}
+
+
+              {% if heat_gap > 0 and heat_gap <= deadband %}
+
+              {% set ns.any_suggestion = true %}
+
+              - 🌡️ **Room is {{ heat_gap | round(1) }}°F below heat target but
+              within deadband** — heating won't engage until room drops below {{
+              (heat_target - deadband) | round(1) }}°F. To heat now:
+                - Raise heat target to ≥ **{{ (room_temp + deadband) | round(0) | int }}°F**, or
+                - Reduce deadband below **{{ heat_gap | round(1) }}°F**
+              {% endif %}
+
+
+              {% if mode == 'cool' and cool_is_clamped %}
+
+              {% set ns.any_suggestion = true %}
+
+              - ⚠️ **Cool setpoint clamped**: math wants {{ raw_cool_sp |
+              round(1) }}°F but sending {{ cool_clamped_i }}°F. Priority room
+              may not reach target. Widen the setpoint floor/ceiling or adjust
+              the cool target.
+
+              {% endif %}
+
+
+              {% if mode == 'heat' and heat_is_clamped %}
+
+              {% set ns.any_suggestion = true %}
+
+              - ⚠️ **Heat setpoint clamped**: math wants {{ raw_heat_sp |
+              round(1) }}°F but sending {{ heat_clamped_i }}°F. Priority room
+              may not reach target. Widen the setpoint floor/ceiling or adjust
+              the heat target.
+
+              {% endif %}
+
+
+              {% if (offset | abs) > 3 %}
+
+              {% set ns.any_suggestion = true %}
+
+              - 📏 **Large offset ({{ offset }}°F)** — Sensi's mounting location
+              is thermally very different from the priority room. This is
+              expected for a drafty spot, but if the value grows larger,
+              consider the sensor placement or EMA smoothing window.
+
+              {% endif %}
+
+
+              {% if target_diff < (deadband * 2) %}
+
+              {% set ns.any_suggestion = true %}
+
+              - ⚠️ **Heat and cool targets are only {{ target_diff | round(1)
+              }}°F apart** (deadband is {{ deadband }}°F). The system could
+              oscillate between heat and cool in the overlap. Widen the target
+              spread or reduce the deadband.
+
+              {% endif %}
+
+
+              {% if mode != recommended %}
+
+              {% set ns.any_suggestion = true %}
+
+              - 🔄 **Mode mismatch**: current is `{{ mode }}` but recommended is
+              `{{ recommended }}`. Either cooldown hasn't elapsed, or the last
+              switch attempt failed verification. Check the logbook for "Mode
+              change FAILED" entries.
+
+              {% endif %}
+
+
+              {% if not ns.any_suggestion %}
+
+              ✅ **All good** — room is within the comfort dead zone, nothing
+              needs adjusting.
+
+              {% endif %}
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Bedroom Targets
+            heading_style: title
+            icon: mdi:bed
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_number.climate_bedroom_day_heat
+                name: Day Heat
+              - entity: input_number.climate_bedroom_night_heat
+                name: Night Heat
+              - entity: input_number.climate_bedroom_day_cool
+                name: Day Cool
+              - entity: input_number.climate_bedroom_night_cool
+                name: Night Cool
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Livingroom Targets
+            heading_style: title
+            icon: mdi:sofa
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_number.climate_livingroom_day_heat
+                name: Day Heat
+              - entity: input_number.climate_livingroom_night_heat
+                name: Night Heat
+              - entity: input_number.climate_livingroom_day_cool
+                name: Day Cool
+              - entity: input_number.climate_livingroom_night_cool
+                name: Night Cool
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Office Targets
+            heading_style: title
+            icon: mdi:desk
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_number.climate_office_day_heat
+                name: Day Heat
+              - entity: input_number.climate_office_night_heat
+                name: Night Heat
+              - entity: input_number.climate_office_day_cool
+                name: Day Cool
+              - entity: input_number.climate_office_night_cool
+                name: Night Cool
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Mode Logic Tuning
+            heading_style: title
+            icon: mdi:tune-vertical
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_number.climate_outdoor_heat_threshold
+                name: Outdoor Heat Threshold
+              - entity: input_number.climate_outdoor_cool_threshold
+                name: Outdoor Cool Threshold
+              - entity: input_number.climate_indoor_deadband
+                name: Indoor Demand Deadband
+              - entity: input_number.climate_mode_cooldown
+                name: Mode Change Cooldown
+              - type: divider
+              - entity: input_number.climate_setpoint_min
+                name: Setpoint Floor
+              - entity: input_number.climate_setpoint_max
+                name: Setpoint Ceiling
+              - entity: input_number.climate_tolerance
+                name: Adjustment Tolerance
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Internal Diagnostics
+            heading_style: title
+            icon: mdi:cog-outline
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.climate_priority_temperature
+                name: Priority Room Temp
+              - entity: sensor.sensi_current_temperature_proxy
+                name: Sensi Current (cached)
+              - entity: sensor.sensi_averaged_temperature
+                name: Sensi Averaged (EMA)
+              - entity: sensor.sensi_setpoint_cache
+                name: Sensi Setpoint (cached)
+              - entity: sensor.sensi_hvac_mode_cache
+                name: HVAC Mode (cached)
+              - entity: sensor.sensi_offset
+                name: Sensi → Priority Offset
+                icon: mdi:swap-vertical
+              - entity: input_datetime.climate_last_mode_change
+                name: Last Mode Change
+              - type: attribute
+                entity: climate.sensi_sensi_thermostat
+                attribute: hvac_action
+                name: HVAC Action (live)
+                icon: mdi:fan
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Schedule
+            heading_style: title
+            icon: mdi:clock-outline
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: input_datetime.climate_day_start
+                name: Day Starts
+              - entity: input_datetime.climate_night_start
+                name: Night Starts
+            grid_options:
+              columns: full
+      - type: grid
+        column_span: 4
+        cards:
+          - type: heading
+            heading: Recent Climate Actions
+            heading_style: title
+            icon: mdi:history
+          - type: logbook
+            hours_to_show: 24
+            entities:
+              - climate.sensi_sensi_thermostat
+              - input_boolean.climate_force_heat_tonight
+              - input_boolean.climate_force_cool_tonight
+              - automation.smart_climate_control
+            grid_options:
+              columns: full
+              rows: auto
+  - title: Rooms
+    path: rooms
+    icon: mdi:floor-plan
+    type: sections
+    max_columns: 3
+    dense_section_placement: true
+    top_margin: false
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Bedroom
+            heading_style: title
+            icon: mdi:bed-king-outline
+          - type: tile
+            entity: sensor.baby_comfort_bedroom
+            name: Baby comfort
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.baby_comfort_score_bedroom
+            name: Comfort score
+            color: green
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.htg3_bedroom_temperature
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.htg3_bedroom_humidity
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Livingroom
+            heading_style: title
+            icon: mdi:sofa
+          - type: tile
+            entity: sensor.baby_comfort_livingroom
+            name: Baby comfort
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.baby_comfort_score_livingroom
+            name: Comfort score
+            color: green
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.htg3_livingroom_temperature
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.htg3_livingroom_humidity
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Office
+            heading_style: title
+            icon: mdi:office-building-marker
+          - type: tile
+            entity: sensor.baby_comfort_office
+            name: Baby comfort
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.baby_comfort_score_office
+            name: Comfort score
+            color: green
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.htg3_office_temperature
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+          - type: tile
+            entity: sensor.htg3_office_humidity
+            features:
+              - type: trend-graph
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+      - type: grid
+        column_span: 3
+        cards:
+          - type: heading
+            heading: Thermostat Manual Control
+            heading_style: title
+            icon: mdi:thermostat-cog
+          - type: tile
+            entity: climate.sensi_sensi_thermostat
+            name:
+              type: device
+            vertical: true
+            features:
+              - type: target-temperature
+              - type: climate-hvac-modes
+            features_position: bottom
+            grid_options:
+              rows: auto
+              columns: full
+  - title: Security Cameras
+    path: security
+    icon: mdi:shield-home
+    type: sections
+    max_columns: 4
+    dense_section_placement: true
+    top_margin: false
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Front Door Camera
+            heading_style: title
+            icon: mdi:cctv
+          - type: picture-glance
+            camera_image: camera.hrp_g6i_frontdoor_high_resolution_channel
+            camera_view: live
+            entities:
+              - entity: binary_sensor.hrp_g6i_frontdoor_motion
+              - entity: binary_sensor.hrp_g6i_frontdoor_person_detected
+              - entity: binary_sensor.hrp_g6i_frontdoor_baby_cry_detected
+              - entity: binary_sensor.hrp_g6i_frontdoor_is_dark
+            grid_options:
+              rows: auto
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Environment
+            heading_style: title
+            icon: mdi:eye-outline
+          - type: tile
+            entity: sensor.hrp_g6i_frontdoor_infrared_mode
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_is_dark
+          - type: tile
+            entity: sensor.hrp_g6i_frontdoor_microphone_level
+          - type: tile
+            entity: sensor.hrp_g6i_frontdoor_recording_mode
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Motion & People
+            heading_style: title
+            icon: mdi:walk
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_motion
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_person_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_speaking_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_baby_cry_detected
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Alarms & Hazards
+            heading_style: title
+            icon: mdi:alarm-light
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_siren_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_smoke_alarm_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_co_alarm_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_glass_break_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_car_horn_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_car_alarm_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_barking_detected
+          - type: tile
+            entity: binary_sensor.hrp_g6i_frontdoor_animal_detected

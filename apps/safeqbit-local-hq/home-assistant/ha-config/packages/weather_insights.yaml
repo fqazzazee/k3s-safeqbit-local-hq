@@ -1,0 +1,112 @@
+# Weather insights package — outdoor awareness for the Apartment dashboard.
+# Version: 1.0 — 2026-07-10
+#   1.0: initial — storm watch (24 h), rain watch (12 h), nice-day verdict
+#
+# Multiple sources of truth:
+#   weather.forecast_home (Met.no)   — live conditions + hourly/daily forecast
+#   sun.sun / sensor.sun_next_*      — daylight context
+#   sensor.climate_forecast_high_today / low_tonight (smart_climate package)
+#   sensor.sensi_averaged_temperature — indoor side of the in-vs-out delta
+#
+# The forecast-derived sensors are trigger-based: weather entities no longer
+# carry a `forecast` attribute, so we pull hourly + daily forecasts every
+# 15 min (and on startup / template reload) via weather.get_forecasts.
+#
+# Install: drop into config/packages/ next to baby_comfort.yaml, then
+# Developer Tools → YAML → Reload Template Entities.
+
+template:
+  - triggers:
+      - trigger: homeassistant
+        event: start
+      - trigger: event
+        event_type: event_template_reloaded
+      - trigger: time_pattern
+        minutes: /15
+    actions:
+      - action: weather.get_forecasts
+        target:
+          entity_id: weather.forecast_home
+        data:
+          type: hourly
+        response_variable: hourly
+      - action: weather.get_forecasts
+        target:
+          entity_id: weather.forecast_home
+        data:
+          type: daily
+        response_variable: daily
+    sensor:
+      # First stormy hour in the next 24 h (severe condition, or ≥70 % chance
+      # of meaningful precipitation), e.g. "Thu 5 PM · lightning rainy".
+      - name: Weather Storm Watch
+        unique_id: weather_storm_watch
+        icon: mdi:weather-lightning-rainy
+        state: >-
+          {% set fc = (hourly['weather.forecast_home']['forecast'] | default([]))[:24] %}
+          {% set stormy = ['lightning', 'lightning-rainy', 'hail', 'pouring', 'snowy-rainy', 'exceptional'] %}
+          {% set ns = namespace(hit=none) %}
+          {% for f in fc %}
+            {% if ns.hit is none and (f.condition in stormy
+               or ((f.precipitation_probability | default(0)) >= 70
+                   and (f.precipitation | default(0)) >= 0.1)) %}
+              {% set ns.hit = f %}
+            {% endif %}
+          {% endfor %}
+          {% if fc | length == 0 %}unknown
+          {% elif ns.hit is none %}None in next 24 h
+          {% else %}{{ as_timestamp(ns.hit.datetime) | timestamp_custom('%a %-I %p') }} · {{ ns.hit.condition | replace('-', ' ') }}
+          {% endif %}
+        attributes:
+          checked_hours: "{{ (hourly['weather.forecast_home']['forecast'] | default([]))[:24] | length }}"
+
+      # First wet hour in the next 12 h (any precip condition, or ≥50 % chance),
+      # e.g. "Thu 3 PM · 65 %". Drives the umbrella advice.
+      - name: Weather Rain Watch
+        unique_id: weather_rain_watch
+        icon: mdi:umbrella-outline
+        state: >-
+          {% set fc = (hourly['weather.forecast_home']['forecast'] | default([]))[:12] %}
+          {% set wet = ['rainy', 'pouring', 'lightning-rainy', 'snowy', 'snowy-rainy', 'hail'] %}
+          {% set ns = namespace(hit=none) %}
+          {% for f in fc %}
+            {% if ns.hit is none and (f.condition in wet
+               or (f.precipitation_probability | default(0)) >= 50) %}
+              {% set ns.hit = f %}
+            {% endif %}
+          {% endfor %}
+          {% if fc | length == 0 %}unknown
+          {% elif ns.hit is none %}Dry next 12 h
+          {% else %}{{ as_timestamp(ns.hit.datetime) | timestamp_custom('%a %-I %p') }} · {{ ns.hit.precipitation_probability | default('?') }} %
+          {% endif %}
+
+    binary_sensor:
+      # "Is it a nice day?" — today's daily forecast: pleasant high, sky
+      # mostly clear, low rain chance, not howling. `reason` says why/why not.
+      - name: Weather Nice Day
+        unique_id: weather_nice_day
+        icon: >-
+          {{ 'mdi:emoticon-excited-outline' if this.state == 'on' else 'mdi:emoticon-neutral-outline' }}
+        state: >-
+          {% set d0 = (daily['weather.forecast_home']['forecast'] | default([{}]))[0] %}
+          {% set high = d0.temperature | default(states('sensor.climate_forecast_high_today')) | float(70) %}
+          {% set cond = d0.condition | default('unknown') %}
+          {% set prob = d0.precipitation_probability | default(0) %}
+          {% set wind = d0.wind_speed | default(0) %}
+          {{ cond in ['sunny', 'partlycloudy'] and 60 <= high <= 85 and prob < 30 and wind < 18 }}
+        attributes:
+          reason: >-
+            {% set d0 = (daily['weather.forecast_home']['forecast'] | default([{}]))[0] %}
+            {% set high = d0.temperature | default(states('sensor.climate_forecast_high_today')) | float(70) %}
+            {% set cond = d0.condition | default('unknown') %}
+            {% set prob = d0.precipitation_probability | default(0) %}
+            {% set wind = d0.wind_speed | default(0) %}
+            {% set problems = [] %}
+            {% if cond not in ['sunny', 'partlycloudy'] %}{% set problems = problems + [cond | replace('-', ' ') ~ ' skies'] %}{% endif %}
+            {% if high > 85 %}{% set problems = problems + ['hot (' ~ high | round(0) | int ~ ' °F)'] %}{% endif %}
+            {% if high < 60 %}{% set problems = problems + ['chilly (' ~ high | round(0) | int ~ ' °F)'] %}{% endif %}
+            {% if prob >= 30 %}{% set problems = problems + [prob | round(0) | int ~ ' % rain chance'] %}{% endif %}
+            {% if wind >= 18 %}{% set problems = problems + ['windy (' ~ wind | round(0) | int ~ ' mph)'] %}{% endif %}
+            {% if problems | length == 0 %}{{ cond | replace('-', ' ') | title }}, high {{ high | round(0) | int }} °F, only {{ prob | round(0) | int }} % rain chance — get outside!
+            {% else %}Not quite: {{ problems | join(', ') }}.
+            {% endif %}
