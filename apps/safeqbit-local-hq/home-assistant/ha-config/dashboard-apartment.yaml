@@ -1,5 +1,7 @@
 # Apartment dashboard.
-# Version: 1.2 — 2026-07-10
+# Version: 1.3 — 2026-07-10
+#   1.3: ℹ️ instead of 🛈 (missing from Android emoji font); Nice-day badge
+#        only visible when on (was showing a bare "Off")
 #   1.2: sections merged (Climate & Rooms, Weather & Outside incl. Going
 #        Outside + sources/last-update footer); weather insight cards
 #   1.1: Baby Comfort hero w/ score gauges, tile/picture-glance design pass,
@@ -202,6 +204,10 @@ views:
               - type: entity
                 entity: binary_sensor.weather_nice_day
                 name: Nice day
+                visibility:
+                  - condition: state
+                    entity: binary_sensor.weather_nice_day
+                    state: "on"
           - type: markdown
             content: |-
               {% set w = 'weather.forecast_home' %}
@@ -259,7 +265,7 @@ views:
             content: |-
               {% set w = states.weather.forecast_home %}
               {% set fc = states.sensor.weather_storm_watch %}
-              🛈 *Sources: Met.no{% if w %} ({{ w.attributes.friendly_name }}){% endif %} · Sun · smart-climate forecast · Sensi/HTG3 indoor sensors.{% if w %} Weather updated {{ relative_time(w.last_updated) }} ago{% if fc and fc.state not in ['unknown', 'unavailable'] %} · forecast scan {{ relative_time(fc.last_updated) }} ago{% endif %}.{% endif %}*
+              ℹ️ *Sources: Met.no{% if w %} ({{ w.attributes.friendly_name }}){% endif %} · Sun · smart-climate forecast · Sensi/HTG3 indoor sensors.{% if w %} Weather updated {{ relative_time(w.last_updated) }} ago{% if fc and fc.state not in ['unknown', 'unavailable'] %} · forecast scan {{ relative_time(fc.last_updated) }} ago{% endif %}.{% endif %}*
             grid_options:
               columns: full
       - type: grid

@@ -1,5 +1,8 @@
 # Weather insights package — outdoor awareness for the Apartment dashboard.
-# Version: 1.0 — 2026-07-10
+# Version: 1.1 — 2026-07-10
+#   1.1: rain watch shows condition (probability only when the provider
+#        supplies it — Met.no hourly has none, was rendering "? %");
+#        nice-day also checks daily precipitation amount
 #   1.0: initial — storm watch (24 h), rain watch (12 h), nice-day verdict
 #
 # Multiple sources of truth:
@@ -77,7 +80,7 @@ template:
           {% endfor %}
           {% if fc | length == 0 %}unknown
           {% elif ns.hit is none %}Dry next 12 h
-          {% else %}{{ as_timestamp(ns.hit.datetime) | timestamp_custom('%a %-I %p') }} · {{ ns.hit.precipitation_probability | default('?') }} %
+          {% else %}{% set prob = ns.hit.precipitation_probability | default(none) %}{{ as_timestamp(ns.hit.datetime) | timestamp_custom('%a %-I %p') }} · {{ ns.hit.condition | replace('-', ' ') }}{% if prob is not none %} ({{ prob }} %){% endif %}
           {% endif %}
 
     binary_sensor:
@@ -93,7 +96,8 @@ template:
           {% set cond = d0.condition | default('unknown') %}
           {% set prob = d0.precipitation_probability | default(0) %}
           {% set wind = d0.wind_speed | default(0) %}
-          {{ cond in ['sunny', 'partlycloudy'] and 60 <= high <= 85 and prob < 30 and wind < 18 }}
+          {% set precip = d0.precipitation | default(0) %}
+          {{ cond in ['sunny', 'partlycloudy'] and 60 <= high <= 85 and prob < 30 and wind < 18 and precip < 0.1 }}
         attributes:
           reason: >-
             {% set d0 = (daily['weather.forecast_home']['forecast'] | default([{}]))[0] %}
@@ -107,6 +111,7 @@ template:
             {% if high < 60 %}{% set problems = problems + ['chilly (' ~ high | round(0) | int ~ ' °F)'] %}{% endif %}
             {% if prob >= 30 %}{% set problems = problems + [prob | round(0) | int ~ ' % rain chance'] %}{% endif %}
             {% if wind >= 18 %}{% set problems = problems + ['windy (' ~ wind | round(0) | int ~ ' mph)'] %}{% endif %}
+            {% if (d0.precipitation | default(0)) >= 0.1 %}{% set problems = problems + [d0.precipitation ~ ' in of rain expected'] %}{% endif %}
             {% if problems | length == 0 %}{{ cond | replace('-', ' ') | title }}, high {{ high | round(0) | int }} °F, only {{ prob | round(0) | int }} % rain chance — get outside!
             {% else %}Not quite: {{ problems | join(', ') }}.
             {% endif %}
