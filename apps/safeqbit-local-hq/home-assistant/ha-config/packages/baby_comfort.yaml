@@ -1,5 +1,7 @@
 # Baby comfort package — newborn skin & breathing comfort ratings per room.
-# Version: 1.2 — 2026-07-10
+# Version: 1.3 — 2026-07-10
+#   1.3: compound labels when both factors are off ("Too warm & slightly
+#        humid"); icon keys off the dominant (temperature) phrase
 #   1.2: text labels derive from the comfort score, so words track the gauge
 #        colors — green ≥75 = Ideal, yellow 40–74 = Slightly …, red <40 =
 #        Too … (was: fixed cutoffs that let "Slightly warm" reach a 6 % score)
@@ -55,20 +57,23 @@ template:
           {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
           {% else %}{% set hs = [0, (70 - h) / 5] | max %}
           {% endif %}
-          {% if ts < 0.4 %}{{ 'Too warm' if t > 74 else 'Too cold' }}
-          {% elif hs < 0.4 %}{{ 'Too humid' if h > 65 else 'Too dry' }}
-          {% elif ts < 0.75 %}{{ 'Slightly warm' if t > 74 else 'Slightly cool' }}
-          {% elif hs < 0.75 %}{{ 'Slightly humid' if h > 65 else 'Slightly dry' }}
+          {% set tp = ('Too warm' if t > 74 else 'Too cold') if ts < 0.4
+             else (('Slightly warm' if t > 74 else 'Slightly cool') if ts < 0.75 else '') %}
+          {% set hp = ('too humid' if h > 65 else 'too dry') if hs < 0.4
+             else (('slightly humid' if h > 65 else 'slightly dry') if hs < 0.75 else '') %}
+          {% if tp and hp %}{{ tp }} & {{ hp }}
+          {% elif tp %}{{ tp }}
+          {% elif hp %}{{ hp | capitalize }}
           {% else %}Ideal
           {% endif %}
           {% endif %}
         icon: >-
-          {% set s = this.state %}
-          {% if s == 'Ideal' %}mdi:baby-face-outline
-          {% elif s in ['Too warm', 'Slightly warm'] %}mdi:thermometer-chevron-up
-          {% elif s in ['Too cold', 'Slightly cool'] %}mdi:thermometer-chevron-down
-          {% elif s in ['Too humid', 'Slightly humid'] %}mdi:water-plus
-          {% elif s in ['Too dry', 'Slightly dry'] %}mdi:water-minus
+          {% set s = this.state | lower %}
+          {% if s == 'ideal' %}mdi:baby-face-outline
+          {% elif 'warm' in s %}mdi:thermometer-chevron-up
+          {% elif 'cool' in s or 'cold' in s %}mdi:thermometer-chevron-down
+          {% elif 'humid' in s %}mdi:water-plus
+          {% elif 'dry' in s %}mdi:water-minus
           {% else %}mdi:help-circle-outline
           {% endif %}
         attributes:
@@ -116,20 +121,23 @@ template:
           {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
           {% else %}{% set hs = [0, (70 - h) / 5] | max %}
           {% endif %}
-          {% if ts < 0.4 %}{{ 'Too warm' if t > 74 else 'Too cold' }}
-          {% elif hs < 0.4 %}{{ 'Too humid' if h > 65 else 'Too dry' }}
-          {% elif ts < 0.75 %}{{ 'Slightly warm' if t > 74 else 'Slightly cool' }}
-          {% elif hs < 0.75 %}{{ 'Slightly humid' if h > 65 else 'Slightly dry' }}
+          {% set tp = ('Too warm' if t > 74 else 'Too cold') if ts < 0.4
+             else (('Slightly warm' if t > 74 else 'Slightly cool') if ts < 0.75 else '') %}
+          {% set hp = ('too humid' if h > 65 else 'too dry') if hs < 0.4
+             else (('slightly humid' if h > 65 else 'slightly dry') if hs < 0.75 else '') %}
+          {% if tp and hp %}{{ tp }} & {{ hp }}
+          {% elif tp %}{{ tp }}
+          {% elif hp %}{{ hp | capitalize }}
           {% else %}Ideal
           {% endif %}
           {% endif %}
         icon: >-
-          {% set s = this.state %}
-          {% if s == 'Ideal' %}mdi:baby-face-outline
-          {% elif s in ['Too warm', 'Slightly warm'] %}mdi:thermometer-chevron-up
-          {% elif s in ['Too cold', 'Slightly cool'] %}mdi:thermometer-chevron-down
-          {% elif s in ['Too humid', 'Slightly humid'] %}mdi:water-plus
-          {% elif s in ['Too dry', 'Slightly dry'] %}mdi:water-minus
+          {% set s = this.state | lower %}
+          {% if s == 'ideal' %}mdi:baby-face-outline
+          {% elif 'warm' in s %}mdi:thermometer-chevron-up
+          {% elif 'cool' in s or 'cold' in s %}mdi:thermometer-chevron-down
+          {% elif 'humid' in s %}mdi:water-plus
+          {% elif 'dry' in s %}mdi:water-minus
           {% else %}mdi:help-circle-outline
           {% endif %}
         attributes:
@@ -176,20 +184,23 @@ template:
           {% elif h < 35 %}{% set hs = [0, (h - 25) / 10] | max %}
           {% else %}{% set hs = [0, (70 - h) / 5] | max %}
           {% endif %}
-          {% if ts < 0.4 %}{{ 'Too warm' if t > 74 else 'Too cold' }}
-          {% elif hs < 0.4 %}{{ 'Too humid' if h > 65 else 'Too dry' }}
-          {% elif ts < 0.75 %}{{ 'Slightly warm' if t > 74 else 'Slightly cool' }}
-          {% elif hs < 0.75 %}{{ 'Slightly humid' if h > 65 else 'Slightly dry' }}
+          {% set tp = ('Too warm' if t > 74 else 'Too cold') if ts < 0.4
+             else (('Slightly warm' if t > 74 else 'Slightly cool') if ts < 0.75 else '') %}
+          {% set hp = ('too humid' if h > 65 else 'too dry') if hs < 0.4
+             else (('slightly humid' if h > 65 else 'slightly dry') if hs < 0.75 else '') %}
+          {% if tp and hp %}{{ tp }} & {{ hp }}
+          {% elif tp %}{{ tp }}
+          {% elif hp %}{{ hp | capitalize }}
           {% else %}Ideal
           {% endif %}
           {% endif %}
         icon: >-
-          {% set s = this.state %}
-          {% if s == 'Ideal' %}mdi:baby-face-outline
-          {% elif s in ['Too warm', 'Slightly warm'] %}mdi:thermometer-chevron-up
-          {% elif s in ['Too cold', 'Slightly cool'] %}mdi:thermometer-chevron-down
-          {% elif s in ['Too humid', 'Slightly humid'] %}mdi:water-plus
-          {% elif s in ['Too dry', 'Slightly dry'] %}mdi:water-minus
+          {% set s = this.state | lower %}
+          {% if s == 'ideal' %}mdi:baby-face-outline
+          {% elif 'warm' in s %}mdi:thermometer-chevron-up
+          {% elif 'cool' in s or 'cold' in s %}mdi:thermometer-chevron-down
+          {% elif 'humid' in s %}mdi:water-plus
+          {% elif 'dry' in s %}mdi:water-minus
           {% else %}mdi:help-circle-outline
           {% endif %}
         attributes:
