@@ -174,3 +174,17 @@ manually after the soak: exec in the velero pod →
   the device web UI (Settings → Outbound Websocket). Any future HA IP/URL
   move must repeat the wake+reprovision dance — sleeping devices never
   fetch the new address on their own.
+  **RESOLVED 2026-07-10, and the killer detail was internal_url:** with
+  internal URL unset, HA advertises its auto-detected address — in k3s the
+  POD IP (10.42.x, LAN-unreachable) — and the Shelly integration REWRITES
+  an awake device's outbound-websocket target with it. So manually fixing
+  a device and rebooting it let HA re-break it moments later. Order of
+  operations for any future move: (1) set internal URL
+  (http://10.10.13.51:8123) BEFORE touching any device, (2) then
+  reprovision/wake. Bridge for untouched devices: UniFi DNAT on the IoT
+  VLAN interface (old-IP:8123 → 10.10.13.51:8123) PLUS an explicit
+  firewall allow IoT → 10.10.13.51:8123 — the allow must target the
+  TRANSLATED destination; pre-existing IoT rules only covered the old IP.
+  All three sensors + baby-comfort layer confirmed reporting. Remaining:
+  reprovision the two NAT-bridged sensors to .51 directly (next battery
+  swap), then delete the DNAT + its FW rule.
