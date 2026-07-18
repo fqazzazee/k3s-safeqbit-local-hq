@@ -55,7 +55,7 @@ spec:
         - name: vaultwarden
           # Pin to a specific version. Don't use :latest — you'll lose
           # control of when upgrades happen.
-          image: vaultwarden/server:1.32.0
+          image: vaultwarden/server:1.36.0
 
           # The container listens on port 80 by default.
           ports:
