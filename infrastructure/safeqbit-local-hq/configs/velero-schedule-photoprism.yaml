@@ -28,6 +28,12 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
+      # One-shot ACME workflow objects. Restoring these plants a stale
+      # CertificateRequest that squats on the name cert-manager needs for the
+      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      - certificaterequests.cert-manager.io
+      - orders.acme.cert-manager.io
+      - challenges.acme.cert-manager.io
     snapshotVolumes: true
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
