@@ -44,7 +44,9 @@ spec:
             - until pg_isready -h immich-postgres -p 5432; do echo "waiting for postgres"; sleep 2; done
       containers:
         - name: immich-server
-          image: ghcr.io/immich-app/immich-server:release
+          # Pinned to the running version. The floating :release tag would pull
+          # v3.x (breaking changes) on any pod reschedule; upgrade deliberately.
+          image: ghcr.io/immich-app/immich-server:v2.7.5
           ports:
             - containerPort: 2283
           env:
