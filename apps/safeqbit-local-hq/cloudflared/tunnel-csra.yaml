@@ -54,7 +54,7 @@ spec:
               app: csra-cf-tunnel
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared:2025.4.2
+          image: cloudflare/cloudflared:2026.7.2
           args:
             - tunnel
             - --no-autoupdate
