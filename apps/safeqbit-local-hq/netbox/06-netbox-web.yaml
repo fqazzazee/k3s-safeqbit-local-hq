@@ -45,7 +45,7 @@ spec:
                   key: password
       containers:
         - name: netbox
-          image: netboxcommunity/netbox:v4.2-3.2.0
+          image: netboxcommunity/netbox:v4.6.5-5.0.2
           ports:
             - containerPort: 8080
           env:
@@ -136,6 +136,15 @@ spec:
             - name: scripts
               mountPath: /opt/netbox/netbox/scripts
 
+          # The entrypoint runs DB migrations (and reindex) before opening the
+          # port; multi-version upgrades can hold it closed for minutes. The
+          # startup probe grants up to 10min before liveness takes over, so a
+          # long migration is never killed mid-flight.
+          startupProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             tcpSocket:
               port: 8080

@@ -42,7 +42,7 @@ spec:
                   key: password
       containers:
         - name: worker
-          image: netboxcommunity/netbox:v4.2-3.2.0
+          image: netboxcommunity/netbox:v4.6.5-5.0.2
           command: ["/opt/netbox/venv/bin/python", "/opt/netbox/netbox/manage.py", "rqworker"]
           env:
             - name: DB_HOST
