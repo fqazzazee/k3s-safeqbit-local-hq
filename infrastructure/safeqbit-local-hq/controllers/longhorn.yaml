@@ -17,7 +17,7 @@ spec:
   chart:
     spec:
       chart: longhorn
-      version: 1.11.2                      # check `helm list -n longhorn-system`
+      version: 1.11.3                      # check `helm list -n longhorn-system`
       sourceRef:
         kind: HelmRepository
         name: longhorn
