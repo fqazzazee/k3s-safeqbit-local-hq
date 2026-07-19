@@ -44,9 +44,9 @@ spec:
             - until pg_isready -h immich-postgres -p 5432; do echo "waiting for postgres"; sleep 2; done
       containers:
         - name: immich-server
-          # Pinned to the running version. The floating :release tag would pull
-          # v3.x (breaking changes) on any pod reschedule; upgrade deliberately.
-          image: ghcr.io/immich-app/immich-server:v2.7.5
+          # Pinned deliberately — never use the floating :release tag (it jumps
+          # majors on pod reschedule). Bump server + ML together.
+          image: ghcr.io/immich-app/immich-server:v3.0.3
           ports:
             - containerPort: 2283
           env:
@@ -90,6 +90,13 @@ spec:
             - name: localtime
               mountPath: /etc/localtime
               readOnly: true
+          # Immich runs DB migrations before listening; a major upgrade can
+          # hold the port closed past the liveness window. 10min startup grace.
+          startupProbe:
+            tcpSocket:
+              port: 2283
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             tcpSocket:
               port: 2283
