@@ -113,9 +113,11 @@ spec:
       resources:
         requests:
           cpu: 50m
-          memory: 256Mi
-        limits:
           memory: 512Mi
+        limits:
+          # 512Mi OOM-killed the 2026.2 worker during startup blueprint
+          # reapplication. Revisit after 2026.5 (Rust worker, ~200Mi lighter).
+          memory: 1Gi
 
     postgresql:
       enabled: false
