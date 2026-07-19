@@ -8,7 +8,10 @@ spec:
   chart:
     spec:
       chart: authentik
-      version: 2025.10.3
+      # Upgrades MUST step through each authentik release sequentially:
+      # 2025.10 -> 2026.2 -> 2026.5. This is hop 1; bump to 2026.5.x only
+      # after this one is verified (login + forward auth).
+      version: 2026.2.3
       sourceRef:
         kind: HelmRepository
         name: authentik
@@ -60,9 +63,10 @@ spec:
       ingress:
         enabled: false
 
-      pod:
-        annotations:
-          reloader.stakater.com/auto: "true"
+      # The chart key is podAnnotations; the old server.pod.annotations nesting
+      # was silently ignored (pods never carried the reloader annotation).
+      podAnnotations:
+        reloader.stakater.com/auto: "true"
 
       metrics:
         enabled: true
@@ -92,9 +96,8 @@ spec:
 
     worker:
       replicas: 1
-      pod:
-        annotations:
-          reloader.stakater.com/auto: "true"
+      podAnnotations:
+        reloader.stakater.com/auto: "true"
       volumes:
         - name: media
           persistentVolumeClaim:
@@ -116,5 +119,3 @@ spec:
 
     postgresql:
       enabled: false
-    redis:
-      enabled: true
