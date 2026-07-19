@@ -133,6 +133,10 @@ spec:
                   storage: 40Gi
     grafana:
       enabled: true
+      # kube-prometheus-stack 84.5.0 pins grafana 13.0.1; 13.1.0 is a minor
+      # on the same major. Drop this override on the next stack chart bump.
+      image:
+        tag: "13.1.0"
       persistence:
         enabled: true
         storageClassName: nfs-truenas
