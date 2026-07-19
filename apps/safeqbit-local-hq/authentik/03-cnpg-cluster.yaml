@@ -6,6 +6,13 @@ metadata:
 spec:
   instances: 2
 
+  # Promote the replica before restarting the old primary (default is an
+  # in-place primary restart). Authentik's server pods crash on dead DB
+  # connections and crash-backoff turns a ~10s primary blip into ~5min of
+  # SSO 503s (seen on the CNPG 1.30 operator upgrade, 2026-07-19) — a
+  # switchover keeps a writable primary up throughout.
+  primaryUpdateMethod: switchover
+
   postgresql:
     parameters:
       max_connections: "100"
