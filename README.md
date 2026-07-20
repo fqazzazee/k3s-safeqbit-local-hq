@@ -123,6 +123,158 @@ Visitor ─► Cloudflare / my LAN ─► ingress (front door) ─► the app's 
 
 ---
 
+## 🗺️ The map — everything on one diagram
+
+The whole system — networking, apps, databases, storage, backups, monitoring, and how
+they're wired together. GitHub renders this as a live diagram: use the zoom/pan controls
+(top-right of the diagram) to explore, and the section links in the legend table below to
+jump to the details.
+
+```mermaid
+flowchart TB
+    subgraph internet["☁️  Internet"]
+        visitor(["🧑 Visitor — remote"])
+        gh["GitHub<br/>(this repo)"]
+        cf["Cloudflare<br/>DNS + Tunnel edge"]
+        le["Let's Encrypt"]
+        b2[("Backblaze B2<br/>off-site backups")]
+        slack["Slack workspace"]
+    end
+
+    subgraph lan["🏠  Home LAN — UCG-MAX router · MikroTik 10G switch"]
+        me(["🧑 Me — at home"])
+        pve["Proxmox hosts ×3<br/>Meatball · Dumpling · Omen"]
+        nas1[("TrueNAS primary<br/>NVMe · NFS exports")]
+        nas2[("TrueNAS replica")]
+    end
+
+    subgraph k3s["⎈  k3s cluster — 3 node VMs on the Proxmox hosts · VLAN 10.10.13.0/24"]
+        subgraph gitops["🔁 GitOps"]
+            flux["Flux v2"]
+            sealed["Sealed Secrets"]
+        end
+        subgraph net["🌐 Networking"]
+            metallb["MetalLB<br/>.50–.59 reserved · .60–.100 auto"]
+            ingress["ingress-nginx<br/>10.10.13.50 — the front door"]
+            certmgr["cert-manager"]
+            cfd["cloudflared ×2<br/>outbound-only tunnel"]
+        end
+        subgraph apps["📦 Apps"]
+            auth["Authentik — SSO"]
+            vw["Vaultwarden"]
+            immich["Immich"]
+            pp["PhotoPrism"]
+            nb["NetBox"]
+            affine["AFFiNE"]
+            pz["Passzilla"]
+            guac["Guacamole"]
+            ha["Home Assistant<br/>LAN LB 10.10.13.51"]
+            kuma["Uptime Kuma"]
+        end
+        subgraph db["🐘 Databases"]
+            cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>guacamole ×1")]
+            ownpg[("bundled Postgres<br/>immich · photoprism")]
+            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant")]
+        end
+        subgraph storage["💾 Storage"]
+            longhorn[("Longhorn<br/>replicated block storage")]
+            nfsprov["NFS storage classes<br/>nfs-truenas · nfs-bulk-media"]
+        end
+        subgraph backups["🛟 Backups"]
+            velero["Velero<br/>Layer 3"]
+            cnpgsnap["CNPG snapshots<br/>Layer 2"]
+            etcdsnap["etcd weekly snapshot<br/>Layer 0"]
+        end
+        subgraph mon["📈 Monitoring"]
+            prom["Prometheus"]
+            graf["Grafana"]
+            am["Alertmanager"]
+            pulse["Pulse"]
+            bot["cluster-slack-bot<br/>/cluster … · read-only"]
+        end
+    end
+
+    %% GitOps: Git is the source of truth
+    gh -- "watched by" --> flux
+    flux -- "applies everything below" --> apps
+    sealed -. "decrypts secrets from Git" .-> apps
+
+    %% Request path: two front doors, one ingress
+    visitor --> cf
+    cf -- "outbound tunnel" --> cfd --> ingress
+    me -- "LAN / VLAN routing" --> ingress
+    metallb -- "hands out LAN IPs" --> ingress
+    certmgr -- "DNS-01 via Cloudflare API" --> le
+    ingress -- "routes by hostname + TLS" --> apps
+    me -- "IoT devices → 10.10.13.51" --> ha
+
+    %% Data path
+    apps --> cnpg
+    apps --> ownpg
+    apps --> sqlite
+    cnpg --> longhorn
+    ownpg --> longhorn
+    sqlite --> longhorn
+    apps -- "bulk + shared files" --> nfsprov --> nas1
+    nas1 -- "replication every 30 min" --> nas2
+
+    %% Backups
+    longhorn -- "volume data" --> velero
+    velero -- "manifests + volumes, staggered" --> b2
+    cnpgsnap -- "app-consistent DB snapshots" --> longhorn
+    etcdsnap -- "full cluster state, weekly" --> b2
+
+    %% Monitoring & ChatOps
+    prom --> graf
+    prom -- "firing alerts" --> am
+    am -- "notifications" --> slack
+    slack <-- "Socket Mode — outbound WS" --> bot
+    bot -- "queries (read-only)" --> prom
+    pulse -- "monitors hypervisors" --> pve
+    pve -- "runs the 3 node VMs" --> k3s
+
+    classDef ext fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef netc fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef appc fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef dbc fill:#fef3c7,stroke:#f59e0b,color:#78350f
+    classDef stoc fill:#fae8ff,stroke:#c026d3,color:#701a75
+    classDef bakc fill:#ffe4e6,stroke:#f43f5e,color:#881337
+    classDef monc fill:#e0f2fe,stroke:#0ea5e9,color:#0c4a6e
+    classDef gitc fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95
+    class visitor,gh,cf,le,b2,slack,me,pve,nas1,nas2 ext
+    class metallb,ingress,certmgr,cfd netc
+    class auth,vw,immich,pp,nb,affine,pz,guac,ha,kuma appc
+    class cnpg,ownpg,sqlite dbc
+    class longhorn,nfsprov stoc
+    class velero,cnpgsnap,etcdsnap bakc
+    class prom,graf,am,pulse,bot monc
+    class flux,sealed gitc
+```
+
+### The same map, from Slack
+
+Every area of that diagram can be inspected live from my phone through the
+**cluster Slack bot** (bottom-right of the map — a read-only `/cluster` slash command
+that connects outbound to Slack, so the cluster stays closed). The bot also carries a
+built-in **wiki** mirroring this map: `/cluster wiki` serves kubectl man pages,
+troubleshooting methodologies, and this cluster's knowledge base right in Slack.
+
+| Map area | Live inspection | Built-in wiki page |
+|---|---|---|
+| 🔁 GitOps | `/cluster flux` | `wiki cluster.gitops`, `method.flux-sync` |
+| 🌐 Networking | `/cluster ingresses`, `dns` | `wiki cluster.network`, `method.dns-network` |
+| 📦 Apps | `/cluster pods`, `deploys`, `ps`, `why` | `wiki cluster.apps`, `method.pod-crash` |
+| 🐘 Databases | `/cluster cnpg` | `wiki cluster.databases`, `method.databases` |
+| 💾 Storage | `/cluster storage`, `longhorn`, `pvcs` | `wiki cluster.storage`, `method.storage` |
+| 🛟 Backups | `/cluster velero`, `etcd`, `backups` | `wiki cluster.backups`, `method.backups-restore` |
+| 📈 Monitoring | `/cluster alerts`, `silences`, `summary` | `wiki cluster.monitoring` |
+| 🖥️ Nodes | `/cluster nodes` | `wiki cluster.nodes`, `method.node-down` |
+| The whole map | `/cluster summary` | `wiki cluster.map` (ASCII version of this diagram) |
+
+Bot architecture and the full command list: [workbook/slack-bot.md](workbook/slack-bot.md).
+
+---
+
 ## 🖥️ The hardware
 
 Three physical machines, each running [Proxmox](https://www.proxmox.com/) (a hypervisor)
@@ -328,6 +480,17 @@ tunnel runs two copies for redundancy.
 or a tunnel - Alertmanager pings me on Slack. This is how I find out about problems before
 they become outages.
 
+### Cluster Slack bot: ChatOps + a built-in wiki
+
+Alerts arriving in Slack are only half the loop - the other half is being able to *look*
+without opening a laptop. A small read-only bot answers `/cluster` slash commands
+(24+ of them: pod health, logs, one-shot triage, storage fullness, backup status, a
+task-manager view...) over an outbound-only Socket Mode connection, so nothing new is
+exposed. It also serves a built-in **cluster wiki** (`/cluster wiki`, `/cluster man`):
+kubectl man pages, troubleshooting methodologies, and this cluster's own knowledge base -
+including the gotchas that took real incidents to learn. Details:
+[workbook/slack-bot.md](workbook/slack-bot.md).
+
 ---
 
 ## 🔁 GitOps & disaster recovery
@@ -459,6 +622,7 @@ learn.
 | cloudflared | Outbound-only tunnels for public access |
 | Velero | Off-site backups to Backblaze B2 |
 | kube-prometheus-stack | Metrics, dashboards & alerts |
+| cluster-slack-bot | Read-only `/cluster` ChatOps commands + in-Slack cluster wiki |
 
 ### Things I'm building
 
