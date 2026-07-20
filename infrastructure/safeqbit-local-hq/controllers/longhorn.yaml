@@ -52,6 +52,11 @@ spec:
       # affine, pulse…) down for the whole 2026-07-08 server-01 outage —
       # a dead node can't cooperate in releasing its volume attachments.
       nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+      # Live-upgrade volume engines after a chart upgrade. The default (0)
+      # disables this entirely, so attached volumes stay on the old engine
+      # forever — after 1.11.3 all 23 volumes were still running the 1.11.2
+      # engine with the old instance-managers pinned in place.
+      concurrentAutomaticEngineUpgradePerNodeLimit: 1
     persistence:
       defaultClass: true                  # longhorn IS the default StorageClass now
       defaultClassReplicaCount: 3
