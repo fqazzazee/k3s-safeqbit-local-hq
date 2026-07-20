@@ -5,6 +5,9 @@ Velero per-backup detail, Longhorn/storage/jobs/silences/etcd/dns, grouped
 help, formatting pass). **+ps** same day (task-manager view, PR #42).
 **2026-07-08:** `ps` gained a NODE column (pod→node placement) and the bot
 went to **2 replicas** for node-loss HA (see "Replicas & HA" below).
+**2026-07-19:** `wiki` / `man` — a static knowledge base (kubectl man
+pages, troubleshooting methodologies, cluster-specific KB) served from
+its own ConfigMap (see "The wiki" below).
 
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
@@ -81,14 +84,54 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster dns <name>                      resolve a hostname from inside the cluster
 /cluster ingresses                       hostname → service map
 /cluster alerts                          currently firing Prometheus alerts
+/cluster wiki [section|topic]            knowledge base: index, section listing, or one page
+                                         (topic prefix ok; sections kubectl/method/cluster)
+/cluster wiki search <term>              full-text search across all wiki pages
+/cluster man <cmd>                       kubectl man page shortcut (man logs = wiki kubectl.logs)
 /cluster help                            all of the above, grouped, w/ kubectl equivalents
 ```
 
 Singular/plural aliases work (`pod`, `deploy`, `log`, `event`, `pvc`,
 `ingress`…), plus `triage`/`debug`→why, `volumes`/`lh`→longhorn,
 `usage`/`disk`→storage, `cron`→jobs, `nslookup`/`resolve`→dns,
-`snapshots`→etcd. `help` shows each command with the kubectl command
+`snapshots`→etcd, `kb`/`docs`/`howto`/`guide`/`runbooks`→wiki,
+`manual`→man. `help` shows each command with the kubectl command
 you'd type on a terminal.
+
+## The wiki (`wiki` / `man`)
+
+A static, in-Slack knowledge base — three sections, one ConfigMap key
+per page, named `<section>.<topic>`:
+
+- **`kubectl.*`** (14 pages) — man pages for the kubectl commands
+  actually used here, each ending with its `/cluster` equivalent and
+  any cluster-specific traps (`rollout restart` SSA double-roll,
+  `backups.velero.io` name collision, GitOps edit warnings…).
+- **`method.*`** (10 pages) — troubleshooting methodologies: incident
+  triage order, pod crash/pending, DNS/network, storage, node-down,
+  Flux sync, certs/ingress, databases, backup/restore.
+- **`cluster.*`** (11 pages) — this cluster's facts: ASCII map, nodes,
+  network, storage, backups, databases, monitoring, GitOps flow, app
+  inventory, the gotchas hall of fame, and a runbook index.
+
+Mechanics, all in `cluster-slack-bot-wiki.yaml`:
+
+- Pages are **Slack mrkdwn** (no markdown headers/links/tables). The
+  first line of each page is `*Title* — summary`; listings and search
+  results show the summary part.
+- Resolution: exact key → exact topic → prefix → substring; ambiguous
+  queries list the candidates (e.g. `storage` matches both
+  `method.storage` and `cluster.storage` — intentional).
+- `man <x>` prefers `kubectl.<x>` and falls through to `wiki <x>`.
+- The bot reads `/wiki` **per request**, and kubelet syncs ConfigMap
+  volumes within ~1 min — **wiki edits go live without a pod restart**
+  (bot.py itself still needs the one-at-a-time pod delete).
+- The volume is mounted `optional: true`, so a missing wiki ConfigMap
+  never blocks bot startup — `wiki` just answers "no pages found".
+- Content is deliberately duplicated from README/workbook (Slack can't
+  follow repo links). When a cluster fact changes, grep
+  `cluster-slack-bot-wiki.yaml` too — the runbooks stay the source of
+  truth, the wiki page points at them.
 
 v4 caveats worth remembering:
 

@@ -1,0 +1,658 @@
+# cluster-slack-bot-wiki.yaml — static knowledge base served by the
+# /cluster bot's `wiki` / `man` commands (see cluster-slack-bot.yaml).
+#
+# STRUCTURE — one ConfigMap key per page, named `<section>.<topic>`:
+#   kubectl.*   man pages for the kubectl commands you actually type here,
+#               each ending with the matching /cluster bot command
+#   method.*    troubleshooting methodologies (what to check, in order)
+#   cluster.*   THIS cluster's facts: network, storage, backups, apps,
+#               gotchas hall of fame, runbook index
+#
+# FORMAT — pages are Slack mrkdwn (*bold*, _italic_, `code`, ``` blocks,
+# • bullets — NO markdown headers/links/tables). First line of each page
+# is "*Title* — summary" and doubles as the listing blurb. Keep pages
+# under ~3,500 chars so they read on a phone.
+#
+# EDITING — the bot reads /wiki/<page> per request, and kubelet syncs
+# ConfigMap volumes within ~1 min, so wiki edits go live WITHOUT a pod
+# restart (unlike bot.py, which is only read at start). Facts here are
+# duplicated from README/workbook by design (Slack can't follow repo
+# links) — when a fact changes, grep this file too.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-slack-bot-wiki
+  namespace: monitoring
+data:
+  # ══════════════════════ kubectl man pages ══════════════════════
+  kubectl.basics: |
+    *kubectl basics* — command anatomy, namespaces, output formats
+    Every command: `kubectl <verb> <kind> [name] [flags]`
+
+    • `-n <ns>` pick a namespace · `-A` all namespaces
+    • `-o wide` extra columns (node, IP) · `-o yaml` full spec+status
+    • `kubectl api-resources` — every kind + short names
+      (`po` `deploy` `sts` `ds` `svc` `ing` `pvc` `cm` `secret` `ns`)
+    • `kubectl explain deploy.spec.strategy` — built-in field docs
+      (`--recursive` prints the whole subtree)
+    • `kubectl get <kind> <name> -o yaml` beats describe when you need
+      the exact field values, not a summary
+
+    _This cluster: kubeconfig points at `k3s.local.safeqbit.com`
+    (round-robin across all 3 nodes, so it works during a node loss)._
+    _Bot: `/cluster help` shows the kubectl equivalent per command._
+  kubectl.get: |
+    *kubectl get* — list and filter resources
+    `kubectl get pods -A` · `kubectl get deploy,sts,ds -n <ns>`
+
+    • `-l app=foo` label selector · `--field-selector spec.nodeName=X`
+    • `--sort-by=.metadata.creationTimestamp` newest last
+    • `-w` watch live · `-o wide` shows node + pod IP
+    • `kubectl get pods -A | grep -v Running` — quick unhealthy scan
+
+    :warning: *Cluster trap:* in the velero namespace, bare
+    `kubectl get backup` resolves to `backups.longhorn.io`, NOT Velero.
+    Always type `kubectl get backups.velero.io -n velero`.
+
+    _Bot: `/cluster pods [ns]` · `deploys` · `pvcs` · `ingresses`_
+  kubectl.describe: |
+    *kubectl describe* — one resource in detail, with its events
+    `kubectl describe pod <pod> -n <ns>`
+
+    The *Events section at the bottom* is usually the answer: scheduling
+    failures, image pulls, probe failures, volume mount errors all land
+    there. Works on any kind: `describe node`, `describe pvc`,
+    `describe certificate`, `describe helmrelease`.
+
+    Events expire after ~1h — if the pod has been stuck longer, the
+    reason may have scrolled away; check `kubectl get events` or restart
+    the rollout of interest and watch fresh events arrive.
+
+    _Bot: `/cluster describe <ns> <pod>` (prefix ok) ·
+    `/cluster why <ns> <pod>` adds logs + last exit code._
+  kubectl.logs: |
+    *kubectl logs* — container output
+    `kubectl logs <pod> -n <ns> [-c <container>]`
+
+    • `-f` follow · `--tail=100` last N · `--since=10m` time window
+    • `-p` / `--previous` — the *crashed* instance's logs. The crash
+      reason is almost always here, not in the current instance.
+    • `-l app=foo --prefix` — merge logs from all pods of a workload
+    • `--timestamps` when correlating with events/alerts
+    • Multi-container pods NEED `-c`; list them with
+      `kubectl get pod <pod> -o jsonpath='{.spec.containers[*].name}'`
+
+    _Bot: `/cluster logs <ns> <pod> [ctr] [lines] [prev] [grep <pat>]`_
+  kubectl.exec: |
+    *kubectl exec* — run commands inside a container
+    `kubectl exec -it <pod> -n <ns> -- sh`
+
+    • Alpine/distroless images have `sh` at best, not `bash`
+    • One-shot: `kubectl exec <pod> -- env | sort` · `-- ls /config`
+    • `kubectl cp <ns>/<pod>:/path ./local` — needs `tar` in the image
+    • CNPG psql (pattern from workbook/maintenance.md):
+      `kubectl exec -it -n <ns> <cluster>-1 -- psql -U postgres`
+    • Velero CLI lives only in the velero pod:
+      `kubectl exec -n velero deploy/velero -- /velero backup get`
+
+    :warning: exec is a *write-ish* action (you can change state inside
+    the pod) — the Slack bot deliberately has no equivalent.
+  kubectl.port-forward: |
+    *kubectl port-forward* — reach a Service/pod from your workstation
+    `kubectl port-forward -n <ns> svc/<svc> 8080:80`
+
+    Most UIs here already have ingress hostnames (grafana, prometheus,
+    alertmanager, longhorn UI…) — port-forward is for the rest:
+    • `kubectl port-forward -n <ns> svc/<app>-cnpg-rw 5432:5432` then
+      `psql -h 127.0.0.1` with creds from the app's secret
+    • Debugging a Service that misbehaves behind ingress: forward the
+      service, then the pod directly — if the pod answers but the svc
+      doesn't, the selector/endpoints are wrong
+
+    Dies when the pod restarts; just rerun. Ctrl-C to stop.
+  kubectl.events: |
+    *kubectl events* — what the cluster tried to do recently
+    `kubectl get events -A --sort-by=.lastTimestamp | tail -30`
+
+    • Warnings only:
+      `kubectl get events -A --field-selector type=Warning`
+    • One object:
+      `kubectl get events -n <ns> --field-selector involvedObject.name=<pod>`
+    • Newer syntax: `kubectl events -n <ns> --types=Warning`
+
+    Events age out (~1h TTL) — "no events" on an old stuck pod means
+    look at conditions (`describe`) and controller logs instead.
+
+    _Bot: `/cluster events [ns]` — Warning events, newest first._
+  kubectl.top: |
+    *kubectl top* — live CPU/memory (metrics-server, built into k3s)
+    `kubectl top pods -A --sort-by=memory | head -15`
+
+    • `kubectl top pods -n <ns> --containers` — per-container split
+    • `kubectl top nodes` — node totals; compare against requests with
+      `kubectl describe node <n> | grep -A8 "Allocated resources"`
+    • OOMKilled hunting: `top` shows *now*; the kill happened at the
+      limit — check `last exit` in describe and the memory *limit*
+
+    _Bot: `/cluster top [ns]` (top-10) · `/cluster ps` is richer:
+    per-workload CPU/mem/net/disk + node placement._
+  kubectl.rollout: |
+    *kubectl rollout* — deployment rollout control
+    `kubectl rollout status deploy/<name> -n <ns>`
+
+    • `rollout history deploy/<name>` — revisions; `--revision=N` detail
+    • `rollout undo deploy/<name>` — roll back (but in THIS cluster,
+      revert the Git commit instead — Flux will re-apply the old state)
+
+    :rotating_light: *Cluster trap — do NOT `rollout restart` anything
+    Flux manages.* It edits the pod template (restartedAt annotation),
+    Flux's server-side apply strips it on the next reconcile, and the
+    workload rolls a SECOND time (observed on the bot, 2026-07-08).
+    The sanctioned restart is deleting pods:
+    `kubectl delete pod <pod> -n <ns>` — one at a time for multi-replica
+    apps so one stays up.
+  kubectl.scale-edit: |
+    *kubectl scale / edit / patch* — mutate live objects (mostly DON'T)
+    `kubectl scale deploy/<name> -n <ns> --replicas=2`
+
+    :warning: *This cluster is GitOps.* Flux reconciles continuously —
+    live edits to anything it manages are reverted within minutes, and
+    partial live patches get silently stripped by server-side apply
+    (this bit us with dnsConfig once). The real workflow:
+    1. Edit the YAML in the repo, PR, merge → Flux applies it.
+    2. Emergency only: `flux suspend kustomization <name>` (or hr),
+       make the live change, fix Git properly, then `flux resume`.
+       Pattern + examples: workbook/maintenance.md.
+
+    Things NOT managed by Flux (one-off test pods, manual jobs) are
+    fair game for scale/edit/delete.
+  kubectl.apply-delete: |
+    *kubectl apply / delete* — create and destroy
+    `kubectl apply -f file.yaml --dry-run=server` — validate first
+
+    • `kubectl diff -f file.yaml` — what would change
+    • `kubectl delete pod <pod>` — the sanctioned "restart" here
+    • `kubectl delete job <job>` — stale Failed jobs (e.g. old
+      kopia-maintain jobs) must be deleted by hand
+
+    :rotating_light: *Never `kubectl delete` a Velero backup CR* — the
+    backup-sync controller resurrects it from B2. Use the CLI in the
+    pod: `kubectl exec -n velero deploy/velero -- /velero backup delete
+    <name> --confirm`.
+    Remember: deleting a PVC deletes the data (Longhorn volume follows
+    the claim). Snapshot/backup first if in doubt.
+  kubectl.debug: |
+    *kubectl debug* — ephemeral containers & node shells
+    `kubectl debug -it <pod> -n <ns> --image=busybox --target=<ctr>`
+
+    • Attaches a throwaway container sharing the pod's namespaces —
+      the way into distroless/scratch images with no shell
+    • Node shell: `kubectl debug node/<name> -it --image=busybox`
+      (host filesystem under `/host`)
+    • Network debugging: `kubectl run tmp --rm -it
+      --image=nicolaka/netshoot -- bash` (dig, curl, tcpdump, ss)
+
+    :warning: *DNS testing trap:* a default test pod inherits
+    `ndots:5` + search domains, so it reproduces this cluster's DNS
+    amplification quirks — that may be exactly what you want to test,
+    or exactly what ruins your test. Use trailing-dot FQDNs
+    (`host.example.com.`) to bypass search-domain expansion.
+  kubectl.jsonpath: |
+    *kubectl -o jsonpath / custom-columns* — extract exactly one fact
+    `kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'`
+
+    • Images in a ns: `kubectl get pods -n <ns> -o
+      jsonpath='{.items[*].spec.containers[*].image}'`
+    • Custom table: `kubectl get pvc -A -o custom-columns=\
+      NS:.metadata.namespace,NAME:.metadata.name,SC:.spec.storageClassName`
+    • Sort + pick: `--sort-by=.status.startTime`
+    • Raw API (what the bot itself uses): `kubectl get --raw
+      /api/v1/namespaces/<ns>/pods | jq .` — also proxies services:
+      `/api/v1/namespaces/monitoring/services/<svc>:<port>/proxy/...`
+      (this is the bot-testing harness path, workbook/slack-bot.md)
+  kubectl.crds: |
+    *CRDs in this cluster* — the custom kinds you'll actually query
+    `kubectl get crd | grep <word>` to discover more.
+
+    • Flux: `kustomizations` (`ks`), `helmreleases` (`hr`) — or the
+      flux CLI: `flux get all -A`
+    • cert-manager: `certificates`, `certificaterequests`, `orders`,
+      `challenges` — the issuance chain, in that order
+    • CNPG: `clusters.postgresql.cnpg.io` — DB pairs
+    • Longhorn (ns longhorn-system): `volumes`, `engines`, `replicas`,
+      `nodes.longhorn.io`, `settings`
+    • Velero (ns velero): `backups.velero.io` (:warning: bare `backup`
+      resolves to backups.longhorn.io there), `restores`,
+      `podvolumebackups`, `schedules`
+    • k3s: `etcdsnapshotfiles` — Layer 0 snapshot inventory
+    • Sealed Secrets: `sealedsecrets`
+
+    _Bot: `flux` · `certs` · `cnpg` · `longhorn` · `velero` · `etcd`_
+
+  # ══════════════════ troubleshooting methodologies ══════════════════
+  method.triage: |
+    *Incident triage* — the first five minutes, in order
+    1. *Scope it.* `/cluster summary` → `alerts` → `nodes` → `pods`.
+       One pod, one app, one node, or everything? Everything = look at
+       nodes/network/storage, not the app.
+    2. *What changed?* `/cluster flux` (revision just moved?), recent
+       merges in the repo, an upgrade in progress? Most incidents are
+       self-inflicted and recent.
+    3. *Drill into the worst pod.* `/cluster why <ns> <pod>` — state,
+       last exit, events, crash logs in one shot. Then
+       `logs <ns> <pod> prev` / `grep <pattern>` and `events <ns>`.
+    4. *Resource pressure?* `/cluster ps` (hogs), `storage` (full
+       volumes), `longhorn` (degraded), `top`.
+    5. *Layer walk* when lost: client → ingress → Service → pod → node
+       → storage/DB/DNS. Test each hop, don't guess.
+    Playbooks per incident type: workbook/slack-bot-manual.md.
+    Deep-dives here: `wiki method.pod-crash` · `pod-pending` ·
+    `dns-network` · `storage` · `node-down` · `flux-sync` ·
+    `certs-ingress` · `databases` · `backups-restore`.
+  method.pod-crash: |
+    *Pod crashlooping* — CrashLoopBackOff / Error / OOMKilled
+    Start: `/cluster why <ns> <pod>` — it does steps 1-3 for you.
+    1. *Exit code* (in `last exit`):
+       • `137` = OOMKilled → raise the memory *limit* in Git (check
+         `/cluster ps <ns>` for actual working set) — or a failing
+         liveness probe killed it (SIGKILL after SIGTERM timeout)
+       • `1`/other = app error → the reason is in the PREVIOUS
+         instance's logs: `/cluster logs <ns> <pod> prev`
+       • `143` = SIGTERM — usually just a shutdown mid-rollout
+    2. *Waiting reason:*
+       • `ImagePullBackOff` → typo'd tag or registry down
+       • `CreateContainerConfigError` → missing ConfigMap/Secret key
+    3. *Running but not ready* → probe failing: describe shows which;
+       curl the probe path from inside (`kubectl exec`).
+    4. Crash at startup with DNS errors → this cluster's ndots trap:
+       `wiki cluster.gotchas`.
+    5. Fix goes in Git; the restart is `kubectl delete pod`.
+  method.pod-pending: |
+    *Pod stuck Pending / ContainerCreating* — scheduling & volumes
+    `/cluster describe <ns> <pod>` — the events name the blocker.
+    • *Insufficient cpu/memory* → `/cluster nodes <name>` headroom
+      meters; lower requests in Git or free capacity.
+    • *Volume node affinity / PVC not bound* → `/cluster pvcs <ns>`,
+      then `longhorn` for volume state.
+    • *Multi-Attach error* (RWO volume) → the old pod (often on a dead
+      node) still holds the volume. This cluster's doctrine: single-
+      writer apps run 1 replica + `Recreate` + 60s tolerations, and
+      Longhorn `nodeDownPodDeletionPolicy=delete-both` force-releases
+      on node loss — give it ~5 min before intervening. NEVER scale a
+      single-writer app to 2 to "fix" this.
+    • *Taints* → `describe node | grep Taint`; a NotReady node taints
+      itself, pods with 60s tolerations move on their own.
+    • *ContainerCreating forever* with mount errors → Longhorn attach
+      issue or (on a fresh node) the multipathd blacklist is missing:
+      `wiki cluster.gotchas`.
+  method.dns-network: |
+    *DNS & network debugging* — the flow and this cluster's traps
+    Path: pod → CoreDNS (svc kube-dns) → upstream. Test with
+    `/cluster dns <name>` — but note the bot pod runs `ndots:1`, so it
+    proves "the name exists", not "every pod resolves it".
+    :rotating_light: *The ndots trap:* default pods run `ndots:5` +
+    search domain `local.safeqbit.com`, so any name with <5 dots gets
+    search-domain-amplified. glibc apps see 4-dot in-cluster FQDNs
+    flap; musl/Alpine pods can hard-fail even external names
+    (EAI_NODATA). Fixes: short service names (`svc.ns`), trailing-dot
+    FQDNs (`host.example.com.`), or `dnsConfig: ndots:1` in Git —
+    live-patched dnsConfig gets SSA-stripped by Flux.
+    *Cross-node pod traffic broken, ICMP fine, after a Proxmox
+    reboot?* → flannel VXLAN checksum offload quirk; the
+    `flannel-fix-offload.service` unit on each node fixes it — check
+    it ran (workbook/node-bootstrap.md).
+    *Ingress:* 404 = wrong Host/no ingress rule (`/cluster
+    ingresses`); 503 = no ready endpoints (`/cluster pods <ns>`);
+    LoadBalancer stuck `<pending>` = MetalLB pool exhausted/annotation
+    typo. Entry: ingress-nginx on 10.10.13.50, every node.
+  method.storage: |
+    *Storage triage* — full, degraded, or stuck volumes
+    • *Volume filling up:* `/cluster storage` (used %), `pvcs` (sizes).
+      Expand = edit the PVC size in Git; Longhorn expands online.
+      :warning: If expansion wedges after a node reboot (stale iscsid
+      PID), deleting the volume's *Engine CR* in longhorn-system
+      unwedges it — replicas and data are safe (2026-06-28 incident).
+    • *Degraded/faulted:* `/cluster longhorn` — degraded volumes
+      rebuild automatically when the node returns; faulted needs the
+      Longhorn UI (longhorn.local.safeqbit.com). Also shows per-node
+      disk vs the over-provisioning limit — near the limit, new
+      replicas won't schedule.
+    • *Mount failures on a (new) node:* multipathd steals Longhorn
+      devices unless `^sd[a-z]+` is blacklisted in
+      /etc/multipath.conf — node-local state, workbook/node-bootstrap.md.
+    • *NFS (nfs-truenas / nfs-bulk-media):* check the TrueNAS box and
+      VLAN ACLs; NFS PVCs are RWX and don't appear in Longhorn.
+      Restore gotcha: Velero restores NFS data to a NEW subdir — copy
+      back manually (workbook/backup-strategy.md).
+  method.node-down: |
+    *Node NotReady* — what recovers itself vs when to act
+    1. `/cluster nodes <name>` — conditions, taints. Cross-check the
+       VM layer in Pulse/Proxmox: is the VM even running?
+    2. *Give it 5 minutes.* The resilience doctrine: critical pieces
+       (alertmanager, authentik, this bot) run 2 replicas and stay up;
+       single-writer apps carry 60s tolerations and Longhorn
+       `delete-both` force-releases their RWO volumes — they reschedule
+       on their own. Don't panic-delete pods inside the budget.
+    3. *etcd quorum:* 2 of 3 nodes must be up; with two down the API
+       goes read-only-ish — fix the VMs, not Kubernetes.
+    4. *After the node returns:* `/cluster pods` for stragglers,
+       `longhorn` for rebuilding replicas. Two known post-reboot
+       quirks: flannel checksum offload (unit should self-fix) and
+       Longhorn stale-iscsid engines — `wiki cluster.gotchas`.
+    5. Longhorn replica rebuilds saturate the node links for a while —
+       expect elevated latency, not a second incident.
+  method.flux-sync: |
+    *Flux not syncing* — GitOps pipeline triage
+    `/cluster flux` — find the not-Ready row, read its message.
+    • *Kustomization build error* → bad YAML/path in the repo; the
+      message names the file. Fix in Git; nothing applies until then
+      (a broken ks blocks EVERYTHING it owns — same-file neighbors
+      included).
+    • *HelmRelease failed* → message shows the helm error; deeper:
+      `kubectl logs -n flux-system deploy/helm-controller`. Values
+      typos fail silently sometimes — a wrong key is just ignored
+      (bit us on authentik podAnnotations).
+    • *SealedSecret not decrypting* → sealed against a different
+      cluster key; reseal (workbook/maintenance.md).
+    • *dependency not ready* → fix the upstream ks first
+      (controllers → configs → apps ordering).
+    • *Suspended?* rows marked ⏸ were suspended on purpose —
+      `flux resume kustomization <name>` when done.
+    Force a sync: `flux reconcile kustomization <name> --with-source`.
+    Remember the SSA traps: live patches + restartedAt get stripped —
+    `wiki kubectl.rollout` / `kubectl.scale-edit`.
+  method.certs-ingress: |
+    *Certificate & ingress issues* — the issuance chain
+    `/cluster certs` — expiry + readiness for every Certificate.
+    The chain, when one is stuck NOT READY:
+    `Certificate → CertificateRequest → Order → Challenge` — describe
+    each in turn; the first unhappy one names the problem. This
+    cluster uses DNS-01 via Cloudflare, so:
+    • Challenge pending → Cloudflare API token secret, or DNS
+      propagation (give it minutes, not seconds)
+    • Rate limits → Let's Encrypt caps per-domain issuance; back off
+    :rotating_light: *Velero-restore trap:* a restored
+    CertificateRequest silently BLOCKS all future renewals while the
+    Certificate still shows Ready. After any restore that touched
+    cert-manager objects, delete the restored CRs:
+    `kubectl delete certificaterequest -n <ns> --all` (they regenerate).
+    Ingress side: `/cluster ingresses` for the hostname→service map;
+    TLS handshake errors usually mean the cert secret name in the
+    ingress doesn't match the Certificate's secretName.
+  method.databases: |
+    *Database triage* — CNPG and the outliers
+    `/cluster cnpg` — ready count, current primary, replication lag,
+    last backup, per cluster.
+    • *Failover:* automatic. A pair reporting 1/2 after a node event
+      is usually mid-rebuild of the standby — watch, don't touch.
+    • *Lag high/persistent* → network or storage pressure:
+      `/cluster ps`, `longhorn`.
+    • *Connect / dump* (workbook/maintenance.md has the full recipes):
+      `kubectl exec -it -n <ns> <cluster>-1 -- psql -U postgres`
+      or port-forward `svc/<cluster>-rw` 5432 and use local psql.
+      App creds live in the app's secret (`<cluster>-app`).
+    • *Before risky upgrades:* take a CNPG snapshot restore point —
+      the pattern from the July 2026 upgrade wave; instant rollback.
+    • Not in `/cluster cnpg`: Immich & PhotoPrism run their own
+      bundled Postgres (plain Deployments); Vaultwarden, Uptime Kuma
+      and Home Assistant are SQLite-on-Longhorn — single writer, never
+      scale them to 2 replicas.
+    Strategy & inventory rationale: workbook/cnpg-strategy.md.
+  method.backups-restore: |
+    *Backup & restore triage* — checking all four layers
+    Quick audit: `/cluster backups` (full digest, ~30s) or per-layer:
+    • Layer 0 etcd→B2: `/cluster etcd` — red if newest B2 snapshot >8d
+    • Layer 1 Longhorn snapshots: Longhorn UI
+    • Layer 2 CNPG snapshots: `/cluster cnpg` (last backup age)
+    • Layer 3 Velero→B2: `/cluster velero` then `velero <name>` for
+      per-volume failures
+    *PartiallyFailed backups:* full runbook
+    workbook/velero-partial-failed-cleanup.md. Short version: the
+    alert looks back 16 DAYS unless a newer success exists — clear it
+    by rerunning: `kubectl exec -n velero deploy/velero -- /velero
+    backup create --from-schedule <sched>`. Restarting velero does NOT
+    clear it. Delete backups ONLY via the velero CLI (kubectl delete
+    gets resurrected by backup-sync). Stale Failed kopia-maintain jobs:
+    delete by hand (`/cluster jobs` flags them).
+    *B2 free-tier trap:* kopia maintenance can blow the 2,500/day
+    Class-B cap — downloads start failing cluster-wide until midnight
+    UTC.
+    *Restore gotchas:* NFS data restores to a new subdir (copy back);
+    restored CertificateRequests block cert renewals
+    (`wiki method.certs-ingress`).
+    Source of truth for what/where/how often: workbook/backup-strategy.md.
+
+  # ══════════════════════ this cluster's KB ══════════════════════
+  cluster.map: |
+    *Cluster map* — how everything is wired (full diagram: README)
+    ```
+    GitHub repo ──► Flux ──► everything below (GitOps)
+
+    Internet ─ Cloudflare Tunnel ─► cloudflared ─┐
+    LAN clients ─────────────────────────────────┼─► ingress-nginx
+                                                 │   10.10.13.50
+                          apps ◄─────────────────┘
+                           │
+              ┌────────────┼──────────────┐
+              ▼            ▼              ▼
+        CNPG Postgres   SQLite      NFS (TrueNAS)
+        (2× pairs)      on Longhorn  nvme + bulk media
+              │            │              │
+              ▼            ▼              ▼
+           Longhorn (replicated x3)   TrueNAS #1 ──► TrueNAS #2
+              │                          (30-min replication)
+              ▼
+        Velero ──► Backblaze B2 ◄── etcd weekly (Layer 0)
+        CNPG snapshots ──► Longhorn (Layer 2)
+
+    Prometheus ─► Grafana / Alertmanager ─► Slack ◄─ this bot
+    (bot = outbound Socket Mode; reads k8s API + Prometheus)
+    ```
+    Inspect each area from Slack:
+    • network: `ingresses` `dns` · apps: `pods` `deploys` `ps`
+    • databases: `cnpg` · storage: `storage` `longhorn` `pvcs`
+    • backups: `velero` `etcd` `backups` · gitops: `flux`
+    • monitoring: `alerts` `silences` `summary` · nodes: `nodes`
+  cluster.nodes: |
+    *Nodes & hardware* — 3 nodes, all control-plane + worker
+    • *k3s-server-01 "Meatball"* — Minisforum BD790i X3D,
+      32 vCPU / 96 GB, dual 10G fiber (LACP)
+    • *k3s-server-02 "Dumpling"* — AOOSTAR R7, 16 vCPU / 64 GB,
+      dual 2.5 GbE (LACP)
+    • *k3s-server-03 "Omen"* — HP Omen 15T laptop, 12 vCPU / 32 GB,
+      1 GbE
+    Each is a K3s VM on its own Proxmox host. Embedded etcd — quorum
+    needs 2 of 3. API: `k3s.local.safeqbit.com` (round-robin).
+    No app pinning; only soft anti-affinity spreads HA pairs (CNPG
+    primary/standby, 2-replica platform pieces) across nodes.
+    :warning: Node-local state NOT in Git (multipath blacklist,
+    flannel-offload unit, k3s config.yaml with etcd-S3 creds) —
+    workbook/node-bootstrap.md before any rebuild.
+    _Bot: `/cluster nodes [name]` — conditions, taints, headroom._
+  cluster.network: |
+    *Networking* — VLAN, load balancers, ingress, DNS
+    • Cluster VLAN `10.10.13.0/24`, firewalled from other segments;
+      routing/firewall on the UniFi UCG-MAX (router-on-a-stick),
+      switching on a MikroTik CRS310 (10G SFP+ + 2.5GbE, LACP bonds).
+    • *MetalLB pools:* reserved `10.10.13.50-59` (by annotation) —
+      `.50` ingress-nginx, `.51` home-assistant-lan; auto `.60-.100`.
+    • *ingress-nginx* on every node behind `.50`; all
+      `*.local.safeqbit.com` hostnames land there (`/cluster
+      ingresses` for the live map).
+    • *cert-manager:* real Let's Encrypt certs via DNS-01/Cloudflare,
+      internal hostnames included.
+    • *cloudflared:* 2 replicas dial OUT to Cloudflare for public
+      apps — zero open inbound ports. The bot's Socket Mode WS is
+      outbound-only too.
+    • *DNS:* internal zone `local.safeqbit.com`; CoreDNS in-cluster
+      (with HA autoscaler).
+    :warning: Known quirks: ndots amplification + flannel offload —
+    `wiki cluster.gotchas` / `wiki method.dns-network`.
+  cluster.storage: |
+    *Storage* — two tiers: Longhorn (replicated) + TrueNAS (NFS)
+    • *longhorn* (default SC): distributed block storage, replicas on
+      multiple nodes, online expansion, snapshots, Velero-integrated.
+      Databases and app state live here.
+    • *nfs-truenas*: RWX shares from TrueNAS #1 (NVMe pool
+      nvme2tb/k8s) via nfs-subdir-external-provisioner — NetBox media,
+      Guacamole recordings, anything shared.
+    • *nfs-bulk-media*: spinning-disk array; static PVs point Immich/
+      PhotoPrism at the existing photo/video folders
+      (10.10.10.5:/mnt/mach2/mach2nas/Media).
+    • *NAS replication:* TrueNAS #1 → TrueNAS #2 every 30 min (SSH).
+    Bulk NFS data is deliberately EXCLUDED from Velero — ZFS snapshots
+    + NAS replication + NAS cloud backup cover it.
+    _Bot: `/cluster storage` (used %) · `longhorn` (health/headroom) ·
+    `pvcs` (claims)._ Triage: `wiki method.storage`.
+  cluster.backups: |
+    *Backups* — four layers, each for a different disaster
+    • *Layer 0 — etcd → B2* (weekly, Sun): full cluster state incl.
+      the sealed-secrets master key; bucket `k3s-safeqbit-etcd`; one
+      `--cluster-reset` restore brings everything back.
+      Check: `/cluster etcd` (red if newest >8d).
+    • *Layer 1 — Longhorn snapshots* (in-cluster): "oops, an hour
+      ago" recovery, per volume.
+    • *Layer 2 — CNPG snapshots → Longhorn*: app-consistent DB
+      snapshots daily/weekly; retention CronJob prunes; also used as
+      manual restore points before risky upgrades.
+      Check: `/cluster cnpg` last-backup age.
+    • *Layer 3 — Velero → Backblaze B2* (off-site): staggered per-app
+      schedules (~one upload/day), per-app TTLs; NFS bulk data
+      excluded. Check: `/cluster velero`, deep dive `velero <name>`.
+    • *+ NAS→NAS* 30-min replication for all TrueNAS data.
+    Full schedule/TTL table + restore procedures:
+    workbook/backup-strategy.md. Failure triage:
+    `wiki method.backups-restore`.
+  cluster.databases: |
+    *Databases* — CNPG pairs + the outliers
+    CNPG clusters (`/cluster cnpg` for live state):
+    • `authentik-cnpg` — 2 instances (SSO must survive node loss)
+    • `grafana-cnpg` — 2 (moved off SQLite after deadlocks)
+    • `netbox-cnpg` — 2
+    • `affine-cnpg` — 2
+    • `guacamole-cnpg` — 1 (demo workload)
+    Primary+standby always on different nodes (anti-affinity);
+    failover automatic.
+    Outliers (not in cnpg output):
+    • Immich & PhotoPrism — own bundled Postgres deployments
+    • Vaultwarden, Uptime Kuma, Home Assistant — SQLite on Longhorn:
+      single-writer, 1 replica + Recreate, NEVER scale to 2
+    • NetBox & AFFiNE also run small Redis deployments (no persistence)
+    Connect/dump recipes: workbook/maintenance.md. Rationale &
+    post-mortems: workbook/cnpg-strategy.md.
+  cluster.monitoring: |
+    *Monitoring stack* — metrics, alerts, and this bot
+    • *Prometheus* (kube-prometheus-stack, ns monitoring) —
+      prometheus.local.safeqbit.com; TSDB capped `retentionSize: 33GB`
+      (it once filled its volume and took Grafana "no data" with it).
+    • *Grafana* — grafana.local.safeqbit.com, CNPG-backed.
+    • *Alertmanager* — 2 replicas; alertmanager.local.safeqbit.com;
+      routes to Slack. Prometheus + Alertmanager UIs sit behind
+      Authentik forward-auth.
+    • *This bot* — 24+ read-only /cluster commands, Socket Mode,
+      2 replicas. Architecture: workbook/slack-bot.md.
+    • *Uptime Kuma* — uptime.local.safeqbit.com; FQDN-only HTTP checks.
+    • *Pulse* — pulse.local.safeqbit.com; single pane for Proxmox
+      hosts + this cluster (agent DaemonSet→Deployment) + the legacy
+      Docker host. Known flap: `wiki cluster.gotchas`.
+    _Bot: `alerts` · `silences` · `summary` (digest on demand)._
+  cluster.gitops: |
+    *GitOps* — how changes actually reach the cluster
+    Repo layout:
+    ```
+    clusters/safeqbit-local-hq/    Flux entry: apps.yaml,
+                                   infrastructure-{controllers,configs}.yaml
+    infrastructure/.../controllers  platform Helm charts (operators)
+    infrastructure/.../configs      CRs that need those operators
+    apps/safeqbit-local-hq/<app>/   one folder per app
+    ```
+    Flow: edit YAML → PR → merge → Flux reconciles (controllers →
+    configs → apps ordering via dependsOn).
+    • Secrets: `kubeseal` on the laptop → SealedSecret in Git; only
+      the in-cluster controller can decrypt. Master key lives offline.
+    • Live changes get reverted/stripped — the emergency pattern is
+      `flux suspend` → change → fix Git → `flux resume`
+      (workbook/maintenance.md).
+    • ConfigMap-mounted scripts (reports, bot.py) are read at pod
+      START — after merging, delete pods one at a time. (This wiki is
+      the exception: read per request, syncs live in ~1 min.)
+    • Rebuild from nothing: k3s + this repo + master key — or one
+      etcd-from-B2 restore. workbook/node-bootstrap.md.
+    _Bot: `/cluster flux`. Triage: `wiki method.flux-sync`._
+  cluster.apps: |
+    *App inventory* — namespace ≈ app name; hostnames on
+    `*.local.safeqbit.com`
+    • *vaultwarden* — passwords; SQLite/Longhorn
+    • *authentik* — SSO/IdP (authentik01.…); CNPG ×2; forward-auth
+      for prometheus/alertmanager, OIDC for guacamole
+    • *immich* — photos; own Postgres + NFS bulk media
+    • *photoprism* — photos/AI tagging; own DB + NFS bulk media
+    • *netbox* — IPAM/DCIM; CNPG ×2 + 2 Redis + NFS RWX
+    • *affine* — notes; CNPG ×2 + Redis + Longhorn ×2 PVCs
+    • *passzilla* — one-time secret links
+    • *guacamole* — browser RDP/VNC/SSH; CNPG ×1; guacd records
+      sessions to NFS RWX; OIDC via Authentik
+    • *home-assistant* — home automation (home-assistant-01.…, LAN LB
+      10.10.13.51 for IoT devices); image PINNED 2026.4.1 (recorder
+      schema one-way + Sensi compat) — do not bump casually
+    • *uptime-kuma* — uptime checks (uptime.…); SQLite/Longhorn
+    • *pulse* — Proxmox/k3s/Docker monitoring (pulse.…)
+    • *monitoring* — prometheus/grafana/alertmanager + this bot
+    Per-app backup schedules/TTLs: workbook/backup-strategy.md.
+    _Bot: `/cluster pods <ns>` · `ps <ns>` · `deploys <ns>`._
+  cluster.gotchas: |
+    *Gotchas hall of fame* — hard-won, cluster-specific
+    • *DNS ndots:5 amplification* — <5-dot names get search-domain
+      expanded; glibc flaps on 4-dot FQDNs, musl hard-fails even
+      external names. Fix in Git via dnsConfig ndots:1 (live patches
+      get SSA-stripped). Broke Sensi + Jellyfin on HA cutover.
+    • *flannel VXLAN checksum offload* — after a Proxmox reboot,
+      cross-node TCP/UDP dies while ICMP works;
+      flannel-fix-offload.service on each node handles it.
+    • *multipathd vs Longhorn* — without the `^sd[a-z]+` blacklist in
+      /etc/multipath.conf, CSI mounts fail. Node-local config.
+    • *`rollout restart` double-rolls* — Flux SSA strips restartedAt;
+      delete pods one at a time instead.
+    • *`kubectl get backup` in ns velero* hits backups.longhorn.io —
+      spell out `backups.velero.io`.
+    • *Velero backups delete via CLI only* — kubectl delete is
+      resurrected by backup-sync.
+    • *Longhorn engine live-upgrade* — auto-upgrade limit DEFAULTS TO
+      0 (off); we set 1/node. Engines stay old after upgrades if 0.
+    • *Longhorn expansion wedge* post-reboot (stale iscsid PID) —
+      delete the volume's Engine CR; data safe.
+    • *B2 free tier* — kopia maintenance can blow the 2,500/day
+      Class-B cap; raising it needs a payment method.
+    • *Velero-restored CertificateRequests* silently block renewals
+      while the cert shows Ready — delete restored CRs.
+    • *Sensi ws death* — integration freezes silently (entity stays
+      "online", controls no-op); reload integration/restart HA pod.
+    • *HA internal_url* — if unset, HA advertises its POD IP and
+      rewrites IoT websocket targets; keep http://10.10.13.51:8123.
+    • *Pulse k8s agent flap* — any UI config save orphans the agent
+      handler; restart the pulse pod.
+  cluster.runbooks: |
+    *Runbook index* — the workbook/ directory in the repo
+    • `maintenance.md` — living doc: Flux suspend/resume, CNPG
+      connect/dump, sealed-secret resealing, forward-auth gotchas,
+      general pod ops
+    • `backup-strategy.md` — SOURCE OF TRUTH for all 4 backup layers:
+      schedules, TTLs, volume policies, restore procedures
+    • `node-bootstrap.md` — ALL node-local state outside Git; consult
+      before ANY node rebuild or k3s config change
+    • `velero-partial-failed-cleanup.md` — PartiallyFailed triage →
+      clear → prune
+    • `cnpg-strategy.md` — DB inventory, instance rationale,
+      post-mortems
+    • `slack-bot.md` / `slack-bot-manual.md` — this bot: architecture
+      + incident playbooks (bot vs terminal)
+    • `improvement-plan.md` — prioritized backlog
+    • `uptime-kuma.md`, `pulse.md`, `guacamole.md`,
+      `home-assistant-migration.md`, `authentik-migration.md`,
+      `netbox-migration.md`, `affine-migration.md`,
+      `immich-photoprism-migration.md` — per-app docs & migrations
+    • `pangolin.md` — removed from cluster; lessons for the VM redeploy
+    _The wiki summarizes; the runbooks decide. When they disagree,
+    trust the runbook and fix the wiki page._

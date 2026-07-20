@@ -3,10 +3,11 @@
 # Docs: workbook/slack-bot.md        (architecture, Slack app setup, ops)
 #       workbook/slack-bot-manual.md (usage playbooks: bot vs real commands)
 #
-# Commands (v4 + ps):
+# Commands (v4 + ps + wiki):
 #   /cluster summary|backups|pods|deploys|nodes [name]|logs|describe|why|
 #            events|top|ps|restarts|flux|velero [n|name]|certs|cnpg|pvcs|
-#            storage|longhorn|jobs|silences|etcd|dns|ingresses|alerts|help
+#            storage|longhorn|jobs|silences|etcd|dns|ingresses|alerts|
+#            wiki [section|topic|search <term>]|man <cmd>|help
 #
 # ── How it works ──────────────────────────────────────────────────────────
 # TRANSPORT — Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to
@@ -45,6 +46,12 @@
 #   dns           socket.getaddrinfo from THIS pod. NB: the pod runs
 #                 ndots=1 (dnsConfig below), so it does NOT reproduce the
 #                 app-pod ndots:5 search-domain flapping.
+#   wiki/man      static KB pages from the cluster-slack-bot-wiki
+#                 ConfigMap (cluster-slack-bot-wiki.yaml), mounted at
+#                 /wiki and read PER REQUEST — kubelet syncs ConfigMap
+#                 volumes in ~1 min, so wiki edits go live WITHOUT a pod
+#                 restart (unlike bot.py). Sections: kubectl.* man
+#                 pages, method.* troubleshooting flows, cluster.* KB.
 #
 # OUTPUT CONVENTIONS (Slack mrkdwn — no tables, no colors):
 #   - Title line "<emoji> *Title* — context", blank line, rows; sections
@@ -271,6 +278,15 @@ data:
         ":clock3: `/cluster jobs [ns]` — cronjob last runs, failed/active jobs",
         ":lock: `/cluster certs` — TLS certificate expiries",
         ":globe_with_meridians: `/cluster ingresses` — hostname → service map",
+        "",
+        "*Wiki (cluster knowledge base)*",
+        ":books: `/cluster wiki [section|topic]` — kubectl man pages, "
+        "troubleshooting methods, cluster-specific KB",
+        ":green_book: `/cluster man <cmd>` — kubectl man page "
+        "(`man logs`, `man rollout`, …)",
+        ":mag_right: `/cluster wiki search <term>` — full-text search "
+        "across all pages",
+        "",
         ":question: `/cluster help` — this list",
     ])
 
@@ -1486,6 +1502,114 @@ data:
         except socket.gaierror as e:
             post(rurl, f":x: `{name}` did not resolve: {e}")
 
+    # ---------- wiki / man pages (static KB, see cluster-slack-bot-wiki) ----------
+
+    WIKI_DIR = os.environ.get("WIKI_DIR", "/wiki")
+    WIKI_SECTIONS = [   # display order + blurbs; sections come from filenames
+        ("kubectl", ":green_book:", "kubectl man pages"),
+        ("method", ":stethoscope:", "troubleshooting methodologies"),
+        ("cluster", ":house:", "this cluster's KB"),
+    ]
+
+    def wiki_pages():
+        """{'kubectl.logs': (section, topic, summary, body), …} — read per
+        request, so wiki ConfigMap edits go live without a pod restart."""
+        pages = {}
+        try:
+            names = [n for n in os.listdir(WIKI_DIR) if not n.startswith(".")]
+        except OSError:
+            return pages
+        for n in sorted(names):
+            sec, _, topic = n.partition(".")
+            if not topic:
+                continue
+            with open(os.path.join(WIKI_DIR, n)) as f:
+                body = f.read().strip()
+            # first line is "*Title* — summary"; listings show the summary
+            first = body.splitlines()[0] if body else n
+            summary = first.partition("—")[2].strip() or first
+            pages[n] = (sec, topic, summary, body)
+        return pages
+
+    def wiki(rurl, args):
+        pages = wiki_pages()
+        if not pages:
+            post(rurl, ":x: no wiki pages found — is the "
+                       "`cluster-slack-bot-wiki` ConfigMap deployed/mounted?")
+            return
+        secs = {v[0] for v in pages.values()}
+        if not args:
+            lines = [":books: *cluster wiki* — `/cluster wiki <topic>` to "
+                     "read a page (prefix ok)", ""]
+            for sec, icon, blurb in WIKI_SECTIONS:
+                topics = sorted(t for s, t, _, _ in pages.values() if s == sec)
+                if not topics:
+                    continue
+                lines.append(f"{icon} *{sec}* — {blurb} ({len(topics)})")
+                lines.append("        " + " · ".join(f"`{t}`" for t in topics))
+                lines.append("")
+            lines.append("_`/cluster wiki <section>` lists a section with "
+                         "summaries · `/cluster wiki search <term>` searches "
+                         "all pages · `/cluster man <cmd>` jumps straight to "
+                         "a kubectl page_")
+            post(rurl, "\n".join(lines))
+            return
+        if args[0].lower() in ("search", "grep", "find") and len(args) > 1:
+            term = " ".join(args[1:]).lower()
+            hits = []
+            for key, (_s, _t, _sum, body) in sorted(pages.items()):
+                match = next((l for l in body.splitlines()
+                              if term in l.lower()), None)
+                if match is not None:
+                    hits.append(f"•  `{key}` — _{match.strip()[:100]}_")
+            if hits:
+                post(rurl, f":mag_right: *wiki search* `{term}` — "
+                           f"{len(hits)} page(s)\n\n" + "\n".join(hits[:30])
+                           + "\n\n_read one: `/cluster wiki <topic>`_")
+            else:
+                post(rurl, f":shrug: no wiki page mentions `{term}` — "
+                           "`/cluster wiki` for the index")
+            return
+        q = args[0].lower().strip(".")
+        if q in secs:
+            meta = {s: (i, b) for s, i, b in WIKI_SECTIONS}
+            icon, blurb = meta.get(q, (":books:", ""))
+            lines = [f"{icon} *wiki: {q}* — {blurb}", ""]
+            lines += [f"•  `{t}` — {summ}"
+                      for key, (s, t, summ, _b) in sorted(pages.items())
+                      if s == q]
+            lines.append(f"\n_read one: `/cluster wiki <topic>` (the `{q}.` "
+                         "prefix is optional)_")
+            post(rurl, "\n".join(lines))
+            return
+        # resolve a page: exact key > exact topic > prefix > substring
+        m = ([k for k in pages if k == q]
+             or [k for k, v in pages.items() if v[1] == q]
+             or [k for k, v in pages.items()
+                 if k.startswith(q) or v[1].startswith(q)]
+             or [k for k in pages if q in k])
+        m = sorted(set(m))
+        if len(m) == 1:
+            sec, _t, _sum, body = pages[m[0]]
+            post(rurl, body + f"\n\n_wiki `{m[0]}` · section: `/cluster wiki "
+                              f"{sec}` · index: `/cluster wiki`_")
+        elif m:
+            post(rurl, f":mag: several pages match `{q}` — pick one:\n" +
+                 "\n".join(f"•  `{k}` — {pages[k][2]}" for k in m[:20]))
+        else:
+            post(rurl, f":shrug: no wiki page matches `{q}` — try "
+                       f"`/cluster wiki search {q}` or `/cluster wiki`")
+
+    def man(rurl, args):
+        """kubectl-first shortcut: `man logs` == `wiki kubectl.logs`;
+        anything that isn't a kubectl page falls through to the wiki."""
+        if not args:
+            wiki(rurl, ["kubectl"])
+        elif f"kubectl.{args[0].lower()}" in wiki_pages():
+            wiki(rurl, [f"kubectl.{args[0].lower()}"])
+        else:
+            wiki(rurl, args)
+
     # ---------- dispatch: verb → handler, aliases, Slack entrypoint ----------
 
     HANDLERS = {
@@ -1514,6 +1638,8 @@ data:
         "dns": dns,
         "ingresses": ingresses,
         "alerts": alerts,
+        "wiki": wiki,
+        "man": man,
     }
     ALIASES = {"deploy": "deploys", "deployments": "deploys", "log": "logs",
                "event": "events", "pvc": "pvcs", "ingress": "ingresses",
@@ -1528,6 +1654,8 @@ data:
                "job": "jobs", "cron": "jobs", "cronjobs": "jobs",
                "silence": "silences", "mutes": "silences",
                "snapshots": "etcd", "resolve": "dns", "nslookup": "dns",
+               "kb": "wiki", "docs": "wiki", "doc": "wiki", "howto": "wiki",
+               "guide": "wiki", "runbooks": "wiki", "manual": "man",
                "commands": "help", "list": "help"}
 
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
@@ -1617,6 +1745,8 @@ spec:
           volumeMounts:
             - name: bot-script
               mountPath: /bot
+            - name: wiki
+              mountPath: /wiki
             - name: cluster-report
               mountPath: /reports/cluster
             - name: backup-report
@@ -1631,6 +1761,13 @@ spec:
         - name: bot-script
           configMap:
             name: cluster-slack-bot-script
+        # optional: a missing/renamed wiki ConfigMap must never block the
+        # bot from starting — wiki() reports "no pages" instead. Unlike
+        # bot.py, /wiki is read per request: edits land without a restart.
+        - name: wiki
+          configMap:
+            name: cluster-slack-bot-wiki
+            optional: true
         - name: cluster-report
           configMap:
             name: cluster-summary-report-script
