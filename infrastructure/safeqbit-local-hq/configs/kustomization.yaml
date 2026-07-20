@@ -42,3 +42,4 @@ resources:
   - monitoring-forward-auth.yaml
   - cluster-slack-bot.yaml
   - cluster-slack-bot-tokens.yaml
+  - cluster-slack-bot-wiki.yaml
