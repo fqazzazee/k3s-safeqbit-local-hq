@@ -651,10 +651,13 @@ Purge I/O is replica-local (no cross-node traffic); the volume stays online.
 **Two caveats:**
 - The fold preserves any extent the newer layer hasn't overwritten — including blocks
   the *filesystem* freed but never rewrote (Longhorn can't see fs-free). That's what
-  `weekly-trim` prevents going forward. A legacy example: 17.8 GB of June-28
-  disk-full-era extents still ride the TSDB volume's baseline snapshot; full deep-clean
-  would need `unmapMarkSnapChainRemoved=enabled` on the volume + a trim while the
-  snapshot chain is in removed state. Usually not worth it — it stops growing.
+  `weekly-trim` prevents going forward. **Deep-clean via trim (configured on the TSDB
+  volume 2026-07-21):** set `spec.unmapMarkSnapChainRemoved: enabled` on the Volume CR,
+  then trim while the chain is in removed state — the trim reclaims extents held under
+  removed snapshots, no fold target needed. The TSDB volume uses this as its *only*
+  reclaim path: it's opted out of `weekly-snapshot` entirely (metrics have no restore
+  value; a retain-1 snapshot would pin ~40 GB ×3 forever). Labels + patch commands and
+  the re-apply-on-PVC-recreate warning: backup-strategy.md Layer 1 "Exception".
 - **NEVER add a `snapshot-delete` recurring task cluster-wide.** It deletes ALL
   snapshot kinds beyond its retain count, including the CSI snapshots backing CNPG
   scheduled backups (~107 VolumeSnapshots) and manual pre-upgrade snapshots. The

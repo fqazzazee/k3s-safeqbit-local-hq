@@ -228,6 +228,23 @@ Snapshot debt per volume is now bounded at ~1 week of block churn. Manual fold
 procedure and mechanics: [maintenance.md](maintenance.md) "Longhorn Snapshot Space
 Reclaim".
 
+**Exception — Prometheus TSDB volume (2026-07-21, live-only state):** the TSDB
+volume (`pvc-068447de-6a38-47df-ae98-e47f1bf4c173`) is opted **out** of
+`weekly-snapshot`. Its metrics are deliberately not backed up anywhere (see the
+TSDB note under Layer 3), so a standing retain-1 snapshot would permanently pin
+~40 GB ×3 replicas of zero-restore-value data. Instead it relies on trim alone:
+`weekly-trim` still runs, and `spec.unmapMarkSnapChainRemoved: enabled` lets the
+trim reclaim extents held under removed snapshot chains — no fold target needed.
+**This lives only in the Volume CR, not in Git.** If the PVC is ever recreated,
+re-apply both by hand:
+
+```bash
+kubectl -n longhorn-system label volumes.longhorn.io <pvc-...> \
+  recurring-job-group.longhorn.io/default- recurring-job.longhorn.io/weekly-trim=enabled
+kubectl -n longhorn-system patch volumes.longhorn.io <pvc-...> \
+  --type=merge -p '{"spec":{"unmapMarkSnapChainRemoved":"enabled"}}'
+```
+
 > **Never add a `snapshot-delete` recurring task cluster-wide.** It deletes ALL
 > snapshot kinds beyond its retain count — including the CSI snapshots backing the
 > CNPG scheduled-backup VolumeSnapshots (Layer 2) and manual pre-upgrade snapshots.
