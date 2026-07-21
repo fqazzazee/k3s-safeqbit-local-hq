@@ -117,7 +117,12 @@ spec:
             cpu: 200m
             memory: 1Gi
           limits:
-            memory: 2Gi
+            # 2026-07-21: 2Gi left ~0.4GB of page cache next to a ~1.7GB RSS, so
+            # steady queries re-read TSDB blocks from disk nonstop (135-250 MB/s).
+            # Longhorn round-robins reads across replicas -> ~10 TB/day of LAN
+            # traffic saturating inter-node links. Keep the limit comfortably
+            # above RSS so the block hot set stays in page cache.
+            memory: 3Gi
         storageSpec:
           volumeClaimTemplate:
             spec:
