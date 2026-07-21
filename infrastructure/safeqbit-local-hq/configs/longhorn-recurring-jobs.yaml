@@ -1,0 +1,55 @@
+# Longhorn recurring jobs: automatic snapshot fold + filesystem trim.
+#
+# 2026-07-21: the Prometheus TSDB volume carried a 42.5 GB dead snapshot for
+# 12 days (67.5 GB actualSize vs ~25 GB live data). Root cause: Longhorn can
+# only reclaim a removed snapshot by coalescing it into a NEWER snapshot,
+# never into the live volume head. With no recurring jobs in the cluster,
+# system snapshots left behind by reattaches/rebuilds (auto-marked removed by
+# the auto-cleanup-system-generated-snapshot setting) sit trapped under the
+# head forever. 17 other volumes had the same trap, just smaller (<1.6 GB).
+#
+# Both jobs run against the built-in `default` group, which Longhorn applies
+# to every volume that has no explicit recurring-job assignment.
+#
+# weekly-snapshot: takes one snapshot per volume per week. Its retention only
+# prunes snapshots THIS JOB created (label-scoped), and each prune triggers a
+# purge that folds any trapped removed snapshots forward. Net effect: snapshot
+# debt per volume is bounded by ~1 week of block churn, and every volume keeps
+# a <=1-week-old local restore point.
+#
+# weekly-trim: fstrims each volume before the snapshot runs, so fs-freed
+# blocks become holes instead of being captured into the weekly freeze.
+# (The 06-28 disk-full episode left 17.8 GB of fs-freed-but-never-rewritten
+# extents pinned in the TSDB volume's snapshot layer this way.)
+#
+# DO NOT add a `snapshot-delete` task here: it deletes ALL snapshot kinds
+# beyond its retain count -- including the CSI snapshots backing the ~107
+# CNPG scheduled-backup VolumeSnapshots (storageclass longhorn-velero) and
+# any manual pre-upgrade snapshots. Those layers manage their own retention.
+#
+# Schedule: CNPG snapshot backups run 02:00, Velero windows start 05:00.
+# Trim 03:30 -> snapshot 04:15 stays clear of both.
+---
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: weekly-trim
+  namespace: longhorn-system
+spec:
+  task: filesystem-trim
+  groups: ["default"]
+  cron: "30 3 * * 0"
+  retain: 0 # ignored by the trim task
+  concurrency: 3
+---
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: weekly-snapshot
+  namespace: longhorn-system
+spec:
+  task: snapshot
+  groups: ["default"]
+  cron: "15 4 * * 0"
+  retain: 1
+  concurrency: 3
