@@ -76,6 +76,13 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster storage [n]                     n fullest volumes by used % (kubelet stats; red ≥90%)
 /cluster longhorn                        volume robustness + per-node disk used/scheduled
                                          vs the over-provisioning limit
+/cluster longhorn <pvc>                  one volume (PVC/volume-name prefix ok): state, node,
+                                         spec-vs-on-disk size, replica placement, snapshot list
+                                         (size/age/user-vs-system/removed)
+/cluster longhorn snapshots              snapshot debt per volume: count, bytes, and "trapped"
+                                         (markRemoved awaiting fold) — sorted by bytes
+/cluster longhorn jobs                   RecurringJobs (task/cron/retain/groups + last snap age)
+                                         + snapshot-related settings; aliases: retention, recurring
 /cluster jobs [ns]                       cronjob last run/success + lingering Failed jobs
                                          (catches stale kopia-maintain jobs)
 /cluster silences                        active Alertmanager silences, soonest expiry first
@@ -172,7 +179,8 @@ the CronJobs and the bot share one copy of the report code.
 - **Read-only by design.** The bot's RBAC is `get,list` on pods, pods/log,
   nodes, events, PVCs, deployments/statefulsets/daemonsets, ingresses,
   Flux kustomizations/helmreleases, cert-manager certificates, CNPG
-  clusters, batch jobs/cronjobs, Longhorn volumes/nodes/settings, k3s
+  clusters, batch jobs/cronjobs, Longhorn volumes/nodes/settings/
+  snapshots/replicas/recurringjobs, k3s
   etcdsnapshotfiles and velero podvolumebackups, plus reuse of the
   `backup-summary-report` ClusterRole and the velero `cloud-credentials`
   read Role. No write verbs anywhere — a leaked Slack token can look at

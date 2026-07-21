@@ -322,6 +322,11 @@ data:
     • *Mount failures on a (new) node:* multipathd steals Longhorn
       devices unless `^sd[a-z]+` is blacklisted in
       /etc/multipath.conf — node-local state, workbook/node-bootstrap.md.
+    • *Snapshot debt (actualSize ≫ live data):* `/cluster longhorn
+      snapshots` ranks volumes by snapshot bytes + "trapped" removed
+      ones; `longhorn <pvc>` lists a volume's chain; `longhorn jobs`
+      shows the weekly fold schedule. Manual fold:
+      workbook/maintenance.md "Longhorn Snapshot Space Reclaim".
     • *NFS (nfs-truenas / nfs-bulk-media):* check the TrueNAS box and
       VLAN ACLs; NFS PVCs are RWX and don't appear in Longhorn.
       Restore gotcha: Velero restores NFS data to a NEW subdir — copy
@@ -507,7 +512,8 @@ data:
       fold old snapshot debt so space auto-reclaims.
     Bulk NFS data is deliberately EXCLUDED from Velero — ZFS snapshots
     + NAS replication + NAS cloud backup cover it.
-    _Bot: `/cluster storage` (used %) · `longhorn` (health/headroom) ·
+    _Bot: `/cluster storage` (used %) · `longhorn [pvc|snapshots|jobs]`
+    (health/headroom, per-volume snapshots, debt, recurring jobs) ·
     `pvcs` (claims)._ Triage: `wiki method.storage`.
   cluster.backups: |
     *Backups* — four layers, each for a different disaster
@@ -518,6 +524,7 @@ data:
     • *Layer 1 — Longhorn snapshots* (in-cluster): "oops" recovery
       per volume; weekly recurring snapshot (Sun 04:15, retain 1) +
       fstrim keep a fresh restore point and fold snapshot debt.
+      Check: `/cluster longhorn snapshots` (debt) · `longhorn jobs`.
     • *Layer 2 — CNPG snapshots → Longhorn*: app-consistent DB
       snapshots daily/weekly; retention CronJob prunes; also used as
       manual restore points before risky upgrades.
