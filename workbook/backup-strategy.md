@@ -64,7 +64,7 @@ Each layer protects against a different failure mode:
 | **03:00** | `photoprism-bimonthly` | Velero | 13th + 28th | namespace `photoprism` | B2 |
 | **03:30** | `weekly-trim` | Longhorn fstrim | weekly Sun | every Longhorn volume | (reclaim) |
 | **04:15** | `weekly-snapshot` | Longhorn snapshot, retain 1 | weekly Sun | every Longhorn volume | Longhorn |
-| **05:00** | `cnpg-backup-retention` | CronJob (kubectl) | daily | all 4 CNPG clusters | (prune) |
+| **05:00** | `cnpg-backup-retention` | CronJob (kubectl) | daily | all 5 CNPG clusters | (prune) |
 
 **Day-of-month layout** for bi-monthly Velero jobs (only one workload to B2 per day, avoids B2 transaction-cap spikes):
 
@@ -180,11 +180,23 @@ Delete the **Backup CR** → garbage collection cascades all the way down. This 
 CNPG's `ScheduledBackup` CRD has no built-in retention. This CronJob (in the `cnpg-system` namespace) runs daily at **05:00 UTC**, lists Backup CRs per cluster, sorts by creationTimestamp, and `kubectl delete`s everything beyond the newest N. Owner-ref handles VolumeSnapshot + Longhorn cleanup.
 
 ```yaml
-prune authentik   10    # weekly schedule × ~10 weeks
-prune affine      30    # daily × ~1 month
-prune netbox      30    # daily × ~1 month
-prune monitoring  30    # daily × ~1 month (grafana-cnpg)
+prune authentik    6    # weekly × ~6 weeks (~900M/snap)
+prune affine       7    # daily × 1 week
+prune netbox       7    # daily × 1 week
+prune monitoring   7    # daily × 1 week (grafana-cnpg)
+prune guacamole   10    # weekly × ~10 weeks (tiny ~34M snaps)
 ```
+
+**Why only 7 dailies (trimmed from 30 on 2026-07-21):** the CNPG databases are
+tiny (38–53MB) but Postgres keeps a 35-segment × 16MB = **560MB WAL ring** on
+the same data volume. Busy writers (Grafana alert state, AFFiNE sync) rewrite
+most of that ring every day, so **each daily snapshot costs ~625MB** of
+rewritten WAL blocks regardless of how little real data changed — 30 dailies
+held ~18.5G (×3 replicas) per cluster for ~40MB of data. Netbox writes little,
+so its dailies are only ~65MB. 7 dailies keep RPO at 24h; anything older is
+covered by Velero→B2 (Layer 3). If snapshot cost ever needs to shrink further,
+the next lever is lowering `max_wal_size` on these clusters to shrink the WAL
+ring itself (reloadable, no restart) — not lowering the retain count more.
 
 **To tune retention:** edit the `prune` lines in the script section of `cnpg-backup-retention.yaml` and commit. CronJob picks it up on its next run.
 
