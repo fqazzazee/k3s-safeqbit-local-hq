@@ -101,12 +101,21 @@ spec:
                   }
 
                   # Retention per cluster — adjust values here when needed.
-                  prune authentik   10    # weekly schedule × ~10 weeks
-                  prune affine      30    # daily × ~1 month
-                  prune netbox      30    # daily × ~1 month
-                  prune monitoring  30    # daily × ~1 month (grafana-cnpg)
-                  prune guacamole   10    # weekly × ~10 weeks (was missing;
-                                          # backups grew unbounded since 06-05)
+                  #
+                  # 2026-07-21: trimmed 30→7 (dailies) and authentik 10→6.
+                  # These DBs are tiny (38-53MB) but Postgres keeps a 35-segment
+                  # (560MB) WAL ring on the same volume; busy writers (Grafana
+                  # alert state, AFFiNE sync) rewrite most of it daily, so each
+                  # daily snapshot costs ~625MB of rewritten WAL blocks no
+                  # matter how little data changed. 30 dailies = ~18.5G ×3
+                  # replicas per cluster for ~40MB of data. 7 dailies keep
+                  # RPO=24h; older restore points come from Velero/B2 (Layer 3).
+                  prune authentik    6    # weekly × ~6 weeks (~900M/snap)
+                  prune affine       7    # daily × 1 week
+                  prune netbox       7    # daily × 1 week
+                  prune monitoring   7    # daily × 1 week (grafana-cnpg)
+                  prune guacamole   10    # weekly × ~10 weeks (tiny ~34M snaps;
+                                          # was missing until 06-05, grew unbounded)
 
                   echo "done"
               resources:
