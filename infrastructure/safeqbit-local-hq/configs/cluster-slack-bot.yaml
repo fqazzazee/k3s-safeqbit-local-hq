@@ -1384,7 +1384,9 @@ data:
                 + ("  ·  user" if s["spec"].get("createSnapshot")
                    else "  ·  system")
                 + ("  ·  removed" if ss.get("markRemoved") else ""))
-        lines += ["", "_debt folds via `weekly-snapshot` (Sun 04:15); manual "
+        lines += ["", "_removed = deleted but blocks still on disk until "
+                  "folded (coalesced) into a newer snapshot — "
+                  "`weekly-snapshot` (Sun 04:15) provides that; manual "
                   "fold: maintenance.md 'Longhorn Snapshot Space Reclaim'_"]
         post(rurl, "\n".join(lines))
 
@@ -1404,9 +1406,9 @@ data:
         tot_t = sum(e["trap"] for e in per.values())
         lines = [f":camera_with_flash: *Longhorn snapshots* — {len(snaps)} "
                  f"across {len(per)} volumes  ·  {human(tot_b)} total"
-                 + (f"  ·  :warning: {human(tot_t)} trapped (removed, "
-                    f"awaiting fold)" if tot_t else ""), ""]
-        for vol, e in sorted(per.items(), key=lambda kv: -kv[1]["b"])[:12]:
+                 + (f"  ·  :warning: {human(tot_t)} trapped"
+                    if tot_t else ""), ""]
+        for vol, e in sorted(per.items(), key=lambda kv: -kv[1]["b"]):
             v = vols.get(vol)
             ns, pvc = lh_ident(v) if v else ("?", vol)
             icon = (":red_circle:" if e["trap"] > 10 * 2**30 else
@@ -1415,10 +1417,20 @@ data:
             lines.append(f"{icon} `{ns}/{pvc}`  {e['n']}×  ·  {human(e['b'])}"
                          + (f"  ·  trapped {human(e['trap'])}"
                             if e["trap"] else ""))
-        if len(per) > 12:
-            lines.append(f"  _… +{len(per) - 12} more volumes_")
-        lines += ["", "_per-volume detail: `/cluster longhorn <pvc>`  ·  "
-                  "schedule/retention: `/cluster longhorn jobs`_"]
+        if len(vols) > len(per):
+            lines.append(f"_({len(vols) - len(per)} more volumes have no "
+                         f"snapshots)_")
+        lines += [
+            "",
+            "*trapped* = snapshot already deleted (markRemoved) but its "
+            "blocks are still on disk. Longhorn frees a deleted snapshot "
+            "only by *folding* (coalescing) it into a NEWER snapshot — "
+            "never into the live volume — so it stays until one exists. "
+            "`weekly-snapshot` (Sun 04:15, retain 1) creates that fold "
+            "target, so trapped bytes clear on the next weekly run.",
+            "",
+            "_per-volume detail: `/cluster longhorn <pvc>`  ·  "
+            "schedule/retention: `/cluster longhorn jobs`_"]
         post(rurl, "\n".join(lines))
 
     def lh_jobs(rurl):

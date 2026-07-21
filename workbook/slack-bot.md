@@ -79,8 +79,9 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster longhorn <pvc>                  one volume (PVC/volume-name prefix ok): state, node,
                                          spec-vs-on-disk size, replica placement, snapshot list
                                          (size/age/user-vs-system/removed)
-/cluster longhorn snapshots              snapshot debt per volume: count, bytes, and "trapped"
-                                         (markRemoved awaiting fold) — sorted by bytes
+/cluster longhorn snapshots              snapshot debt, ALL volumes sorted by bytes: count,
+                                         bytes, "trapped" (markRemoved awaiting fold); ends
+                                         with a plain-language trapped/fold legend
 /cluster longhorn jobs                   RecurringJobs (task/cron/retain/groups + last snap age)
                                          + snapshot-related settings; aliases: retention, recurring
 /cluster jobs [ns]                       cronjob last run/success + lingering Failed jobs
