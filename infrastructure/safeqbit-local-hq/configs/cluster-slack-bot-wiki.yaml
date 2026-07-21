@@ -502,6 +502,9 @@ data:
       PhotoPrism at the existing photo/video folders
       (10.10.10.5:/mnt/mach2/mach2nas/Media).
     • *NAS replication:* TrueNAS #1 → TrueNAS #2 every 30 min (SSH).
+    • *Snapshot hygiene:* weekly RecurringJobs on every Longhorn
+      volume — fstrim Sun 03:30, snapshot Sun 04:15 (retain 1) —
+      fold old snapshot debt so space auto-reclaims.
     Bulk NFS data is deliberately EXCLUDED from Velero — ZFS snapshots
     + NAS replication + NAS cloud backup cover it.
     _Bot: `/cluster storage` (used %) · `longhorn` (health/headroom) ·
@@ -512,8 +515,9 @@ data:
       the sealed-secrets master key; bucket `k3s-safeqbit-etcd`; one
       `--cluster-reset` restore brings everything back.
       Check: `/cluster etcd` (red if newest >8d).
-    • *Layer 1 — Longhorn snapshots* (in-cluster): "oops, an hour
-      ago" recovery, per volume.
+    • *Layer 1 — Longhorn snapshots* (in-cluster): "oops" recovery
+      per volume; weekly recurring snapshot (Sun 04:15, retain 1) +
+      fstrim keep a fresh restore point and fold snapshot debt.
     • *Layer 2 — CNPG snapshots → Longhorn*: app-consistent DB
       snapshots daily/weekly; retention CronJob prunes; also used as
       manual restore points before risky upgrades.
@@ -546,7 +550,9 @@ data:
     *Monitoring stack* — metrics, alerts, and this bot
     • *Prometheus* (kube-prometheus-stack, ns monitoring) —
       prometheus.local.safeqbit.com; TSDB capped `retentionSize: 33GB`
-      (it once filled its volume and took Grafana "no data" with it).
+      (it once filled its volume and took Grafana "no data" with it);
+      mem limit 3Gi must stay ≫ RSS or reads thrash disk (see
+      gotchas).
     • *Grafana* — grafana.local.safeqbit.com, CNPG-backed.
     • *Alertmanager* — 2 replicas; alertmanager.local.safeqbit.com;
       routes to Slack. Prometheus + Alertmanager UIs sit behind
@@ -633,6 +639,18 @@ data:
       rewrites IoT websocket targets; keep http://10.10.13.51:8123.
     • *Pulse k8s agent flap* — any UI config save orphans the agent
       handler; restart the pulse pod.
+    • *Longhorn snapshots never fold into the live head* — a removed
+      snapshot reclaims only into a NEWER snapshot; without one it
+      traps under the head forever (42.5 GB on the TSDB volume,
+      2026-07). Weekly recurring snapshot is the fold target. NEVER
+      add a snapshot-delete recurring task — it would eat CNPG's CSI
+      backup snapshots.
+    • *Prometheus page-cache starvation* — mem limit too close to
+      RSS leaves no room to cache the TSDB; every query re-reads
+      disk, and Longhorn's replica round-robin turns that into
+      TB/day of NODE traffic (invisible on Proxmox physical NICs
+      between co-located VMs). Keep limit ≫ RSS; relapse signal
+      RSS >2.5GB.
   cluster.runbooks: |
     *Runbook index* — the workbook/ directory in the repo
     • `maintenance.md` — living doc: Flux suspend/resume, CNPG

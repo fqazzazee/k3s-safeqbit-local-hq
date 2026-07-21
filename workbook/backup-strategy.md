@@ -62,6 +62,8 @@ Each layer protects against a different failure mode:
 | **03:00** | `monitoring-bimonthly` | Velero | 9th + 24th | namespace `monitoring` | B2 |
 | **03:00** | `passzilla-bimonthly` | Velero | 11th + 26th | namespace `passzilla` | B2 |
 | **03:00** | `photoprism-bimonthly` | Velero | 13th + 28th | namespace `photoprism` | B2 |
+| **03:30** | `weekly-trim` | Longhorn fstrim | weekly Sun | every Longhorn volume | (reclaim) |
+| **04:15** | `weekly-snapshot` | Longhorn snapshot, retain 1 | weekly Sun | every Longhorn volume | Longhorn |
 | **05:00** | `cnpg-backup-retention` | CronJob (kubectl) | daily | all 4 CNPG clusters | (prune) |
 
 **Day-of-month layout** for bi-monthly Velero jobs (only one workload to B2 per day, avoids B2 transaction-cap spikes):
@@ -194,9 +196,32 @@ kubectl -n cnpg-system logs -l job-name=manual-prune-... -f
 
 ---
 
-## Layer 1 - Longhorn snapshots (manual / ad-hoc)
+## Layer 1 - Longhorn snapshots (weekly recurring + ad-hoc)
 
-Not on any schedule directly; populated by:
+**Since 2026-07-21** (`configs/longhorn-recurring-jobs.yaml`, PR #72) every Longhorn
+volume gets two weekly RecurringJobs via the built-in `default` group:
+
+- **`weekly-trim`** (Sun 03:30) — fstrim, so filesystem-freed blocks become holes
+  instead of being captured into the next snapshot.
+- **`weekly-snapshot`** (Sun 04:15, `retain: 1`) — one fresh snapshot per volume per
+  week; doubles as a ≤1-week-old local restore point.
+
+This is space hygiene as much as recovery: Longhorn can only reclaim a removed
+snapshot by **folding it into a newer snapshot — never into the live volume head**.
+Before these jobs existed, system snapshots left behind by reattaches/rebuilds sat
+trapped under the head forever (2026-07-21: a 42.5 GB dead snapshot from the 07-09
+HA-cutover reattach on the Prometheus TSDB volume — ~127 GB across 3 replicas).
+The weekly snapshot provides the fold target; the job's prune triggers the purge.
+Snapshot debt per volume is now bounded at ~1 week of block churn. Manual fold
+procedure and mechanics: [maintenance.md](maintenance.md) "Longhorn Snapshot Space
+Reclaim".
+
+> **Never add a `snapshot-delete` recurring task cluster-wide.** It deletes ALL
+> snapshot kinds beyond its retain count — including the CSI snapshots backing the
+> CNPG scheduled-backup VolumeSnapshots (Layer 2) and manual pre-upgrade snapshots.
+> The `snapshot` task's retention is label-scoped to its own snapshots and is safe.
+
+Also populated by:
 - Layer 2 (CNPG ScheduledBackups via VolumeSnapshot)
 - Layer 3 (Velero CSI snapshots, but those are typically removed immediately after data move to B2)
 - Manual snapshots via the Longhorn UI (`https://longhorn.local.safeqbit.com`)

@@ -20,6 +20,7 @@ A living document. Add entries as new patterns emerge.
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
 - [Longhorn Capacity & Disk Expansion](#longhorn-capacity--disk-expansion)
+- [Longhorn Snapshot Space Reclaim](#longhorn-snapshot-space-reclaim)
 - [CoreDNS HA](#coredns-ha)
 - [Grafana](#grafana)
 - [Prometheus TSDB / Storage](#prometheus-tsdb--storage)
@@ -591,6 +592,76 @@ for all those volumes). Avoid unless many volumes on the node are affected.
 
 ---
 
+## Longhorn Snapshot Space Reclaim
+
+**The mechanic that bites:** Longhorn reclaims a deleted ("removed") snapshot only by
+coalescing it into a **newer** snapshot — it can never fold one into the live volume
+head. `auto-cleanup-system-generated-snapshot: true` merely *marks* system snapshots
+removed. So a snapshot left behind by a reattach/rebuild, with nothing ever creating
+a newer snapshot on that volume, sits trapped under the head indefinitely, pinning
+every block the workload has since rewritten.
+
+Hit 2026-07-21: the Prometheus TSDB volume showed 67.5 GB actualSize vs ~25 GB live
+data — a 42.5 GB system snapshot from the 07-09 HA-cutover reattach, `markRemoved`
+for 12 days, ~127 GB wasted across 3 replicas. 17 other volumes had the same trap at
+<1.6 GB each (low churn = slow divergence = small corpses).
+
+**Since 2026-07-21 this self-heals weekly** (`configs/longhorn-recurring-jobs.yaml`,
+PR #72): `weekly-trim` (Sun 03:30) + `weekly-snapshot` (Sun 04:15, retain 1) on the
+built-in `default` group. The weekly snapshot is the fold target; its prune triggers
+the purge that sweeps trapped removed snapshots. Debt is bounded at ~1 week of churn.
+
+**Check for snapshot debt** (big actualSize-vs-live gap = debt):
+```bash
+# Per-volume snapshot inventory: size + whether it's a trapped removed one
+kubectl -n longhorn-system get snapshots.longhorn.io \
+  -o custom-columns='VOLUME:.spec.volume,GB:.status.size,REMOVED:.status.markRemoved,CREATED:.status.creationTime' | sort
+# Volume totals: spec size vs actual on-disk
+kubectl -n longhorn-system get volumes.longhorn.io \
+  -o custom-columns='VOL:.metadata.name,SPEC:.spec.size,ACTUAL:.status.actualSize'
+```
+
+**Manual fold** (what the recurring jobs do; needed only for *user* snapshots, which
+the job's retention never touches):
+```bash
+# 1. Freeze the current head as a fresh snapshot = the fold target
+kubectl apply -f - <<EOF
+apiVersion: longhorn.io/v1beta2
+kind: Snapshot
+metadata:
+  name: fold-$(date +%Y%m%d)
+  namespace: longhorn-system
+spec:
+  volume: <pvc-...>
+  createSnapshot: true
+EOF
+kubectl -n longhorn-system wait snapshot.longhorn.io/fold-$(date +%Y%m%d) \
+  --for=jsonpath='{.status.readyToUse}'=true --timeout=120s
+
+# 2. Delete the old snapshot CR -> marks removed + triggers the purge/coalesce
+kubectl -n longhorn-system delete snapshot.longhorn.io <old-snapshot>
+
+# 3. Watch purge (per replica) and the size drop
+kubectl -n longhorn-system get engine <pvc-...>-e-0 \
+  -o jsonpath='{.status.purgeStatus}'
+kubectl -n longhorn-system get volume <pvc-...> -o jsonpath='{.status.actualSize}'
+```
+Purge I/O is replica-local (no cross-node traffic); the volume stays online.
+
+**Two caveats:**
+- The fold preserves any extent the newer layer hasn't overwritten — including blocks
+  the *filesystem* freed but never rewrote (Longhorn can't see fs-free). That's what
+  `weekly-trim` prevents going forward. A legacy example: 17.8 GB of June-28
+  disk-full-era extents still ride the TSDB volume's baseline snapshot; full deep-clean
+  would need `unmapMarkSnapChainRemoved=enabled` on the volume + a trim while the
+  snapshot chain is in removed state. Usually not worth it — it stops growing.
+- **NEVER add a `snapshot-delete` recurring task cluster-wide.** It deletes ALL
+  snapshot kinds beyond its retain count, including the CSI snapshots backing CNPG
+  scheduled backups (~107 VolumeSnapshots) and manual pre-upgrade snapshots. The
+  `snapshot` task's retain is label-scoped to its own snapshots — that's why it's safe.
+
+---
+
 ## CoreDNS HA
 
 > **Superseded 2026-07-03 (PR #27).** The 2026-05-28 approach documented here
@@ -728,6 +799,38 @@ Free space first by **expanding the PVC** (see *Longhorn Capacity & Disk Expansi
 and beware the stale-iscsid expansion deadlock, which bit this exact volume), then
 the `retentionSize` cap keeps it bounded going forward. There is also a
 `LonghornNodeStorageLow` / PVC-fill alert, but the real guard here is the size cap.
+
+### Symptom: TB-scale inter-node traffic; TSDB volume reads 100–300 MB/s nonstop
+
+Hit 2026-07-21. Nodes moving ~350 Mbps sustained (≈10 TB/day cluster-wide), top pod
+talker = a longhorn-system instance-manager. No rebuilds, no failed compactions,
+query rate flat — so not load growth.
+
+**Root cause: page-cache starvation.** The prometheus container's memory *limit*
+bounds its cgroup page cache too. When RSS creeps close to the limit (~1.7 GB vs
+the old 2Gi), almost nothing of the ~23 GB TSDB stays cached, and the same steady
+query load re-reads blocks from disk on every evaluation. Longhorn then round-robins
+those reads across all 3 replicas, so ~2/3 of every read crosses the LAN — disk
+thrash shows up as *node network traffic*. (Between co-located VMs it never touches
+a physical NIC, so Proxmox host graphs stay quiet; the VM kernels' `/proc/net/dev`
+counters are the ground truth.)
+
+**Confirm:**
+```bash
+# The one hot volume (135-250 MB/s here); everything else near zero:
+#   topk(5, avg_over_time(longhorn_volume_read_throughput[1h]))
+# RSS vs limit for the prometheus container:
+#   container_memory_rss{namespace="monitoring",container="prometheus"}
+#   vs kube_pod_container_resource_limits{resource="memory"}
+# Query rate flat rules out load growth:
+#   rate(prometheus_engine_query_duration_seconds_count{slice="inner_eval"}[1h])
+```
+
+**Fix (in repo):** `controllers/monitoring.yaml` → `limits.memory: 3Gi` (2026-07-21).
+Keep the limit comfortably above RSS so the hot block set stays resident. **Relapse
+signal: RSS > ~2.5 GB** (series growth / TSDB filling toward the 33GB cap). Note a
+pod restart quiets the reads *regardless* (fresh RSS leaves cache room) — judge a fix
+by whether reads stay ~0 after RSS re-settles, not by the first hours.
 
 ---
 
