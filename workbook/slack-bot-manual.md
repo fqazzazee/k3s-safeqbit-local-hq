@@ -154,7 +154,9 @@ coverage per layer:
 
 ```
 Layer 0  etcd → B2        /cluster etcd      red if newest B2 snapshot >8d
-Layer 1  Longhorn         /cluster longhorn  volume health (schedule: UI/Git)
+Layer 1  Longhorn         /cluster longhorn  volume health; `longhorn jobs` =
+                                             weekly snapshot/trim schedule,
+                                             `longhorn snapshots` = debt
 Layer 2  CNPG snapshots   /cluster cnpg      last-backup age per DB
 Layer 3  Velero → B2      /cluster velero    phases + errors, drill into one
    all                    /cluster backups   the full weekly digest, on demand
@@ -224,6 +226,9 @@ container-fs I/O and doesn't always attribute PVC block writes.
 | `/cluster cnpg` | `kubectl get clusters.postgresql.cnpg.io -A` |
 | `/cluster pvcs [ns]` / `storage` | `kubectl get pvc -A` / kubelet volume stats |
 | `/cluster longhorn` | `kubectl -n longhorn-system get volumes.longhorn.io` + Longhorn UI |
+| `/cluster longhorn <pvc>` | `kubectl -n longhorn-system get volumes/replicas/snapshots` filtered to one volume |
+| `/cluster longhorn snapshots` | `kubectl -n longhorn-system get snapshots.longhorn.io` aggregated by volume |
+| `/cluster longhorn jobs` | `kubectl -n longhorn-system get recurringjobs.longhorn.io` + settings |
 | `/cluster jobs [ns]` | `kubectl get cronjobs,jobs -A` |
 | `/cluster silences` | Alertmanager UI → Silences |
 | `/cluster etcd` | `kubectl get etcdsnapshotfiles.k3s.cattle.io` |

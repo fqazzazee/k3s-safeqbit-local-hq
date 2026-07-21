@@ -3,11 +3,11 @@
 # Docs: workbook/slack-bot.md        (architecture, Slack app setup, ops)
 #       workbook/slack-bot-manual.md (usage playbooks: bot vs real commands)
 #
-# Commands (v4 + ps + wiki):
+# Commands (v5: + longhorn deep-dive):
 #   /cluster summary|backups|pods|deploys|nodes [name]|logs|describe|why|
 #            events|top|ps|restarts|flux|velero [n|name]|certs|cnpg|pvcs|
-#            storage|longhorn|jobs|silences|etcd|dns|ingresses|alerts|
-#            wiki [section|topic|search <term>]|man <cmd>|help
+#            storage|longhorn [pvc|snapshots|jobs]|jobs|silences|etcd|dns|
+#            ingresses|alerts|wiki [section|topic|search <term>]|man <cmd>|help
 #
 # ── How it works ──────────────────────────────────────────────────────────
 # TRANSPORT — Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to
@@ -30,7 +30,8 @@
 #                 ServiceAccount token + CA (no kubectl in the image);
 #                 retries 429/500/503 with backoff. Core resources + CRDs:
 #                 Flux, cert-manager, CNPG, Velero (incl. podvolumebackups),
-#                 Longhorn (volumes/nodes/settings), k3s etcdsnapshotfiles.
+#                 Longhorn (volumes/nodes/settings/snapshots/replicas/
+#                 recurringjobs), k3s etcdsnapshotfiles.
 #   Prometheus    promq(): instant-query API on the in-cluster service
 #                 (PROM_BASE). Used by top, ps, restarts, alerts, storage +
 #                 the cpu/lag decorations in nodes/cnpg. `ps` additionally
@@ -156,7 +157,8 @@ rules:
     resources: ["jobs", "cronjobs"]
     verbs: ["get", "list"]
   - apiGroups: ["longhorn.io"]
-    resources: ["volumes", "nodes", "settings"]
+    resources: ["volumes", "nodes", "settings", "snapshots", "replicas",
+                "recurringjobs"]
     verbs: ["get", "list"]
   - apiGroups: ["k3s.cattle.io"]
     resources: ["etcdsnapshotfiles"]
@@ -269,7 +271,7 @@ data:
         ":card_file_box: `/cluster velero [n | name]` — recent backups, or one backup's errors + volumes",
         ":dvd: `/cluster etcd` — k3s etcd snapshots, local + B2 (Layer 0)",
         ":droplet: `/cluster storage [n]` — fullest volumes by used %",
-        ":ox: `/cluster longhorn` — volume robustness + node disk headroom",
+        ":ox: `/cluster longhorn [pvc | snapshots | jobs]` — volumes + disk headroom; per-volume replicas/snapshots; snapshot debt; recurring jobs",
         ":minidisc: `/cluster pvcs [ns]` — volume claims · `kubectl get pvc -A`",
         ":elephant: `/cluster cnpg` — DB clusters: primary, lag, last backup",
         "",
@@ -1310,7 +1312,155 @@ data:
                      "don't appear — `/cluster pvcs` lists everything_")
         post(rurl, "\n".join(lines))
 
+    LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
+
+    def lh_ident(v):
+        """(namespace, pvc-or-volume-name) for display/matching."""
+        ks = v["status"].get("kubernetesStatus") or {}
+        return (ks.get("namespace") or "?",
+                ks.get("pvcName") or v["metadata"]["name"])
+
+    def lh_volume(rurl, name):
+        vols = k8s(LH + "/volumes")["items"]
+        hits = [v for v in vols if v["metadata"]["name"] == name
+                or lh_ident(v)[1] == name]
+        if not hits:
+            hits = [v for v in vols
+                    if v["metadata"]["name"].startswith(name)
+                    or lh_ident(v)[1].startswith(name)]
+        if not hits:
+            return post(rurl, f":shrug: no Longhorn volume or PVC matching "
+                              f"`{name}`. `/cluster pvcs` lists claims.")
+        if len(hits) > 1:
+            return post(rurl, f":thinking_face: `{name}` is ambiguous:\n"
+                        + "\n".join(f"  `{lh_ident(v)[0]}/{lh_ident(v)[1]}`"
+                                    for v in sorted(hits, key=lh_ident)[:15]))
+        v = hits[0]
+        vol, st, sp = v["metadata"]["name"], v["status"], v["spec"]
+        ns, pvc = lh_ident(v)
+        rob = st.get("robustness", "?")
+        icon = {"healthy": ":white_check_mark:",
+                "degraded": ":warning:"}.get(rob, ":red_circle:")
+        spec_b = float(sp.get("size", 0))
+        act_b = float(st.get("actualSize", 0))
+        lines = [f":ox: *Longhorn volume* — `{ns}/{pvc}`  (`{vol}`)",
+                 "",
+                 f"{icon} {st.get('state', '?')}"
+                 + (f" on *{st.get('currentNodeID')}*"
+                    if st.get("currentNodeID") else "")
+                 + f"  ·  robustness *{rob}*  ·  "
+                   f"{sp.get('numberOfReplicas', '?')} replicas",
+                 f"size: spec {human(spec_b)}  ·  on disk {human(act_b)} "
+                 f"per replica"
+                 + ("  :warning: well over spec = snapshot debt"
+                    if act_b > spec_b * 1.1 else "")]
+        reps = [r for r in k8s(LH + "/replicas")["items"]
+                if r["spec"].get("volumeName") == vol]
+        if reps:
+            lines += ["", "*Replicas:*  " + "  ·  ".join(
+                f"{r['spec'].get('nodeID') or '?'} "
+                f"`{r.get('status', {}).get('currentState', '?')}`"
+                for r in sorted(reps,
+                                key=lambda r: r["spec"].get("nodeID") or ""))]
+        snaps = sorted((s for s in k8s(LH + "/snapshots")["items"]
+                        if s["spec"].get("volume") == vol),
+                       key=lambda s: s.get("status", {})
+                                      .get("creationTime") or "")
+        tot = sum(int(s.get("status", {}).get("size") or 0) for s in snaps)
+        trap = sum(int(s.get("status", {}).get("size") or 0) for s in snaps
+                   if s.get("status", {}).get("markRemoved"))
+        lines += ["", f"*Snapshots:* {len(snaps)}  ·  {human(tot)} total"
+                  + (f"  ·  :warning: {human(trap)} removed-but-present "
+                     f"(awaiting fold)" if trap else "")]
+        for s in snaps[-12:]:
+            ss = s.get("status", {})
+            lines.append(
+                (":warning:" if ss.get("markRemoved")
+                 else ":white_check_mark:")
+                + f" `{s['metadata']['name'][:36]}`  "
+                f"{human(int(ss.get('size') or 0))}  ·  "
+                + (f"{age(ss['creationTime'])} old"
+                   if ss.get("creationTime") else "age ?")
+                + ("  ·  user" if s["spec"].get("createSnapshot")
+                   else "  ·  system")
+                + ("  ·  removed" if ss.get("markRemoved") else ""))
+        lines += ["", "_debt folds via `weekly-snapshot` (Sun 04:15); manual "
+                  "fold: maintenance.md 'Longhorn Snapshot Space Reclaim'_"]
+        post(rurl, "\n".join(lines))
+
+    def lh_snapshots(rurl):
+        vols = {v["metadata"]["name"]: v for v in k8s(LH + "/volumes")["items"]}
+        snaps = k8s(LH + "/snapshots")["items"]
+        per = {}
+        for s in snaps:
+            ss = s.get("status", {})
+            e = per.setdefault(s["spec"].get("volume", "?"),
+                               {"n": 0, "b": 0, "trap": 0})
+            e["n"] += 1
+            e["b"] += int(ss.get("size") or 0)
+            if ss.get("markRemoved"):
+                e["trap"] += int(ss.get("size") or 0)
+        tot_b = sum(e["b"] for e in per.values())
+        tot_t = sum(e["trap"] for e in per.values())
+        lines = [f":camera_with_flash: *Longhorn snapshots* — {len(snaps)} "
+                 f"across {len(per)} volumes  ·  {human(tot_b)} total"
+                 + (f"  ·  :warning: {human(tot_t)} trapped (removed, "
+                    f"awaiting fold)" if tot_t else ""), ""]
+        for vol, e in sorted(per.items(), key=lambda kv: -kv[1]["b"])[:12]:
+            v = vols.get(vol)
+            ns, pvc = lh_ident(v) if v else ("?", vol)
+            icon = (":red_circle:" if e["trap"] > 10 * 2**30 else
+                    ":warning:" if e["trap"] > 2**30 else
+                    ":white_check_mark:")
+            lines.append(f"{icon} `{ns}/{pvc}`  {e['n']}×  ·  {human(e['b'])}"
+                         + (f"  ·  trapped {human(e['trap'])}"
+                            if e["trap"] else ""))
+        if len(per) > 12:
+            lines.append(f"  _… +{len(per) - 12} more volumes_")
+        lines += ["", "_per-volume detail: `/cluster longhorn <pvc>`  ·  "
+                  "schedule/retention: `/cluster longhorn jobs`_"]
+        post(rurl, "\n".join(lines))
+
+    def lh_jobs(rurl):
+        rjs = k8s(LH + "/recurringjobs")["items"]
+        snaps = k8s(LH + "/snapshots")["items"]
+        lines = [f":repeat: *Longhorn recurring jobs* — {len(rjs)} defined",
+                 ""]
+        for j in sorted(rjs, key=lambda j: j["metadata"]["name"]):
+            s, jn = j["spec"], j["metadata"]["name"]
+            newest = max((x.get("status", {}).get("creationTime") or ""
+                          for x in snaps
+                          if x["metadata"]["name"].startswith(jn)),
+                         default="")
+            last = (f"last snap {age(newest)} ago" if newest
+                    else "no snapshots yet" if s.get("task") == "snapshot"
+                    else "")
+            lines.append(f":white_check_mark: *{jn}*  ·  `{s.get('task')}`"
+                         f"  ·  cron `{s.get('cron')}`  ·  retain "
+                         f"{s.get('retain')}  ·  groups "
+                         f"{', '.join(s.get('groups') or []) or '-'}"
+                         + (f"  ·  {last}" if last else ""))
+        lines += ["", "*Settings:*"]
+        for key in ("auto-cleanup-system-generated-snapshot",
+                    "snapshot-max-count", "orphan-resource-auto-deletion"):
+            try:
+                lines.append(f"  `{key}` = "
+                             f"`{k8s(LH + '/settings/' + key)['value']}`")
+            except Exception:
+                pass
+        lines += ["", "_NEVER add a `snapshot-delete` recurring task — it "
+                  "deletes ALL snapshot kinds incl. CNPG's CSI backup "
+                  "snapshots (wiki cluster.gotchas)_"]
+        post(rurl, "\n".join(lines))
+
     def longhorn(rurl, args):
+        sub = args[0].lower() if args else ""
+        if sub in ("snapshots", "snapshot", "snaps", "debt"):
+            return lh_snapshots(rurl)
+        if sub in ("jobs", "retention", "recurring"):
+            return lh_jobs(rurl)
+        if sub:
+            return lh_volume(rurl, args[0])
         vols = k8s("/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
                    "/volumes")["items"]
         by_health = {}
@@ -1359,6 +1509,8 @@ data:
                          f"used `{bar(used_p)}` {used_p:4.0%}  ·  "
                          f"scheduled {sched_p:.0%} of limit  ·  "
                          f"{human(av)} free")
+        lines += ["", "_deep dive: `longhorn <pvc>`  ·  `longhorn snapshots`"
+                  "  ·  `longhorn jobs`_"]
         post(rurl, "\n".join(lines))
 
     def jobs(rurl, args):
