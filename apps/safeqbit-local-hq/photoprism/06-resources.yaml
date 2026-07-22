@@ -28,8 +28,8 @@ spec:
         - name: photoprism
           resources:
             requests:
-              cpu: 200m      # 0.2 cores
-              memory: 512Mi
+              cpu: 200m      # 0.2 cores — compressible, bursts to limit anyway
+              memory: 1Gi    # idle ~450Mi; margin keeps eviction score sane
             limits:
               cpu: 6400m     # 6.4 cores = 80% of an 8-core node — import/scan
               memory: 6Gi    # is CPU-hungry; 6Gi headroom for TensorFlow
