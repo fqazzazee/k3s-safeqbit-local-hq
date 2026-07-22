@@ -8,6 +8,12 @@ went to **2 replicas** for node-loss HA (see "Replicas & HA" below).
 **2026-07-19:** `wiki` / `man` — a static knowledge base (kubectl man
 pages, troubleshooting methodologies, cluster-specific KB) served from
 its own ConfigMap (see "The wiki" below).
+**2026-07-21:** bot.py gained a built-in **local mode** (`python3 bot.py
+<cmd>` off-cluster runs any handler with kubectl credentials — the old
+exec-and-monkeypatch harness, productized) and a companion **TUI**
+(`~/git/cluster-bot/tui.py`), an htop-style terminal task manager that
+runs these same handlers and shows the real kubectl/PromQL calls behind
+each command (see "Local mode & the TUI" below).
 
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
@@ -235,34 +241,44 @@ kubectl -n monitoring delete pod <bot-pod-2>   # …then the other, so one bot s
   at start — Flux applying the manifest is not enough, restart the
   deployment.
 
-### Testing handlers without Slack (the harness pattern)
+### Local mode & the TUI (2026-07-21)
 
 Every command handler is a plain function `def cmd(response_url, args)`
-whose only side effect is `post()`. That makes the whole bot testable
-from a workstation with cluster read access, no Slack round-trip:
+whose only side effect is `post()`. The old exec-and-monkeypatch test
+harness that exploited this is now **built into bot.py itself**:
 
-```python
-# extract bot.py from the ConfigMap, then:
-src = open("bot.py").read()
-g = {}
-exec(src.split("app = App(")[0], g)      # defs only, no Slack bootstrap
-                                          # (stub slack_bolt in sys.modules,
-                                          #  set KUBERNETES_SERVICE_HOST)
-g["k8s_raw"] = lambda p, timeout=30: subprocess.run(
-    ["kubectl", "get", "--raw", p], capture_output=True, text=True,
-    check=True).stdout                    # my creds, read-only verbs only
-g["k8s"] = lambda p: json.loads(g["k8s_raw"](p))
-g["promq"] = ...   # kubectl get --raw the Prometheus service /proxy path
-g["post"] = lambda rurl, text: print(text)
-g["why"]("fake-url", ["monitoring", "grafana"])
+```bash
+# extract bot.py from the ConfigMap (or the repo manifest), then:
+python3 bot.py nodes
+python3 bot.py why monitoring grafana-cnpg-1
+python3 bot.py ps mem all
 ```
 
-Prometheus/Alertmanager go through the apiserver service proxy
-(`/api/v1/namespaces/monitoring/services/<svc>:<port>/proxy/…`). This is
-how v4 and `ps` were verified against the live cluster before merging —
-it caught three real bugs (duplicate wrong-namespace kubelet volume
-series, k3s vendor node-conditions misread, a blank-line glitch).
-One gap to know about: the shim raises `CalledProcessError` where the
-real `k8s_raw` raises `urllib.error.HTTPError`, so error-path handling
-(e.g. `logs prev` on a pod with no previous instance) needs a mental
-translation when it "fails" in the harness.
+With argv present, `use_local_shims()` replaces `k8s_raw`/`promq`/
+`am_json`/`post` with kubectl-credential versions (`kubectl get --raw`;
+Prometheus/Alertmanager via the apiserver service proxy
+`/api/v1/namespaces/monitoring/services/<svc>:<port>/proxy/…`) and runs
+one handler, printing the Slack-formatted answer. With no argv it
+bootstraps Socket Mode exactly as before — in-cluster behaviour is
+unchanged, and slack_bolt is only imported on that path. The shim maps
+kubectl error text back onto the `HTTPError` codes the handlers' error
+paths expect (`logs prev` → 400 etc.), closing the old harness's one
+known gap. `summary`/`backups` are stubbed out in bare local mode (they
+need the report ConfigMaps) — the TUI bridges them, see below.
+
+**The TUI** — `~/git/cluster-bot/tui.py` (own repo folder, README
+there) — is an htop-style terminal task manager built on the same
+handlers. It extracts bot.py + wiki from this repo's manifests (live
+ConfigMaps as fallback), renders the Slack mrkdwn answers as colored
+terminal text, keeps `ps` as a resident auto-refreshing task view with
+sort/drill-down keys, and — its teaching feature — shows a live
+**background-work trace**: every real `kubectl get --raw` call and
+decoded PromQL query each command performs. `summary` and `backups` run
+their actual report ConfigMap scripts against a localhost bridge that
+rewrites `PROM_BASE`/`API_BASE`/`SLACK_WEBHOOK_URL` onto traced kubectl
+calls. Also a one-shot CLI: `tui.py [--plain|--no-trace] <cmd> [args…]`.
+
+Because the TUI execs whatever `bot.py`/`HANDLERS` the manifest defines,
+new bot commands appear in it automatically — but keep the module-level
+names it rewires (`k8s_raw`, `promq`, `am_json`, `post`, `HANDLERS`,
+`ALIASES`, `USAGE`, `WIKI_DIR`) stable.
