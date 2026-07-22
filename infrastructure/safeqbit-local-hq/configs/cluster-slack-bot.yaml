@@ -102,10 +102,12 @@
 #     Prometheus/Alertmanager via the apiserver service proxy) and prints
 #     the Slack-formatted answer. The Slack bootstrap only runs with no
 #     argv (slack_main), so in-cluster behaviour is unchanged.
-#   - TUI: ~/git/cluster-bot/tui.py wraps these same handlers in an
-#     htop-style terminal task manager (extracts bot.py + wiki from these
-#     manifests, or falls back to the live ConfigMaps). It installs its
-#     own traced shims, so keep the handler/global structure stable.
+#   - TUI: QubeCommander (~/git/qube-commander/qube) wraps these same
+#     handlers in an htop-style terminal commander (extracts bot.py +
+#     wiki from these manifests, or falls back to the live ConfigMaps).
+#     It installs its own traced shims — its how-to trace view translates
+#     every call into the manual kubectl equivalent — so keep the
+#     handler/global structure stable.
 #   - ROLLOUT: Flux applies this file, but the pod only reads /bot/bot.py
 #     at start — after every ConfigMap change delete the bot pods ONE AT A
 #     TIME (kubectl -n monitoring delete pod <a>, wait Ready, then <b>).
@@ -231,7 +233,7 @@ data:
     """On-demand cluster queries (read-only). Two transports, one set of
     handlers: in-cluster it is the Slack Socket Mode bot (slack_main);
     off-cluster the SAME file runs `python3 bot.py <cmd>` — or backs the
-    cluster-bot TUI — with kubectl-credential shims (use_local_shims).
+    QubeCommander TUI — with kubectl-credential shims (use_local_shims).
     slack_bolt is only imported on the Slack path."""
     import json, os, socket, ssl, subprocess, time
     import urllib.error, urllib.parse, urllib.request
@@ -1882,8 +1884,9 @@ data:
         """LOCAL MODE (never runs in the pod): swap the in-cluster data
         clients for kubectl-backed ones so every handler runs unchanged
         with workstation credentials — read-only verbs only. Used by
-        `python3 bot.py <cmd>` and by the cluster-bot TUI (which installs
-        its own traced variants of the same shims)."""
+        `python3 bot.py <cmd>` and by the QubeCommander TUI
+        (~/git/qube-commander, which installs its own traced variants
+        of the same shims)."""
         global k8s_raw, promq, am_json, post
 
         def k8s_raw(path, timeout=30):

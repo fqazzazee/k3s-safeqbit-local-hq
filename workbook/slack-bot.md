@@ -11,9 +11,13 @@ its own ConfigMap (see "The wiki" below).
 **2026-07-21:** bot.py gained a built-in **local mode** (`python3 bot.py
 <cmd>` off-cluster runs any handler with kubectl credentials — the old
 exec-and-monkeypatch harness, productized) and a companion **TUI**
-(`~/git/cluster-bot/tui.py`), an htop-style terminal task manager that
-runs these same handlers and shows the real kubectl/PromQL calls behind
-each command (see "Local mode & the TUI" below).
+(see "Local mode & the TUI" below).
+**2026-07-22:** the TUI became **QubeCommander**
+(`~/git/qube-commander/qube`, renamed from `~/git/cluster-bot/tui.py`
+and now git-versioned): an htop-style terminal commander whose trace
+pane defaults to a **how-to view** — every call each command makes is
+shown as the kubectl/grep (or Grafana → Explore) step a human would type
+to get the same answer, F7 flips to the raw `kubectl get --raw` calls.
 
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
@@ -266,19 +270,25 @@ paths expect (`logs prev` → 400 etc.), closing the old harness's one
 known gap. `summary`/`backups` are stubbed out in bare local mode (they
 need the report ConfigMaps) — the TUI bridges them, see below.
 
-**The TUI** — `~/git/cluster-bot/tui.py` (own repo folder, README
-there) — is an htop-style terminal task manager built on the same
-handlers. It extracts bot.py + wiki from this repo's manifests (live
-ConfigMaps as fallback), renders the Slack mrkdwn answers as colored
-terminal text, keeps `ps` as a resident auto-refreshing task view with
-sort/drill-down keys, and — its teaching feature — shows a live
-**background-work trace**: every real `kubectl get --raw` call and
-decoded PromQL query each command performs. `summary` and `backups` run
-their actual report ConfigMap scripts against a localhost bridge that
-rewrites `PROM_BASE`/`API_BASE`/`SLACK_WEBHOOK_URL` onto traced kubectl
-calls. Also a one-shot CLI: `tui.py [--plain|--no-trace] <cmd> [args…]`.
+**The TUI — QubeCommander** — `~/git/qube-commander/qube` (own git
+repo, README there; renamed 2026-07-22 from `~/git/cluster-bot/tui.py`)
+— is an htop-style terminal commander built on the same handlers. It
+extracts bot.py + wiki from this repo's manifests (live ConfigMaps as
+fallback), renders the Slack mrkdwn answers as colored terminal text,
+keeps `ps` as a resident auto-refreshing task view with sort keys,
+`/text` row filtering and drill-down, and — its teaching feature — a
+live trace pane with two 1:1 views (`F7` flips): the default **how-to
+view** translates every call into the command a human would type for
+the same answer (idiomatic kubectl with operator greps/filters, the
+`backups.velero.io` gotcha, `grafana ▸ explore` steps where only PromQL
+can answer), while the **raw view** shows the literal
+`kubectl get --raw` calls and decoded PromQL. `summary` and `backups`
+run their actual report ConfigMap scripts against a localhost bridge
+that rewrites `PROM_BASE`/`API_BASE`/`SLACK_WEBHOOK_URL` onto traced
+kubectl calls. Also a one-shot CLI:
+`qube [--plain|--raw-trace|--no-trace] <cmd> [args…]`.
 
-Because the TUI execs whatever `bot.py`/`HANDLERS` the manifest defines,
-new bot commands appear in it automatically — but keep the module-level
-names it rewires (`k8s_raw`, `promq`, `am_json`, `post`, `HANDLERS`,
-`ALIASES`, `USAGE`, `WIKI_DIR`) stable.
+Because QubeCommander execs whatever `bot.py`/`HANDLERS` the manifest
+defines, new bot commands appear in it automatically — but keep the
+module-level names it rewires (`k8s_raw`, `promq`, `am_json`, `post`,
+`HANDLERS`, `ALIASES`, `USAGE`, `WIKI_DIR`) stable.
