@@ -31,11 +31,12 @@ spec:
         - name: postgres
           resources:
             requests:
-              cpu: 200m
-              memory: 1Gi
+              cpu: 100m      # 0.1 cores
+              memory: 512Mi
             limits:
-              cpu: 6400m
-              memory: 6Gi
+              cpu: 1000m     # 1 core
+              memory: 2Gi    # 30d peak 704Mi — 2Gi is growth headroom,
+                             # not the OOM fix (that was immich-server)
 
 ---
 apiVersion: apps/v1
@@ -82,11 +83,14 @@ spec:
         - name: immich-server
           resources:
             requests:
-              cpu: 200m      # 0.2 cores
-              memory: 512Mi
+              cpu: 200m      # 0.2 cores — compressible, bursts to limit anyway
+              memory: 1Gi    # keeps eviction score sane
             limits:
-              cpu: 2000m     # 2 cores
-              memory: 2Gi
+              cpu: 6400m     # 6.4 cores = 80% of an 8-core node — imports/
+                             # transcoding are CPU-hungry (photoprism parity)
+              memory: 6Gi    # OOMKilled at 2Gi with a 2029Mi observed peak
+                             # (3 restarts in 30d) — same failure as
+                             # photoprism imports pre-#78
 
 ---
 apiVersion: apps/v1
