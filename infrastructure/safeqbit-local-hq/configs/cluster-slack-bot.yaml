@@ -96,10 +96,16 @@
 #     reads a new resource, add get/list to the ClusterRole below AND
 #     update workbook/slack-bot.md. Keep it read-only.
 #   - TESTING WITHOUT SLACK: every handler is a plain function taking
-#     (response_url, args) — exec bot.py up to `app = App(`, monkeypatch
-#     k8s_raw/promq/post with kubectl-get-raw shims, call handlers
-#     directly. This is how v4 and ps were verified against the live
-#     cluster pre-merge (harness pattern: workbook/slack-bot.md → Ops).
+#     (response_url, args) — the old exec-and-monkeypatch harness is now
+#     BUILT IN: `python3 bot.py <cmd> [args…]` runs any handler with
+#     workstation kubectl credentials (use_local_shims: kubectl get --raw,
+#     Prometheus/Alertmanager via the apiserver service proxy) and prints
+#     the Slack-formatted answer. The Slack bootstrap only runs with no
+#     argv (slack_main), so in-cluster behaviour is unchanged.
+#   - TUI: ~/git/cluster-bot/tui.py wraps these same handlers in an
+#     htop-style terminal task manager (extracts bot.py + wiki from these
+#     manifests, or falls back to the live ConfigMaps). It installs its
+#     own traced shims, so keep the handler/global structure stable.
 #   - ROLLOUT: Flux applies this file, but the pod only reads /bot/bot.py
 #     at start — after every ConfigMap change delete the bot pods ONE AT A
 #     TIME (kubectl -n monitoring delete pod <a>, wait Ready, then <b>).
@@ -222,13 +228,14 @@ metadata:
 data:
   bot.py: |
     #!/usr/bin/env python3
-    """Slack Socket Mode bot for on-demand cluster queries (read-only)."""
+    """On-demand cluster queries (read-only). Two transports, one set of
+    handlers: in-cluster it is the Slack Socket Mode bot (slack_main);
+    off-cluster the SAME file runs `python3 bot.py <cmd>` — or backs the
+    cluster-bot TUI — with kubectl-credential shims (use_local_shims).
+    slack_bolt is only imported on the Slack path."""
     import json, os, socket, ssl, subprocess, time
     import urllib.error, urllib.parse, urllib.request
     from datetime import datetime, timezone
-
-    from slack_bolt import App
-    from slack_bolt.adapter.socket_mode import SocketModeHandler
 
     # Trailing dot = absolute name; survives the cluster's ndots/search-domain
     # quirks under musl (see project DNS notes).
@@ -238,7 +245,9 @@ data:
     AM = os.environ.get(
         "ALERTMANAGER_BASE",
         "http://monitoring-kube-prometheus-alertmanager.monitoring.svc.cluster.local.:9093")
-    APISERVER = (f"https://{os.environ['KUBERNETES_SERVICE_HOST']}"
+    # .get so the file also imports outside a pod (local mode / TUI —
+    # k8s_raw gets replaced there and never touches this default).
+    APISERVER = (f"https://{os.environ.get('KUBERNETES_SERVICE_HOST', 'kubernetes.default.svc')}"
                  f":{os.environ.get('KUBERNETES_SERVICE_PORT', '443')}")
     SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
     ALLOWED = {u.strip() for u in
@@ -319,6 +328,12 @@ data:
         if d.get("status") != "success":
             raise RuntimeError(f"promql failed: {q[:60]}")
         return d["data"]["result"]
+
+    def am_json(path):
+        """Alertmanager GET — a function (not inline urlopen) so local
+        mode can reroute it through the apiserver service proxy."""
+        with urllib.request.urlopen(f"{AM}{path}", timeout=15) as r:
+            return json.load(r)
 
     def post(response_url, text):
         body = json.dumps({"text": text[:39000]}).encode()
@@ -1579,8 +1594,7 @@ data:
              else ":shrug: no jobs or cronjobs found")
 
     def silences(rurl, args):
-        with urllib.request.urlopen(f"{AM}/api/v2/silences", timeout=15) as r:
-            sil = json.load(r)
+        sil = am_json("/api/v2/silences")
         live = [s for s in sil
                 if s.get("status", {}).get("state") in ("active", "pending")]
         if not live:
@@ -1822,31 +1836,105 @@ data:
                "guide": "wiki", "runbooks": "wiki", "manual": "man",
                "commands": "help", "list": "help"}
 
-    app = App(token=os.environ["SLACK_BOT_TOKEN"])
+    # ---------- transports: Slack socket mode / local kubectl (TUI, CLI) ----------
 
-    @app.command("/cluster")
-    def cluster_cmd(ack, command):
-        args = (command.get("text") or "").split()
-        sub = args[0].lower() if args else "help"
-        sub = ALIASES.get(sub, sub)
-        if ALLOWED and command.get("user_id") not in ALLOWED:
-            ack(":no_entry: you are not authorized to use this bot")
-            return
-        if sub not in HANDLERS:
-            ack(USAGE)
-            return
-        # Slack requires the ack within 3s; the real answer follows via
-        # response_url (visible only to the invoker).
-        ack(f":hourglass_flowing_sand: `{sub}` — gathering data…")
-        rurl = command["response_url"]
-        try:
-            HANDLERS[sub](rurl, args[1:])
-        except Exception as e:
-            post(rurl, f":x: `{sub}` failed: {type(e).__name__}: {e}")
+    def slack_main():
+        """In-cluster entrypoint: Socket Mode + /cluster slash command.
+        slack_bolt imports live here so the file also loads on a
+        workstation that only has the stdlib."""
+        from slack_bolt import App
+        from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-    if __name__ == "__main__":
+        app = App(token=os.environ["SLACK_BOT_TOKEN"])
+
+        @app.command("/cluster")
+        def cluster_cmd(ack, command):
+            args = (command.get("text") or "").split()
+            sub = args[0].lower() if args else "help"
+            sub = ALIASES.get(sub, sub)
+            if ALLOWED and command.get("user_id") not in ALLOWED:
+                ack(":no_entry: you are not authorized to use this bot")
+                return
+            if sub not in HANDLERS:
+                ack(USAGE)
+                return
+            # Slack requires the ack within 3s; the real answer follows via
+            # response_url (visible only to the invoker).
+            ack(f":hourglass_flowing_sand: `{sub}` — gathering data…")
+            rurl = command["response_url"]
+            try:
+                HANDLERS[sub](rurl, args[1:])
+            except Exception as e:
+                post(rurl, f":x: `{sub}` failed: {type(e).__name__}: {e}")
+
         print("cluster-slack-bot starting (socket mode)", flush=True)
         SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
+
+    # Service-proxy paths let a workstation reach Prometheus/Alertmanager
+    # with nothing but apiserver access — same trick as the test harness
+    # (workbook/slack-bot.md → Ops).
+    PROM_PROXY = ("/api/v1/namespaces/monitoring/services/"
+                  "monitoring-kube-prometheus-prometheus:9090/proxy")
+    AM_PROXY = ("/api/v1/namespaces/monitoring/services/"
+                "monitoring-kube-prometheus-alertmanager:9093/proxy")
+
+    def use_local_shims():
+        """LOCAL MODE (never runs in the pod): swap the in-cluster data
+        clients for kubectl-backed ones so every handler runs unchanged
+        with workstation credentials — read-only verbs only. Used by
+        `python3 bot.py <cmd>` and by the cluster-bot TUI (which installs
+        its own traced variants of the same shims)."""
+        global k8s_raw, promq, am_json, post
+
+        def k8s_raw(path, timeout=30):
+            r = subprocess.run(["kubectl", "get", "--raw", path],
+                               capture_output=True, text=True, timeout=timeout)
+            if r.returncode:
+                err = (r.stderr or "").strip()
+                # map kubectl's error text onto the HTTPError codes the
+                # handlers' error paths expect (`logs prev` wants a 400)
+                code = (400 if "BadRequest" in err else
+                        404 if "NotFound" in err else
+                        403 if "Forbidden" in err else 500)
+                raise urllib.error.HTTPError(path, code, err[:300], None, None)
+            return r.stdout
+
+        def promq(q):
+            d = json.loads(k8s_raw(f"{PROM_PROXY}/api/v1/query?query="
+                                   + urllib.parse.quote(q, safe="")))
+            if d.get("status") != "success":
+                raise RuntimeError(f"promql failed: {q[:60]}")
+            return d["data"]["result"]
+
+        def am_json(path):
+            return json.loads(k8s_raw(AM_PROXY + path))
+
+        def post(rurl, text):
+            print(text, flush=True)
+
+        def unavailable(label):
+            def handler(rurl, args):
+                post(rurl, f":x: `{label}` runs the in-cluster report "
+                           "scripts — use Slack, or the TUI (which bridges "
+                           "them locally)")
+            return handler
+
+        HANDLERS["summary"] = unavailable("summary")
+        HANDLERS["backups"] = unavailable("backups")
+
+    if __name__ == "__main__":
+        import sys
+        if len(sys.argv) > 1:
+            # `bot.py <cmd> [args…]` — one handler, kubectl creds,
+            # Slack-formatted answer on stdout.
+            use_local_shims()
+            sub = ALIASES.get(sys.argv[1].lower(), sys.argv[1].lower())
+            if sub in HANDLERS:
+                HANDLERS[sub]("-", sys.argv[2:])
+            else:
+                post("-", USAGE)
+        else:
+            slack_main()
 
 ---
 apiVersion: apps/v1
