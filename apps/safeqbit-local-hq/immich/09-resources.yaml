@@ -31,11 +31,11 @@ spec:
         - name: postgres
           resources:
             requests:
-              cpu: 100m      # 0.1 cores
-              memory: 256Mi
-            limits:
-              cpu: 1000m     # 1 core
+              cpu: 200m
               memory: 1Gi
+            limits:
+              cpu: 6400m
+              memory: 6Gi
 
 ---
 apiVersion: apps/v1
