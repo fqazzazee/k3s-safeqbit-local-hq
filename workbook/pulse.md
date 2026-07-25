@@ -216,7 +216,16 @@ small and it's the only version-portable copy of the target credentials.
   the pod cleared it until the next save. **Fixed upstream in v6.1.1**
   (maintainer, 2026-07-23). If it ever comes back: `restartCount` stays 0, agent
   logs show HTTP 200s, and `/api/state` is the tell — the flap is server-side,
-  not the agent.
+  not the agent. **Retested on v6.1.1 2026-07-25** (throwaway server, emptyDir
+  `/data`, real cluster reporting): a monitor reload now empties the cluster for
+  **one agent report interval and no more** — 19s, then 57 consecutive 5s
+  samples steady at 1 cluster / 3 nodes / 118 pods. Two notes for any future
+  retest: v6's `/api/state` no longer has a `kubernetesClusters` key at all
+  (unified `resources`, so count `.resources[] | select(.type=="k8s-cluster")`),
+  and the reload is triggered by a **node** save — `POST /api/config/nodes`;
+  `/api/config/system` answers 405 to POST/PUT/PATCH even with a valid admin
+  session + CSRF, and the UI bundle never calls it for writes. The server log
+  line that marks the reload is `monitoring loop stopped`.
 - **Agent: `API token is already in use by agent "mac-…"`** — `PULSE_AGENT_ID` is
   missing/blank. With the single Deployment it's set to `safeqbit-local-hq`; if
   you ever fan out, every reporter must share that one ID.
