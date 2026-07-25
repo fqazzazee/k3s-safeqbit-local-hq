@@ -45,10 +45,21 @@ spec:
       serviceAccountName: pulse-agent
       containers:
         - name: pulse-agent
-          image: rcourtman/pulse:v5.1.36
+          image: rcourtman/pulse:v6.1.1
           command: ["/opt/pulse/bin/pulse-agent-linux-amd64"]
           args:
             - --enable-kubernetes
+            # v6 changed the health server's default bind from ":9191" to
+            # "127.0.0.1:9191". The kubelet dials the POD IP, not loopback, so
+            # leaving the default silently fails both probes below and
+            # CrashLoopBackOffs the agent. Bind all interfaces explicitly.
+            - --health-addr
+            - ":9191"
+            # v6 agents self-update: ~5s after start, then hourly. That defeats
+            # the pinned image tag (Git stops describing what's running) and
+            # fights readOnlyRootFilesystem anyway. Upgrades happen here, in the
+            # manifest, or not at all.
+            - --disable-auto-update
           env:
             - name: PULSE_URL
               value: "http://pulse.pulse.svc.cluster.local:7655"
@@ -71,6 +82,14 @@ spec:
             # listening addr :9191").
             - containerPort: 9191
               name: health
+          volumeMounts:
+            # v6 persists the resolved agent identity to
+            # /var/lib/pulse-agent/agent-id on start. The root FS is read-only,
+            # so give it a writable scratch dir. emptyDir (not a PVC) is
+            # deliberate: identity is pinned by PULSE_AGENT_ID below, so nothing
+            # here needs to survive a restart.
+            - name: agent-state
+              mountPath: /var/lib/pulse-agent
           readinessProbe:
             tcpSocket:
               port: 9191
@@ -94,3 +113,6 @@ spec:
               memory: 128Mi
             limits:
               memory: 512Mi
+      volumes:
+        - name: agent-state
+          emptyDir: {}
