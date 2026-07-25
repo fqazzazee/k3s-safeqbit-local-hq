@@ -106,7 +106,45 @@ Velero backup. Nothing about targets is in Git.
 
 ---
 
-## v5 → v6 upgrade (2026-07-24)
+## v5 → v6 upgrade — DONE 2026-07-25
+
+Cutover took ~3 minutes, both pods clean on the first roll, **0 restarts**. The
+`/data` migration logged exactly one line — `Migrated legacy API tokens to
+default organization binding` (6 tokens) — and nothing else. All targets came
+back online: 3 Proxmox nodes, pbs02, the Docker host agent, and `in-cluster`.
+
+Order that worked, worth repeating for the next major: Flux `apps` was still on
+the pre-merge revision, so it got **suspended first**
+(`kubectl patch kustomization apps -n flux-system --type merge -p
+'{"spec":{"suspend":true}}'`), then both restore points were taken, then
+`suspend:false` + a `reconcile.fluxcd.io/requestedAt` annotation to fire it
+immediately. Suspending buys the window; without it a 10m interval can start the
+one-way migration mid-backup.
+
+Two v6 behaviours to expect and not panic about:
+
+- **The agent logs one `connection refused` at startup** when both pods roll
+  together — it buffers and recovers on the next 30s cycle. Read
+  `pulse_agent_destination_delivery_up` *after* a full interval, not at t+30s.
+- **`kubectl top` shows the server at ~87Mi** right after boot; it climbs as
+  SQLite warms. The 1Gi limit is sized for the warm figure (~400Mi+), not this.
+
+Restore points kept: `pulse-pre-v6-20260725` (rollback) and
+`pulse-post-v6-20260725` (current), both as Velero/B2 backups *and* Longhorn
+snapshots. The three v5-era weeklies and a duplicate pre-v6 backup were deleted
+2026-07-25. Volume `actualSize` went 603MB → 884MB from holding the two
+snapshots; that unwinds when they're trimmed.
+
+Pre-existing, NOT caused by the upgrade: **pbs01 offline** (`no route to host`
+to 10.10.10.20:8007, sits in the scheduler dead-letter queue) and the
+`vm-prod-paw-conspaw01` disk-at-95% alerts.
+
+Still on v5: the **Docker host and Proxmox node agents** (v5.1.35 / v5.1.36).
+The server logs `Deprecated Unified Agent compatibility alias used; upgrade
+agents to canonical /api/agents/agent/* endpoints` for them — they work, but
+that's the next upgrade to schedule.
+
+### Upgrade notes (kept for the next major)
 
 `v5.1.36` → `v6.1.1`, direct — no intermediate hop. v5 went maintenance-only on
 2026-07-04 (critical fixes only, through 2026-10-02) and `v5.1.36` is its final
@@ -174,8 +212,16 @@ scope.
 kubectl -n pulse rollout status deploy/pulse --timeout=5m
 kubectl -n pulse rollout status deploy/pulse-agent --timeout=5m
 kubectl -n pulse logs deploy/pulse-agent --tail=30 | grep -iE 'forbidden|health|auto-update'
-kubectl -n pulse exec deploy/pulse -- wget -qO- localhost:7655/api/version
-kubectl -n pulse exec deploy/pulse -- wget -qO- localhost:7655/api/monitoring/scheduler/health
+kubectl -n pulse exec deploy/pulse -- wget -qO- 127.0.0.1:7655/api/version
+# Anything past /api/version needs a session — port-forward and log in instead:
+#   kubectl -n pulse port-forward deploy/pulse 17655:7655 &
+#   curl -sc jar -X POST localhost:17655/api/login -H 'Content-Type: application/json' \
+#     --data-raw '{"username":"admin","password":"<vaultwarden>"}'
+#   curl -sb jar localhost:17655/api/monitoring/scheduler/health | jq
+# NOTE: use 127.0.0.1 or the short name `pulse:7655` inside the pods. The image is
+# Alpine/musl and the pod resolver runs ndots:5, so busybox wget hard-fails on the
+# 4-dot pulse.pulse.svc.cluster.local ("bad address"). The Go agent is unaffected —
+# it falls back to the absolute name. See project-dns-search-amplification.
 ```
 
 Then in the UI: every Proxmox node still polling, the Docker host agent still
