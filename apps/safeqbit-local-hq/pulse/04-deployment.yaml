@@ -42,7 +42,7 @@ spec:
     spec:
       containers:
         - name: pulse
-          image: rcourtman/pulse:v5.1.36
+          image: rcourtman/pulse:v6.1.1
           ports:
             - containerPort: 7655
               name: http
@@ -61,6 +61,16 @@ spec:
                   key: PULSE_AUTH_PASS
             - name: FRONTEND_PORT
               value: "7655"
+            # v6 phones home to license.pulserelay.pro on start and every 24h
+            # with install/feature telemetry unless this is off. Community
+            # monitoring needs no activation, so there is nothing this buys us.
+            - name: PULSE_TELEMETRY
+              value: "false"
+            # Canonical external URL. Without it v6 guesses from the request
+            # host when building links (notifications, OIDC redirects) and can
+            # advertise the in-cluster service name instead of the ingress.
+            - name: PULSE_PUBLIC_URL
+              value: "https://pulse.local.safeqbit.com"
           volumeMounts:
             - name: data
               mountPath: /data
@@ -79,12 +89,16 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 5
+          # v5.1.36 sat at ~392Mi against the old 512Mi cap — a ~120Mi margin
+          # for a process that keeps SQLite (metrics.db, notification_queue.db)
+          # hot. v6 adds Patrol, the action lifecycle, and audit stores on top,
+          # so the old ceiling was one feature away from an OOMKill.
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
+              memory: 256Mi
             limits:
-              memory: 512Mi
+              memory: 1Gi
       volumes:
         - name: data
           persistentVolumeClaim:

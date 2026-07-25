@@ -1,11 +1,19 @@
 # 06-agent-rbac.yaml
-# RBAC for the Pulse k3s agent (DaemonSet, 08-agent-daemonset.yaml).
+# RBAC for the Pulse k3s agent (Deployment, 08-agent-deployment.yaml).
 #
 # The agent reads cluster state through the in-cluster Kubernetes API, so it
 # needs a ServiceAccount with READ-ONLY (get/list/watch) access to the
-# resources Pulse surfaces: nodes, pods, and deployments. No write/exec/secret
-# access — this is a monitoring read path only. ClusterRole (not Role) because
-# nodes are cluster-scoped and we watch pods/deployments across all namespaces.
+# resources Pulse surfaces. No write/exec/secret access — this is a monitoring
+# read path only. ClusterRole (not Role) because nodes are cluster-scoped and
+# we watch workloads across all namespaces.
+#
+# v6 widened what the Kubernetes module collects well past v5's
+# nodes/pods/deployments: the platform pages now show every workload kind,
+# namespaces, PVCs and events, and the Recovery/Protection surface reads
+# VolumeSnapshots and Velero backups. Anything missing here doesn't fail
+# loudly — the agent logs "kubernetes access forbidden (RBAC)" and the matching
+# panel just renders empty, which is a miserable thing to debug. Grant the read
+# and keep it read-only.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -24,10 +32,35 @@ metadata:
     app.kubernetes.io/component: agent
 rules:
   - apiGroups: [""]
-    resources: ["nodes", "pods"]
+    resources:
+      - nodes
+      - pods
+      - namespaces
+      - persistentvolumeclaims
+      - events
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["deployments"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  # Node/pod CPU+memory from metrics-server, for the resource columns.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+  # Recovery/Protection views: which volumes actually have restore points.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "schedules"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

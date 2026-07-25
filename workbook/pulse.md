@@ -9,11 +9,11 @@ Server added 2026-06-29. k3s agent added 2026-06-30.
 - **Namespace:** `pulse`
 - **Hostname:** https://pulse.local.safeqbit.com (admin UI, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/pulse/`
-- **Image:** `rcourtman/pulse:v5.1.35` (pinned; bump deliberately after reading upstream release notes)
+- **Image:** `rcourtman/pulse:v6.1.1` (pinned; bump deliberately after reading upstream release notes — see [v5 → v6 upgrade](#v5--v6-upgrade-2026-07-24))
 - **Server port:** `7655` (ClusterIP `pulse`, in-cluster DNS `pulse.pulse.svc.cluster.local:7655`)
 - **Storage:** `pulse-data` 2Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
 - **Web-UI auth:** built-in, `PULSE_AUTH_USER` / `PULSE_AUTH_PASS` from SealedSecret `pulse-auth` (`03-sealed-secret.yaml`). Plaintext pass auto-hashed on startup → auth enforced from first boot, no open window. Admin password stored in Vaultwarden.
-- **Backup:** `infrastructure/.../velero-schedule-pulse.yaml` — weekly to B2, Sundays 05:00 UTC, 180d retention.
+- **Backup:** `infrastructure/.../velero-schedule-pulse.yaml` — weekly to B2, Sundays 05:00 UTC, 60d retention (tuned down from 180d, 2026-07-03).
 
 ---
 
@@ -106,12 +106,117 @@ Velero backup. Nothing about targets is in Git.
 
 ---
 
+## v5 → v6 upgrade (2026-07-24)
+
+`v5.1.36` → `v6.1.1`, direct — no intermediate hop. v5 went maintenance-only on
+2026-07-04 (critical fixes only, through 2026-10-02) and `v5.1.36` is its final
+release. Licensing is a non-issue: v6 dropped system-count metering and
+Proxmox/Docker/Kubernetes monitoring, alerts, notifications and OIDC are all
+Community — no activation, no outbound license call. Relay/Pro only gate remote
+access, push notifications and extended history (14d/90d).
+
+**The first v6 boot migrates `/data` in place, one way.** Re-pinning the old tag
+does *not* undo it — a rollback means restoring the volume. Take the restore
+points below *before* Flux reconciles the bump.
+
+### Four things v6 breaks that a bare tag bump would not fix
+
+Verified against the `v6.1.1` binaries before merging (throwaway pods, bogus
+token, nothing registered server-side):
+
+1. **`--health-addr` default moved from `:9191` to `127.0.0.1:9191`.** Confirmed
+   in `/proc/net/tcp`: `0100007F:23E7`. The kubelet dials the *pod IP*, so both
+   `tcpSocket: 9191` probes fail and the agent CrashLoopBackOffs. Pinned back to
+   `:9191` in `08-agent-deployment.yaml`.
+2. **Agent auto-update is on by default** (`"auto_update":true` at startup) — it
+   updates ~5s after start, then hourly, which silently drifts the running binary
+   off the pinned tag. `--disable-auto-update`.
+3. **Agent persists its identity to `/var/lib/pulse-agent/agent-id`**, which the
+   read-only root FS refuses. `emptyDir` mounted there (identity itself stays
+   pinned by `PULSE_AGENT_ID`).
+4. **RBAC was too narrow.** v6's Kubernetes module also reads namespaces,
+   statefulsets/daemonsets/replicasets, jobs/cronjobs, PVCs, events,
+   `metrics.k8s.io`, plus VolumeSnapshots and Velero backups for the
+   Recovery/Protection view. Missing grants don't fail loudly — the agent logs
+   `kubernetes access forbidden (RBAC)` and the panel renders empty.
+
+Also in the same change: server memory limit `512Mi → 1Gi` (v5 already sat at
+~392Mi and v6 adds Patrol + action/audit stores), `PULSE_TELEMETRY=false` (v6
+pings `license.pulserelay.pro` on start and every 24h by default), and
+`PULSE_PUBLIC_URL`. `FRONTEND_PORT` was already correct — v6 only honours the
+legacy `PORT` as a deprecated fallback.
+
+### Restore points (do this before merging)
+
+```sh
+# Layer 1 — Longhorn snapshot: fast local revert, seconds to take
+VOL=$(kubectl -n pulse get pvc pulse-data -o jsonpath='{.spec.volumeName}')
+kubectl -n longhorn-system get volume "$VOL"          # confirm attached/healthy
+
+# Layer 3 — off-cluster copy to B2 (bare `kubectl get backup` in the velero ns
+# resolves to backups.longhorn.io — always spell out backups.velero.io)
+kubectl -n velero exec deploy/velero -- \
+  /velero backup create pulse-pre-v6-$(date +%Y%m%d) --from-schedule pulse-weekly
+kubectl -n velero get backups.velero.io | grep pulse-pre-v6
+
+# Layer 0 — Pulse's own encrypted backup, UI: Settings → System → Recovery →
+# Create Backup, then download it OFF the cluster. This is the only artefact
+# that survives a bad /data migration without a volume restore.
+```
+
+Also worth a look before the bump: **Settings → System → Updates** in v5 renders
+an upgrade plan that validates the server update path, agent continuity and token
+scope.
+
+### Post-upgrade checks
+
+```sh
+kubectl -n pulse rollout status deploy/pulse --timeout=5m
+kubectl -n pulse rollout status deploy/pulse-agent --timeout=5m
+kubectl -n pulse logs deploy/pulse-agent --tail=30 | grep -iE 'forbidden|health|auto-update'
+kubectl -n pulse exec deploy/pulse -- wget -qO- localhost:7655/api/version
+kubectl -n pulse exec deploy/pulse -- wget -qO- localhost:7655/api/monitoring/scheduler/health
+```
+
+Then in the UI: every Proxmox node still polling, the Docker host agent still
+reporting, cluster `safeqbit-local-hq` online, and fire one test notification.
+**Prune the old restore points only after the new version has soaked** — see
+"Retiring pre-upgrade restore points" below.
+
+### Retiring pre-upgrade restore points
+
+Once v6 has run clean for a week (and the next scheduled `pulse-weekly` has
+succeeded *on v6*), the pre-upgrade artefacts are dead weight:
+
+```sh
+# Velero: NEVER kubectl delete the CR — backup-sync resurrects it from B2
+kubectl -n velero exec deploy/velero -- \
+  /velero backup delete pulse-pre-v6-<DATE> --confirm
+
+# Longhorn: delete the manual pre-upgrade snapshot in the UI (Volume → Snapshots),
+# then let the weekly-trim RecurringJob reclaim the space
+```
+
+Keep the downloaded in-app encrypted backup until the *next* major upgrade — it's
+small and it's the only version-portable copy of the target credentials.
+
+---
+
 ## Troubleshooting
 
 - **Agent flaps online/offline on the dashboard** — more than one pod is
   reporting the same cluster under one `PULSE_AGENT_ID`. The Kubernetes agent is a
   **single-replica Deployment** for exactly this reason; don't scale it up or
   convert it back to a DaemonSet. (Original root cause of the post-deploy flap.)
+- **k3s cluster flashes in/out of the dashboard every ~30s after any UI config
+  save, and `/api/state` shows `"kubernetesClusters": []`** — upstream
+  [#1558](https://github.com/rcourtman/Pulse/issues/1558): `Router.SetMonitor`
+  never rebound `kubernetesAgentHandlers`, so after a config reload the reports
+  kept landing in an orphaned monitor while the live one stayed empty. Restarting
+  the pod cleared it until the next save. **Fixed upstream in v6.1.1**
+  (maintainer, 2026-07-23). If it ever comes back: `restartCount` stays 0, agent
+  logs show HTTP 200s, and `/api/state` is the tell — the flap is server-side,
+  not the agent.
 - **Agent: `API token is already in use by agent "mac-…"`** — `PULSE_AGENT_ID` is
   missing/blank. With the single Deployment it's set to `safeqbit-local-hq`; if
   you ever fan out, every reporter must share that one ID.
