@@ -1,0 +1,120 @@
+# The Pangolin app itself: API (:3000), internal API (:3001), Next.js dashboard
+# (:3002), integration API (:3003). Stateless apart from Postgres — all orgs,
+# users, sites, resources, policies and the EE license registration live in CNPG.
+#
+# Image tag family on Docker Hub:
+#   1.x                 community + sqlite
+#   postgresql-1.x      community + postgres
+#   ee-1.x              Enterprise + sqlite
+#   ee-postgresql-1.x   Enterprise + postgres   <- this one
+# Enterprise is required for browser RDP/VNC/SSH; the key is free under $100k
+# revenue and is applied at /admin/license AFTER first login. EE <-> community
+# is a tag swap, not a one-way door — the schema is identical.
+#
+# replicas: 1 + Recreate. Pangolin runs schema migrations and background jobs on
+# boot; two instances would need the optional Redis coordination layer that this
+# deployment does not run. Node-loss resilience comes from fast rescheduling,
+# per the cluster's single-writer doctrine (see project-node-loss-resilience).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pangolin
+  namespace: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pangolin
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pangolin
+        app.kubernetes.io/component: server
+    spec:
+      # ndots:1. The cluster's pods inherit search domain local.safeqbit.com,
+      # and the default ndots:5 makes every short FQDN get the search domain
+      # appended first, which upstream answers NOERROR/no-answer — names then
+      # flap or hard-fail. See project-dns-search-amplification.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      containers:
+        - name: pangolin
+          image: docker.io/fosrl/pangolin:ee-postgresql-1.21.1
+          env:
+            # CNPG generates this Secret when the Cluster is bootstrapped; `uri`
+            # is a ready-made postgresql:// DSN pointing at pangolin-cnpg-rw.
+            # driver.ts prefers this env var over config.yml's postgres block.
+            - name: POSTGRES_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-cnpg-app
+                  key: uri
+            - name: SERVER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-server-secret
+                  key: SERVER_SECRET
+          ports:
+            - name: api
+              containerPort: 3000
+            - name: internal
+              containerPort: 3001
+            - name: next
+              containerPort: 3002
+            - name: integration
+              containerPort: 3003
+          volumeMounts:
+            # NOTE: subPath mounts do NOT live-update when the ConfigMap changes.
+            # After editing 06-pangolin-config.yaml, restart this Deployment.
+            - name: config
+              mountPath: /app/config/config.yml
+              subPath: config.yml
+              readOnly: true
+            - name: acme
+              mountPath: /app/config/letsencrypt
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /api/v1/
+              port: internal
+            periodSeconds: 5
+            failureThreshold: 60   # first boot runs the full schema migration
+          livenessProbe:
+            httpGet:
+              path: /api/v1/
+              port: internal
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/
+              port: internal
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: pangolin-config
+        # Read-only view of the edge Traefik's ACME state. Pangolin's EE build
+        # scrapes acme.json to flip a resource's cert status pending -> valid;
+        # without it the server logs "cannot stat config/letsencrypt/acme.json"
+        # every 5s and every resource cert sits "pending" (hit on 2026-06-16).
+        - name: acme
+          persistentVolumeClaim:
+            claimName: pangolin-acme
+            readOnly: true

@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 01-namespace.yaml
+  - 02-cnpg-cluster.yaml
+  - 03-cnpg-scheduled-backup.yaml
+  - 04-sealed-secret-server.yaml
+  - 05-sealed-secret-cloudflare.yaml
+  - 06-pangolin-config.yaml
+  - 07-pangolin-service.yaml
+  - 08-pangolin-deployment.yaml
+  - 09-edge-pvcs.yaml
+  - 10-edge-config.yaml
+  - 11-edge-deployment.yaml
+  - 12-edge-service.yaml
+  - 13-edge-service-lan.yaml
+  # Phase 2 — the in-cluster Newt connector. Its credentials are issued by the
+  # Pangolin UI when you create the Site, so they cannot be sealed before the
+  # first login. Uncomment both once 15 exists; see the header of 14 for the
+  # kubeseal command.
+  # - 14-newt-deployment.yaml
+  # - 15-sealed-secret-newt.yaml
+
+commonLabels:
+  cluster: safeqbit-local-hq
+  managed-by: flux

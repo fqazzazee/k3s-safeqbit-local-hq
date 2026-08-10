@@ -19,11 +19,12 @@ resources:
   - guacamole
   - pulse
   - home-assistant
-  # pangolin removed 2026-06-18 — moving to a standalone Linux VM (docker-compose).
-  # The k3s/MetalLB topology forced a non-stock split (separate edge/gerbil IPs,
-  # /ping sidecar, hairpin) and the in-cluster Newt connector can't carry data
-  # through the WG return path. See workbook/pangolin.md for the full history
-  # (incl. the Gerbil 1.4.2 hole-punch fix) before any VM redeploy.
+  # Pangolin was removed 2026-06-18 and redeployed 2026-08-10 as hand-authored
+  # manifests. The blocker then was the split topology k3s seemed to force; it
+  # is gone now that Gerbil and Traefik share one pod (upstream's
+  # `network_mode: service:gerbil`) behind one mixed TCP/UDP LoadBalancer.
+  # See workbook/pangolin.md.
+  - pangolin
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx

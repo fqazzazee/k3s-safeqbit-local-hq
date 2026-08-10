@@ -1,0 +1,51 @@
+# In-cluster address of the edge pod, with a PINNED ClusterIP.
+#
+# The pin is deliberate and load-bearing. An in-cluster Newt must reach the edge
+# WITHOUT going out to the MetalLB IP and back in (that hairpin is what broke
+# the June deployment), so 14-newt-deployment.yaml uses hostAliases to resolve
+# the edge and dashboard hostnames to this address. hostAliases needs a literal
+# IP, so this Service cannot be allowed to float.
+#
+# 10.43.0.100 is inside the service CIDR's static band (Kubernetes prefers the
+# low end of the range for manual assignment and allocates dynamic ClusterIPs
+# from the upper band), so it will not collide with an auto-assigned Service.
+# Only 10.43.0.1 (kubernetes) and 10.43.0.10 (kube-dns) are taken.
+#
+# This Service also carries :3004 — Pangolin calls Gerbil's API here, per the
+# --reachableAt flag in 11-edge-deployment.yaml. That port is intentionally NOT
+# on the LoadBalancer: it is an internal control channel.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pangolin-edge
+  namespace: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: edge
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.0.100
+  selector:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: edge
+  ports:
+    - name: web
+      port: 80
+      targetPort: web
+      protocol: TCP
+    - name: websecure
+      port: 443
+      targetPort: websecure
+      protocol: TCP
+    - name: gerbil-api
+      port: 3004
+      targetPort: gerbil-api
+      protocol: TCP
+    - name: wg
+      port: 51820
+      targetPort: wg
+      protocol: UDP
+    - name: wg-clients
+      port: 21820
+      targetPort: wg-clients
+      protocol: UDP

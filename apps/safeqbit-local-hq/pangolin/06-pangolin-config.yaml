@@ -1,0 +1,75 @@
+# Pangolin's config.yml, adapted from upstream's installer template
+# (fosrl/pangolin @1.21.1, install/config/config.yml).
+#
+# Two keys are DELIBERATELY absent and injected as env vars instead, so no
+# secret ever lands in Git or in a ConfigMap:
+#   - server.secret            -> SERVER_SECRET               (04, sealed)
+#   - postgres.connection_string -> POSTGRES_CONNECTION_STRING (CNPG's own
+#     `pangolin-cnpg-app` Secret, key `uri`)
+# Both fallbacks are real upstream behaviour, not a hack:
+# readConfigFile.ts assigns `data.server.secret = process.env.SERVER_SECRET`
+# when the key is missing, and db/pg/driver.ts checks
+# POSTGRES_CONNECTION_STRING *before* the config file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pangolin-config
+  namespace: pangolin
+data:
+  config.yml: |
+    gerbil:
+        start_port: 51820
+        clients_start_port: 21820
+        # The address every Newt/Olm client dials for WireGuard. A HOSTNAME, not
+        # an IP — this is the load-bearing choice of this deployment:
+        #
+        #   - On the LAN it resolves (Cloudflare) to 10.10.13.52, the MetalLB IP
+        #     of the edge Service, where both Traefik (:80/:443) and Gerbil
+        #     (:51820/:21820 udp) live because they share one pod netns.
+        #   - INSIDE the cluster, the Newt pod overrides it via hostAliases to
+        #     the edge's pinned ClusterIP (10.43.0.100), so an in-cluster Newt
+        #     never dials the MetalLB IP and never hairpins. Newt resolves this
+        #     name itself at connect time (util.ResolveDomain -> net.LookupIP on
+        #     a CGO_ENABLED=0 binary, so /etc/hosts wins), which is what makes
+        #     the override possible. See 14-newt-deployment.yaml.
+        base_endpoint: "pangolin-edge.local.safeqbit.com"
+
+    app:
+        dashboard_url: "https://pangolin.local.safeqbit.com"
+        log_level: "info"
+        # Off to match the cluster's privacy posture (cf. authentik error reporting).
+        telemetry:
+            anonymous_usage: false
+        notifications:
+            product_updates: false
+            new_releases: false
+
+    domains:
+        domain1:
+            base_domain: "local.safeqbit.com"
+            cert_resolver: "letsencrypt"
+            # Per-host certs, matching cert-manager's approach for the nginx
+            # apps. The cluster uses no wildcard certs.
+            prefer_wildcard_cert: false
+
+    server:
+        cors:
+            origins: ["https://pangolin.local.safeqbit.com"]
+            methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
+            allowed_headers: ["X-CSRF-Token", "Content-Type"]
+            credentials: false
+
+    # Pangolin GENERATES Traefik routers for every published resource and serves
+    # them at /api/v1/traefik-config, which our edge Traefik polls as its HTTP
+    # provider. These names must match the entrypoints/resolver in 10-edge-config.
+    traefik:
+        http_entrypoint: web
+        https_entrypoint: websecure
+        cert_resolver: letsencrypt
+        prefer_wildcard_cert: false
+
+    flags:
+        require_email_verification: false
+        disable_signup_without_invite: true
+        disable_user_create_org: false
+        allow_raw_resources: true

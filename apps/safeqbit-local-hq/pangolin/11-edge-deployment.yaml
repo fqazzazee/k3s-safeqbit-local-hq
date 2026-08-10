@@ -1,0 +1,187 @@
+# THE EDGE. Gerbil (WireGuard) and Traefik (HTTP) in ONE pod.
+#
+# This single decision is what makes Pangolin work on k3s, and it is why the
+# June 2026 attempt failed. Upstream's compose runs Traefik with
+# `network_mode: service:gerbil`, i.e. Traefik lives in Gerbil's network
+# namespace, so :80/:443 and :51820/:21820-udp are all one endpoint. Two
+# containers in one pod is exactly that construct in Kubernetes — they share a
+# netns, reach each other on localhost, and are fronted by ONE Service.
+#
+# What that buys us, versus the June split (edge on .51, gerbil on .52):
+#   - No MetalLB IP sharing. MetalLB refuses to share an IP unless BOTH
+#     Services use externalTrafficPolicy: Cluster, and Cluster is fatal to
+#     WireGuard: its SNAT rewrites the site's source to a pod IP whose port
+#     roams every ~minute, so the WG endpoint flaps and Gerbil's hole-punch
+#     never registers ("Site last hole punch is too old"). One pod = one
+#     Service = one IP, and we keep Local. See 13-edge-service-lan.yaml.
+#   - No http-echo /ping sidecar. Newt's exit-node preflight is an HTTP GET to
+#     base_endpoint/ping, which only a front Traefik answers — Gerbil never
+#     serves /ping. Traefik is now on that address, so it just works. (Newt
+#     1.15 also skips the preflight entirely when there is a single exit node.)
+#
+# Gerbil pinning: keep it on the release that ships alongside the Pangolin tag.
+# 1.3.1 had a hole-punch registering bug that cost a long debug in June; the fix
+# landed in 1.4.2 ("cache timeout of 2.5s to record hp; fixes registering issue
+# when endpoint was the same" — every exit node here shares one endpoint).
+#
+# replicas: 1 + Recreate — Gerbil's key PVC is RWO, and two Gerbils would both
+# claim to be the exit node.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pangolin-edge
+  namespace: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pangolin
+      app.kubernetes.io/component: edge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pangolin
+        app.kubernetes.io/component: edge
+    spec:
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      initContainers:
+        # A fresh pod netns starts with net.ipv4.ip_forward=0. Gerbil installs
+        # firewall/routing rules on wg0 and relays between peers (a Client
+        # reaching a Site is FORWARDED traffic, not locally-originated), so
+        # without this that path silently blackholes while the tunnel itself
+        # looks healthy. Traffic that Traefik originates would work either way,
+        # which is what makes the failure mode confusing — set it up front.
+        - name: enable-ip-forward
+          image: busybox:1.37
+          command: ["sh", "-c", "sysctl -w net.ipv4.ip_forward=1"]
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        # ---------------------------------------------------------------- gerbil
+        - name: gerbil
+          image: docker.io/fosrl/gerbil:1.4.3
+          args:
+            # What Gerbil tells Pangolin its own API is reachable at. Pangolin
+            # calls this URL to push peer config, so it must be the ClusterIP
+            # Service, not localhost.
+            - --reachableAt=http://pangolin-edge:3004
+            - --generateAndSaveKeyTo=/var/config/key
+            - --remoteConfig=http://pangolin:3001/api/v1/
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN   # manage the wg0 interface and its firewall rules
+                - SYS_MODULE  # load the wireguard kernel module if not present
+          ports:
+            - name: wg
+              containerPort: 51820
+              protocol: UDP
+            - name: wg-clients
+              containerPort: 21820
+              protocol: UDP
+            - name: gerbil-api
+              containerPort: 3004
+              protocol: TCP
+          volumeMounts:
+            - name: gerbil-key
+              mountPath: /var/config
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+        # --------------------------------------------------------------- traefik
+        # Shares this pod's netns with gerbil, so it binds :80/:443 on the very
+        # same address Gerbil serves WireGuard on — upstream's topology exactly.
+        - name: traefik
+          image: docker.io/traefik:v3.7.9
+          args:
+            - --configFile=/etc/traefik/traefik_config.yml
+          securityContext:
+            runAsUser: 0   # bind privileged ports 80/443
+          env:
+            # lego's Cloudflare provider (DNS-01).
+            - name: CF_DNS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-traefik-cloudflare
+                  key: dnsApiToken
+            # Give Cloudflare propagation more room before lego gives up.
+            - name: CF_PROPAGATION_TIMEOUT
+              value: "180"
+            - name: CF_POLLING_INTERVAL
+              value: "5"
+          ports:
+            - name: web
+              containerPort: 80
+              protocol: TCP
+            - name: websecure
+              containerPort: 443
+              protocol: TCP
+            - name: websecure-h3
+              containerPort: 443
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/traefik
+              readOnly: true
+            - name: acme
+              mountPath: /letsencrypt
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: web
+            periodSeconds: 5
+            failureThreshold: 30   # time to fetch and compile the badger plugin
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: web
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: web
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: pangolin-edge-config
+            items:
+              - key: traefik_config.yml
+                path: traefik_config.yml
+              - key: dynamic_config.yml
+                path: dynamic_config.yml
+        - name: acme
+          persistentVolumeClaim:
+            claimName: pangolin-acme
+        - name: gerbil-key
+          persistentVolumeClaim:
+            claimName: pangolin-gerbil-key

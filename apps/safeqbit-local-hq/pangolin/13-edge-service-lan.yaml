@@ -1,0 +1,53 @@
+# The LAN-facing edge: one MetalLB IP carrying both HTTP and WireGuard, because
+# Traefik and Gerbil share a pod netns (see 11-edge-deployment.yaml).
+#
+# Mixed TCP/UDP on one LoadBalancer Service is GA (MixedProtocolLBService, since
+# k8s 1.26); this cluster runs 1.35 and MetalLB in L2 mode handles it.
+#
+# externalTrafficPolicy: Local is REQUIRED, not a preference. Cluster's SNAT
+# rewrites each site's source address to a pod IP whose port roams roughly every
+# minute; Gerbil's hole-punch (UDP 21820) then never settles, the site flaps,
+# and Pangolin never publishes the resource's router — which presents as a 404
+# and a cert stuck "pending", nowhere near the real cause. Local preserves the
+# client's real source IP:port. (Verified the hard way, June 2026.)
+#
+# 10.10.13.50 = ingress-nginx, 10.10.13.51 = home-assistant-lan (pinned: the
+# Shelly sensors have that address baked in — do NOT reuse it). This takes .52
+# from the reserved pool (10.10.13.50-59, autoAssign:false).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pangolin-edge-lan
+  namespace: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: edge
+  annotations:
+    metallb.io/loadBalancerIPs: "10.10.13.52"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: edge
+  ports:
+    - name: web
+      port: 80
+      targetPort: web
+      protocol: TCP
+    - name: websecure
+      port: 443
+      targetPort: websecure
+      protocol: TCP
+    - name: websecure-h3
+      port: 443
+      targetPort: websecure-h3
+      protocol: UDP
+    - name: wg
+      port: 51820
+      targetPort: wg
+      protocol: UDP
+    - name: wg-clients
+      port: 21820
+      targetPort: wg-clients
+      protocol: UDP

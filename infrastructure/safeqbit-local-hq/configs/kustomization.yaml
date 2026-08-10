@@ -30,6 +30,7 @@ resources:
   - velero-schedule-pulse.yaml
   - velero-schedule-immich.yaml
   - velero-schedule-home-assistant.yaml
+  - velero-schedule-pangolin.yaml
   - pdbs.yaml
   - coredns-autoscaler.yaml
   - alertmanager-slack.yaml
