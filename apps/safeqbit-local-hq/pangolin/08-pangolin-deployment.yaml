@@ -110,11 +110,12 @@ spec:
         - name: config
           configMap:
             name: pangolin-config
-        # Read-only view of the edge Traefik's ACME state. Pangolin's EE build
-        # scrapes acme.json to flip a resource's cert status pending -> valid;
-        # without it the server logs "cannot stat config/letsencrypt/acme.json"
-        # every 5s and every resource cert sits "pending" (hit on 2026-06-16).
+        # Read-only view of the edge Traefik's ACME state. Pangolin's acmeCertSync
+        # reads acme.json to flip a resource's certificate status pending -> valid
+        # in the UI; without it the server logs "cannot stat
+        # config/letsencrypt/acme.json" every 5s and every resource sits
+        # "pending". Display only — routing does not depend on it.
         - name: acme
           persistentVolumeClaim:
-            claimName: pangolin-acme
+            claimName: pangolin-letsencrypt
             readOnly: true

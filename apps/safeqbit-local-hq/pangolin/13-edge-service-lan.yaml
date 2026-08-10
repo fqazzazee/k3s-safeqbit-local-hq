@@ -9,7 +9,7 @@
 # minute; Gerbil's hole-punch (UDP 21820) then never settles, the site flaps,
 # and Pangolin never publishes the resource's router — which presents as a 404
 # and a cert stuck "pending", nowhere near the real cause. Local preserves the
-# client's real source IP:port. (Verified the hard way, June 2026.)
+# client's real source IP:port.
 #
 # 10.10.13.50 = ingress-nginx, 10.10.13.51 = home-assistant-lan (pinned: the
 # Shelly sensors have that address baked in — do NOT reuse it). This takes .52

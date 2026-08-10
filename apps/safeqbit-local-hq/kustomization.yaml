@@ -19,11 +19,8 @@ resources:
   - guacamole
   - pulse
   - home-assistant
-  # Pangolin was removed 2026-06-18 and redeployed 2026-08-10 as hand-authored
-  # manifests. The blocker then was the split topology k3s seemed to force; it
-  # is gone now that Gerbil and Traefik share one pod (upstream's
-  # `network_mode: service:gerbil`) behind one mixed TCP/UDP LoadBalancer.
-  # See workbook/pangolin.md.
+  # Brings its own edge (Gerbil + Traefik in one pod, on its own MetalLB IP)
+  # rather than going through ingress-nginx — see workbook/pangolin.md.
   - pangolin
   # When you add Linkding or other apps later, append them here:
   # - linkding

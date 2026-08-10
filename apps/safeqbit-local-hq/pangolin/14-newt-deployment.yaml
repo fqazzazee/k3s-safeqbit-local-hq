@@ -17,22 +17,21 @@
 # │ then add both files to kustomization.yaml and push.                        │
 # └────────────────────────────────────────────────────────────────────────────┘
 #
-# WHY THIS ONE IS DELICATE — and why it should work now.
+# WHY THIS ONE NEEDS hostAliases.
 #
-# The June 2026 deployment was abandoned because an in-cluster Newt "can't carry
-# data through the WG return path". A pod dialing its own cluster's MetalLB IP
-# hairpins: the packet leaves for an external address that is really a local
-# Service, gets DNAT'd, and the reply comes back from a path conntrack does not
-# reconcile — made worse by externalTrafficPolicy: Local, which the edge needs
-# for WireGuard to work at all.
+# A pod that dials its own cluster's MetalLB IP takes a bad path: the packet
+# leaves for what looks like an external address, is DNAT'd back to a local
+# Service, and the reply returns by a route conntrack cannot reconcile —
+# compounded by externalTrafficPolicy: Local, which the edge requires for
+# WireGuard to see real source addresses at all.
 #
-# The fix is to stop hairpinning: this pod never uses 10.10.13.52. hostAliases
-# resolve BOTH the dashboard host and the WireGuard endpoint host to the edge's
-# pinned ClusterIP, so every packet is ordinary pod-to-Service traffic.
+# So this pod never uses 10.10.13.52. hostAliases resolve BOTH the dashboard host
+# and the WireGuard endpoint host to the edge's pinned ClusterIP, making every
+# packet ordinary pod-to-Service traffic.
 #
-# This works because Newt resolves the WireGuard endpoint CLIENT-SIDE at connect
-# time — util.ResolveDomain() -> net.LookupIP() on a CGO_ENABLED=0 Go binary,
-# which consults /etc/hosts first. The server hands out a NAME
+# This is possible because Newt resolves the WireGuard endpoint CLIENT-SIDE at
+# connect time — util.ResolveDomain() -> net.LookupIP() on a CGO_ENABLED=0 Go
+# binary, which consults /etc/hosts first. Pangolin hands out a NAME
 # (gerbil.base_endpoint in 06-pangolin-config.yaml), not a resolved address, so
 # split-horizon resolution is a supported shape rather than a trick.
 #
@@ -67,22 +66,22 @@ spec:
         options:
           - name: ndots
             value: "1"
-      # The hairpin fix. Both names point at 12-edge-service.yaml's pinned
-      # ClusterIP. If that IP ever changes, change it here too.
+      # Both names point at 12-edge-service.yaml's pinned ClusterIP. If that IP
+      # ever changes, change it here too.
       hostAliases:
         - ip: "10.43.0.100"
           hostnames:
-            - pangolin.local.safeqbit.com       # dashboard/API + WebSocket
-            - pangolin-edge.local.safeqbit.com  # WireGuard endpoint
+            - pangolin.pg.local.safeqbit.com  # dashboard/API + WebSocket
+            - pg.local.safeqbit.com           # WireGuard endpoint
       containers:
         - name: newt
           image: docker.io/fosrl/newt:1.15.0
           env:
             # Resolves via hostAliases to the edge ClusterIP, where Traefik
-            # terminates TLS with the real Let's Encrypt cert for this name —
-            # so certificate validation still passes.
+            # serves the wildcard certificate — which covers this name, so TLS
+            # validation still passes on the short path.
             - name: PANGOLIN_ENDPOINT
-              value: "https://pangolin.local.safeqbit.com"
+              value: "https://pangolin.pg.local.safeqbit.com"
             - name: NEWT_ID
               valueFrom:
                 secretKeyRef:

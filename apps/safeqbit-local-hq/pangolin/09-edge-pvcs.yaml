@@ -1,14 +1,25 @@
-# Shared ACME-state PVC. The edge Traefik writes acme.json here (/letsencrypt);
-# the Pangolin server mounts the same volume read-only at
-# /app/config/letsencrypt so its cert sync can report per-resource cert status.
+# Shared ACME-state PVC — holds the Let's Encrypt account key and the wildcard
+# certificate, as Traefik's single acme.json. The edge Traefik writes it at
+# /letsencrypt; the Pangolin server mounts the same volume read-only at
+# /app/config/letsencrypt, where its acmeCertSync reads it every 5s to report
+# certificate status in the UI.
 #
-# RWX is required because those are two SEPARATE pods. With an RWO volume the
-# server could not see acme.json and every resource cert stayed "pending"
-# (diagnosed 2026-06-16). nfs-truenas is the cluster's RWX class.
+# RWX because those are two SEPARATE pods, and nfs-truenas is the cluster's RWX
+# class. (Longhorn can do RWX, but only by standing up a share-manager NFS pod;
+# no volume in this cluster does that today, and the edge's ability to start is
+# not the place to introduce it.)
+#
+# NAMING, and it matters: the nfs-truenas StorageClass sets
+# pathPattern: ${.PVC.namespace}-${.PVC.name}-${.PV.name}, but ${.PV.name} is not
+# a token nfs-subdir-external-provisioner understands, so it stays literal and
+# the real directory is just <namespace>-<pvc name>. A PVC of a given name
+# therefore always re-adopts whatever a previous PVC of that name left behind.
+# So a rename is how you get clean ACME state declaratively, with no manual
+# "delete acme.json" step — and the old directory stays on the NAS as a rollback.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pangolin-acme
+  name: pangolin-letsencrypt
   namespace: pangolin
 spec:
   accessModes:

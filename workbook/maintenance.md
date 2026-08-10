@@ -1021,7 +1021,7 @@ PVC**. If Longhorn is at the scheduling ceiling, that temp volume fails with
 `infrastructure-configs` has `prune: false`, so deleting a `velero-schedule-*.yaml`
 from git does **not** remove the live `Schedule`. After merge, delete it by hand:
 ```bash
-kubectl delete schedule -n velero <name>   # e.g. pangolin-bimonthly, after the app was removed
+kubectl delete schedule -n velero <name>   # only for an app that is actually gone
 ```
 (Metrics from removed schedules linger in Prometheus until the velero pod restarts —
 cosmetic.)
