@@ -1,28 +1,26 @@
 # THE EDGE. Gerbil (WireGuard) and Traefik (HTTP) in ONE pod.
 #
-# This single decision is what makes Pangolin work on k3s, and it is why the
-# June 2026 attempt failed. Upstream's compose runs Traefik with
-# `network_mode: service:gerbil`, i.e. Traefik lives in Gerbil's network
-# namespace, so :80/:443 and :51820/:21820-udp are all one endpoint. Two
-# containers in one pod is exactly that construct in Kubernetes — they share a
-# netns, reach each other on localhost, and are fronted by ONE Service.
+# Upstream's compose runs Traefik with `network_mode: service:gerbil` — Traefik
+# lives in Gerbil's network namespace, so :80/:443 and :51820/:21820-udp are one
+# endpoint. Two containers in one pod is exactly that construct in Kubernetes:
+# they share a netns, reach each other on localhost, and are fronted by ONE
+# Service. Keeping that shape is what makes the rest of this deployment simple.
 #
-# What that buys us, versus the June split (edge on .51, gerbil on .52):
-#   - No MetalLB IP sharing. MetalLB refuses to share an IP unless BOTH
-#     Services use externalTrafficPolicy: Cluster, and Cluster is fatal to
-#     WireGuard: its SNAT rewrites the site's source to a pod IP whose port
-#     roams every ~minute, so the WG endpoint flaps and Gerbil's hole-punch
-#     never registers ("Site last hole punch is too old"). One pod = one
-#     Service = one IP, and we keep Local. See 13-edge-service-lan.yaml.
-#   - No http-echo /ping sidecar. Newt's exit-node preflight is an HTTP GET to
-#     base_endpoint/ping, which only a front Traefik answers — Gerbil never
-#     serves /ping. Traefik is now on that address, so it just works. (Newt
-#     1.15 also skips the preflight entirely when there is a single exit node.)
+# Splitting them across two Services does not work here:
+#   - MetalLB refuses to share an IP unless BOTH Services use
+#     externalTrafficPolicy: Cluster, and Cluster is fatal to WireGuard. Its
+#     SNAT rewrites the site's source to a pod IP whose port roams every
+#     ~minute, so the endpoint flaps and Gerbil's hole-punch never registers
+#     ("Site last hole punch is too old"). One pod = one Service = one IP, and
+#     we keep Local. See 13-edge-service-lan.yaml.
+#   - Newt's exit-node preflight is an HTTP GET to base_endpoint/ping. Gerbil
+#     never serves /ping; only a Traefik on that same address does. (Newt 1.15
+#     also skips the preflight when there is a single exit node.)
 #
 # Gerbil pinning: keep it on the release that ships alongside the Pangolin tag.
-# 1.3.1 had a hole-punch registering bug that cost a long debug in June; the fix
-# landed in 1.4.2 ("cache timeout of 2.5s to record hp; fixes registering issue
-# when endpoint was the same" — every exit node here shares one endpoint).
+# Nothing below 1.4.2 is safe here — that release added a "cache timeout of 2.5s
+# to record hp; fixes registering issue when endpoint was the same", and every
+# exit node in this deployment shares one endpoint.
 #
 # replicas: 1 + Recreate — Gerbil's key PVC is RWO, and two Gerbils would both
 # claim to be the exit node.
@@ -181,7 +179,7 @@ spec:
                 path: dynamic_config.yml
         - name: acme
           persistentVolumeClaim:
-            claimName: pangolin-acme
+            claimName: pangolin-letsencrypt
         - name: gerbil-key
           persistentVolumeClaim:
             claimName: pangolin-gerbil-key

@@ -1,10 +1,9 @@
 # In-cluster address of the edge pod, with a PINNED ClusterIP.
 #
 # The pin is deliberate and load-bearing. An in-cluster Newt must reach the edge
-# WITHOUT going out to the MetalLB IP and back in (that hairpin is what broke
-# the June deployment), so 14-newt-deployment.yaml uses hostAliases to resolve
-# the edge and dashboard hostnames to this address. hostAliases needs a literal
-# IP, so this Service cannot be allowed to float.
+# WITHOUT leaving for the MetalLB IP and coming back in, so 14-newt-deployment
+# uses hostAliases to resolve the edge and dashboard hostnames to this address.
+# hostAliases needs a literal IP, so this Service cannot be allowed to float.
 #
 # 10.43.0.100 is inside the service CIDR's static band (Kubernetes prefers the
 # low end of the range for manual assignment and allocates dynamic ClusterIPs

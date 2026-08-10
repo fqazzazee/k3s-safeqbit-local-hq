@@ -21,21 +21,25 @@ data:
         start_port: 51820
         clients_start_port: 21820
         # The address every Newt/Olm client dials for WireGuard. A HOSTNAME, not
-        # an IP — this is the load-bearing choice of this deployment:
+        # an IP, and deliberately so:
         #
         #   - On the LAN it resolves (Cloudflare) to 10.10.13.52, the MetalLB IP
         #     of the edge Service, where both Traefik (:80/:443) and Gerbil
         #     (:51820/:21820 udp) live because they share one pod netns.
         #   - INSIDE the cluster, the Newt pod overrides it via hostAliases to
-        #     the edge's pinned ClusterIP (10.43.0.100), so an in-cluster Newt
-        #     never dials the MetalLB IP and never hairpins. Newt resolves this
-        #     name itself at connect time (util.ResolveDomain -> net.LookupIP on
-        #     a CGO_ENABLED=0 binary, so /etc/hosts wins), which is what makes
-        #     the override possible. See 14-newt-deployment.yaml.
-        base_endpoint: "pangolin-edge.local.safeqbit.com"
+        #     the edge's pinned ClusterIP, so it reaches the edge as ordinary
+        #     pod-to-Service traffic instead of leaving for a LoadBalancer IP
+        #     that belongs to its own cluster. Newt resolves this name itself at
+        #     connect time (util.ResolveDomain -> net.LookupIP on a
+        #     CGO_ENABLED=0 binary, so /etc/hosts wins), which is what makes the
+        #     override possible. See 14-newt-deployment.yaml.
+        #
+        # This is the zone apex, so it is NOT covered by *.pg.local.safeqbit.com
+        # — the edge certificate carries it as an explicit SAN. See 10-edge-config.
+        base_endpoint: "pg.local.safeqbit.com"
 
     app:
-        dashboard_url: "https://pangolin.local.safeqbit.com"
+        dashboard_url: "https://pangolin.pg.local.safeqbit.com"
         log_level: "info"
         # Off to match the cluster's privacy posture (cf. authentik error reporting).
         telemetry:
@@ -44,17 +48,22 @@ data:
             product_updates: false
             new_releases: false
 
+    # Everything Pangolin publishes lives under this one domain: a resource named
+    # `wiki` becomes wiki.pg.local.safeqbit.com. Pangolin re-applies this block to
+    # its `domains` table on every boot (copyInDomains), so the config file stays
+    # the source of truth and UI edits to a config-managed domain do not stick.
+    #
+    # NOTE: a wildcard covers ONE label. wiki.pg.local.safeqbit.com is covered;
+    # wiki.docs.pg.local.safeqbit.com is not. Keep resource names single-label.
     domains:
         domain1:
-            base_domain: "local.safeqbit.com"
+            base_domain: "pg.local.safeqbit.com"
             cert_resolver: "letsencrypt"
-            # Per-host certs, matching cert-manager's approach for the nginx
-            # apps. The cluster uses no wildcard certs.
-            prefer_wildcard_cert: false
+            prefer_wildcard_cert: true
 
     server:
         cors:
-            origins: ["https://pangolin.local.safeqbit.com"]
+            origins: ["https://pangolin.pg.local.safeqbit.com"]
             methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
             allowed_headers: ["X-CSRF-Token", "Content-Type"]
             credentials: false
@@ -62,11 +71,18 @@ data:
     # Pangolin GENERATES Traefik routers for every published resource and serves
     # them at /api/v1/traefik-config, which our edge Traefik polls as its HTTP
     # provider. These names must match the entrypoints/resolver in 10-edge-config.
+    #
+    # prefer_wildcard_cert makes each generated router ask for the wildcard
+    # (tls.domains[0].main = *.pg.local.safeqbit.com) instead of a certificate of
+    # its own. Traefik already holds that certificate, so publishing a resource
+    # needs no ACME round trip at all — it is live as soon as the router appears.
+    # Set in both places: this is the fallback, `domains.domain1` is the per-domain
+    # value that actually reaches the router builder.
     traefik:
         http_entrypoint: web
         https_entrypoint: websecure
         cert_resolver: letsencrypt
-        prefer_wildcard_cert: false
+        prefer_wildcard_cert: true
 
     flags:
         require_email_verification: false

@@ -678,6 +678,7 @@ data:
       `home-assistant-migration.md`, `authentik-migration.md`,
       `netbox-migration.md`, `affine-migration.md`,
       `immich-photoprism-migration.md` — per-app docs & migrations
-    • `pangolin.md` — removed from cluster; lessons for the VM redeploy
+    • `pangolin.md` — identity-aware remote access; its own edge on
+      10.10.13.52, everything published under *.pg.local.safeqbit.com
     _The wiki summarizes; the runbooks decide. When they disagree,
     trust the runbook and fix the wiki page._

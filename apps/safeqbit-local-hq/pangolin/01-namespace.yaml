@@ -1,8 +1,8 @@
 # Namespace for Pangolin (https://pangolin.net) — identity-aware remote access
 # (HTTP + browser RDP/VNC/SSH) built on WireGuard.
 #
-# Redeployed 2026-08-10 as hand-authored manifests (the first attempt, removed
-# 2026-06-18, used the official Helm chart — see workbook/pangolin.md).
+# Hand-authored manifests rather than the Helm chart, so the edge can be laid
+# out the way upstream's compose lays it out. See workbook/pangolin.md.
 #
 # Pod Security Admission MUST be `privileged` here:
 #   - Gerbil manages a kernel WireGuard interface and needs NET_ADMIN,
