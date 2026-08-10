@@ -1,0 +1,37 @@
+# Shared ACME-state PVC. The edge Traefik writes acme.json here (/letsencrypt);
+# the Pangolin server mounts the same volume read-only at
+# /app/config/letsencrypt so its cert sync can report per-resource cert status.
+#
+# RWX is required because those are two SEPARATE pods. With an RWO volume the
+# server could not see acme.json and every resource cert stayed "pending"
+# (diagnosed 2026-06-16). nfs-truenas is the cluster's RWX class.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pangolin-acme
+  namespace: pangolin
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-truenas
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Gerbil's WireGuard private key (--generateAndSaveKeyTo=/var/config/key).
+# Persisted so the server's public key survives restarts — otherwise every Newt
+# and Olm peer would have to re-handshake against a new key after each rollout.
+# RWO/Longhorn: exactly one edge pod mounts it, which is why the edge Deployment
+# uses strategy Recreate rather than RollingUpdate.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pangolin-gerbil-key
+  namespace: pangolin
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

@@ -1,0 +1,104 @@
+# In-cluster Newt site connector — publishes cluster-internal services as
+# Pangolin resources.
+#
+# ┌─ PHASE 2 ─────────────────────────────────────────────────────────────────┐
+# │ This file and 15-sealed-secret-newt.yaml are NOT in kustomization.yaml     │
+# │ yet. A Newt's credentials are issued when you create the Site in the       │
+# │ Pangolin UI, so they cannot exist before the first login. After creating   │
+# │ the Site (type: Newt), seal the credentials it shows you:                  │
+# │                                                                            │
+# │   kubectl create secret generic pangolin-newt -n pangolin \                │
+# │     --from-literal=NEWT_ID='<id>' --from-literal=NEWT_SECRET='<secret>' \  │
+# │     --dry-run=client -o yaml \                                             │
+# │   | kubeseal --controller-name=sealed-secrets-controller \                 │
+# │       --controller-namespace=kube-system --format yaml \                   │
+# │   > 15-sealed-secret-newt.yaml                                             │
+# │                                                                            │
+# │ then add both files to kustomization.yaml and push.                        │
+# └────────────────────────────────────────────────────────────────────────────┘
+#
+# WHY THIS ONE IS DELICATE — and why it should work now.
+#
+# The June 2026 deployment was abandoned because an in-cluster Newt "can't carry
+# data through the WG return path". A pod dialing its own cluster's MetalLB IP
+# hairpins: the packet leaves for an external address that is really a local
+# Service, gets DNAT'd, and the reply comes back from a path conntrack does not
+# reconcile — made worse by externalTrafficPolicy: Local, which the edge needs
+# for WireGuard to work at all.
+#
+# The fix is to stop hairpinning: this pod never uses 10.10.13.52. hostAliases
+# resolve BOTH the dashboard host and the WireGuard endpoint host to the edge's
+# pinned ClusterIP, so every packet is ordinary pod-to-Service traffic.
+#
+# This works because Newt resolves the WireGuard endpoint CLIENT-SIDE at connect
+# time — util.ResolveDomain() -> net.LookupIP() on a CGO_ENABLED=0 Go binary,
+# which consults /etc/hosts first. The server hands out a NAME
+# (gerbil.base_endpoint in 06-pangolin-config.yaml), not a resolved address, so
+# split-horizon resolution is a supported shape rather than a trick.
+#
+# LAN and Docker-host Newts are unaffected: they resolve the same name through
+# Cloudflare to 10.10.13.52 and hit the MetalLB IP normally.
+#
+# No privileges required: Newt is a USERSPACE WireGuard implementation (netstack),
+# so unlike Gerbil it needs no NET_ADMIN and no device access.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pangolin-newt
+  namespace: pangolin
+  labels:
+    app.kubernetes.io/name: pangolin
+    app.kubernetes.io/component: newt
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # one connector per Site; two would fight over the tunnel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pangolin
+      app.kubernetes.io/component: newt
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pangolin
+        app.kubernetes.io/component: newt
+    spec:
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      # The hairpin fix. Both names point at 12-edge-service.yaml's pinned
+      # ClusterIP. If that IP ever changes, change it here too.
+      hostAliases:
+        - ip: "10.43.0.100"
+          hostnames:
+            - pangolin.local.safeqbit.com       # dashboard/API + WebSocket
+            - pangolin-edge.local.safeqbit.com  # WireGuard endpoint
+      containers:
+        - name: newt
+          image: docker.io/fosrl/newt:1.15.0
+          env:
+            # Resolves via hostAliases to the edge ClusterIP, where Traefik
+            # terminates TLS with the real Let's Encrypt cert for this name —
+            # so certificate validation still passes.
+            - name: PANGOLIN_ENDPOINT
+              value: "https://pangolin.local.safeqbit.com"
+            - name: NEWT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-newt
+                  key: NEWT_ID
+            - name: NEWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-newt
+                  key: NEWT_SECRET
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

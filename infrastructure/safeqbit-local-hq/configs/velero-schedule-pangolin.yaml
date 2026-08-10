@@ -1,0 +1,52 @@
+# velero-schedule-pangolin.yaml
+# Bi-monthly Velero backup of the pangolin namespace to B2.
+#
+# Postgres data is handled separately by the CNPG ScheduledBackup (weekly), and
+# that DB holds nearly everything that matters: orgs, users, sites, resources,
+# access policies and the EE license registration.
+#
+# This catches the rest: Gerbil's WireGuard private key PVC (losing it forces
+# every Newt/Olm peer to re-handshake against a new server key), the Traefik
+# ACME state, and the k8s objects.
+#
+# Schedule: 11th and 26th 04:15 UTC — an unused slot in the bi-monthly rotation
+# so only one workload backs up per day (avoids B2 Class B cap spikes).
+#
+# Retention: keep the last 2 restore points. Velero retention is TTL-based
+# (there is no native "keep N"), so ttl is 28 days — longer than the ~15 day
+# interval so the previous backup survives, shorter than two intervals so the
+# one before that expires.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: pangolin-bimonthly
+  namespace: velero
+spec:
+  schedule: "15 4 11,26 * *"
+
+  template:
+    ttl: "672h0m0s"   # 28 days -> keep last 2 bi-monthly backups
+    includedNamespaces:
+      - pangolin
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+      # One-shot ACME workflow objects. Restoring these plants a stale
+      # CertificateRequest that squats on the name cert-manager needs for the
+      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      - certificaterequests.cert-manager.io
+      - orders.acme.cert-manager.io
+      - challenges.acme.cert-manager.io
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
+    # instead of PartiallyFailing. The pangolin-acme PVC is nfs-truenas.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false

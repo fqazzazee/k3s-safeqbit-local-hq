@@ -1,0 +1,171 @@
+# Static + dynamic Traefik config for the Pangolin edge.
+#
+# Adapted from upstream's reference config (fosrl/pangolin @1.21.1,
+# install/config/traefik/) with exactly two deviations, both required here:
+#   1. ACME uses DNS-01 (Cloudflare) instead of HTTP-01 — local.safeqbit.com
+#      resolves only to private IPs, so Let's Encrypt cannot reach an HTTP-01
+#      challenge. The two `propagation` settings below are hard-won; read them.
+#   2. The Traefik API/dashboard is off (upstream ships insecure: true).
+# Everything else — the HTTP provider polling Pangolin, the badger middleware on
+# every router, the pp-transport serversTransports — is upstream verbatim.
+#
+# Badger version tracks Pangolin's installer, which always builds against the
+# LATEST badger tag. Bump it when you bump Pangolin.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pangolin-edge-config
+  namespace: pangolin
+data:
+  traefik_config.yml: |
+    api:
+      insecure: false
+      dashboard: false
+
+    providers:
+      # Pangolin generates a router+service for every published resource and
+      # serves them here. This is how a resource created in the UI becomes live
+      # routing, with no Traefik CRDs and no Kubernetes RBAC involved.
+      http:
+        endpoint: "http://pangolin:3001/api/v1/traefik-config"
+        pollInterval: "5s"
+      file:
+        filename: "/etc/traefik/dynamic_config.yml"
+
+    experimental:
+      plugins:
+        badger:
+          moduleName: "github.com/fosrl/badger"
+          version: "v1.5.0"
+
+    log:
+      level: "INFO"
+      format: "common"
+
+    certificatesResolvers:
+      letsencrypt:
+        acme:
+          dnsChallenge:
+            provider: cloudflare
+            # lego's default propagation check queries the zone's AUTHORITATIVE
+            # Cloudflare nameservers on :53 directly, which pods here cannot
+            # reach ("NS santino.ns.cloudflare.com:53 did not return the
+            # expected TXT"). disableANSChecks skips that and verifies through
+            # the recursive resolvers below, which ARE reachable from a pod.
+            #
+            # delayBeforeChecks: with the authoritative check disabled lego
+            # stopped waiting and asked LE within ~13s, so LE saw "No TXT record
+            # found" — the record existed at Cloudflare but had not propagated
+            # to LE's resolvers yet. This forced delay fixes that race.
+            # Both settings were diagnosed 2026-06-16; do not drop either.
+            resolvers:
+              - "1.1.1.1:53"
+              - "1.0.0.1:53"
+            propagation:
+              disableANSChecks: true
+              delayBeforeChecks: "120s"
+          email: "fadi@safeqbit.com"
+          storage: "/letsencrypt/acme.json"
+          caServer: "https://acme-v02.api.letsencrypt.org/directory"
+
+    entryPoints:
+      web:
+        address: ":80"
+      websecure:
+        address: ":443"
+        transport:
+          respondingTimeouts:
+            readTimeout: "30m"
+        http3:
+          advertisedPort: 443
+        http:
+          tls:
+            certResolver: "letsencrypt"
+          encodedCharacters:
+            allowEncodedSlash: true
+            allowEncodedQuestionMark: true
+
+    serversTransport:
+      insecureSkipVerify: true
+
+    # Serves 200 on /ping over the web entrypoint. Used by this pod's k8s probes
+    # AND, incidentally, by Newt's exit-node preflight (GET base_endpoint/ping) —
+    # which is why co-locating Traefik with Gerbil removes the need for the
+    # http-echo sidecar the June deployment had to carry.
+    ping:
+      entryPoint: "web"
+
+  dynamic_config.yml: |
+    http:
+      middlewares:
+        badger:
+          plugin:
+            badger:
+              disableForwardAuth: true
+        redirect-to-https:
+          redirectScheme:
+            scheme: https
+
+      routers:
+        # HTTP -> HTTPS redirect
+        main-app-router-redirect:
+          rule: "Host(`pangolin.local.safeqbit.com`)"
+          service: next-service
+          entryPoints:
+            - web
+          middlewares:
+            - redirect-to-https
+            - badger
+
+        # Next.js (everything except API and WebSocket paths)
+        next-router:
+          rule: "Host(`pangolin.local.safeqbit.com`) && !PathPrefix(`/api/v1`)"
+          service: next-service
+          entryPoints:
+            - websecure
+          middlewares:
+            - badger
+          tls:
+            certResolver: letsencrypt
+
+        # API (/api/v1 paths)
+        api-router:
+          rule: "Host(`pangolin.local.safeqbit.com`) && PathPrefix(`/api/v1`)"
+          service: api-service
+          entryPoints:
+            - websecure
+          middlewares:
+            - badger
+          tls:
+            certResolver: letsencrypt
+
+        # WebSocket — this is the router an in-cluster Newt reaches through,
+        # via hostAliases pointing the dashboard host at the edge ClusterIP.
+        ws-router:
+          rule: "Host(`pangolin.local.safeqbit.com`)"
+          service: api-service
+          entryPoints:
+            - websecure
+          middlewares:
+            - badger
+          tls:
+            certResolver: letsencrypt
+
+      services:
+        next-service:
+          loadBalancer:
+            servers:
+              - url: "http://pangolin:3002"  # Next.js server
+        api-service:
+          loadBalancer:
+            servers:
+              - url: "http://pangolin:3000"  # API/WebSocket server
+
+    tcp:
+      serversTransports:
+        pp-transport-v1:
+          proxyProtocol:
+            version: 1
+        pp-transport-v2:
+          proxyProtocol:
+            version: 2
