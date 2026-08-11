@@ -1,21 +1,16 @@
-# In-cluster Newt site connector — publishes cluster-internal services as
-# Pangolin resources.
+# In-cluster Newt site connector — Site "k3s-pg-newt-01".
 #
-# ┌─ PHASE 2 ─────────────────────────────────────────────────────────────────┐
-# │ This file and 15-sealed-secret-newt.yaml are NOT in kustomization.yaml     │
-# │ yet. A Newt's credentials are issued when you create the Site in the       │
-# │ Pangolin UI, so they cannot exist before the first login. After creating   │
-# │ the Site (type: Newt), seal the credentials it shows you:                  │
-# │                                                                            │
-# │   kubectl create secret generic pangolin-newt -n pangolin \                │
-# │     --from-literal=NEWT_ID='<id>' --from-literal=NEWT_SECRET='<secret>' \  │
-# │     --dry-run=client -o yaml \                                             │
-# │   | kubeseal --controller-name=sealed-secrets-controller \                 │
-# │       --controller-namespace=kube-system --format yaml \                   │
-# │   > 15-sealed-secret-newt.yaml                                             │
-# │                                                                            │
-# │ then add both files to kustomization.yaml and push.                        │
-# └────────────────────────────────────────────────────────────────────────────┘
+# This connector owns the CLUSTER's resources: its targets are ordinary cluster
+# DNS names, e.g. http://vaultwarden.vaultwarden.svc.cluster.local:80. LAN
+# targets (RDP and friends) belong to a Newt running ON the LAN instead, so each
+# site maps to exactly one network.
+#
+# Runs in the default netstack mode — userspace WireGuard, so no NET_ADMIN and no
+# device access. --native / --native-main would swap in a kernel interface and
+# are not worth the privileges here.
+#
+# Credentials come from 15-sealed-secret-newt.yaml, issued by the UI when the
+# Site was created.
 #
 # WHY THIS ONE NEEDS hostAliases.
 #
