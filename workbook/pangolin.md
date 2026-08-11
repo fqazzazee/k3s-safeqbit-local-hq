@@ -171,6 +171,40 @@ Notes:
 
 ---
 
+## Mail — SMTP2GO relay
+
+Pangolin sends user invites, email verification and password resets. It relays
+through **SMTP2GO** rather than talking to recipient mail servers itself, so the
+cluster never runs a mail server and never needs port 25 open in either
+direction.
+
+| Setting | Value | Where |
+|---|---|---|
+| `smtp_host` | `mail.smtp2go.com` | `06-pangolin-config.yaml` |
+| `smtp_port` | `443` | `06-pangolin-config.yaml` |
+| `smtp_secure` | `true` | `06-pangolin-config.yaml` |
+| `no_reply` | `pg@safeqbit.com` | `06-pangolin-config.yaml` |
+| `smtp_user` / `smtp_pass` | env, sealed | `16-sealed-secret-smtp.yaml` |
+
+- **443 is an SSL port, not a STARTTLS one.** SMTP2GO offers TLS/plain on
+  25/80/587/2525/8025 and SSL on 465/8465/**443**. SSL means TLS from the first
+  byte, which is exactly nodemailer's `secure: true`, so `smtp_secure: true` is
+  required here. On 587 or 2525 it would have to be `false`. It is chosen
+  because outbound 443 is the one port nothing filters.
+- **Both credentials or neither.** `server/emails/index.ts` builds the transport
+  with `auth: smtp_user && smtp_pass ? {...} : null`; one alone gives an
+  unauthenticated transport that the relay rejects.
+- **Removing the `email:` block disables mail silently** apart from one log line:
+  `Email SMTP configuration is missing. Emails will not be sent.`
+- `require_email_verification` stays `false`. Accounts arrive by invite or
+  through Authentik OIDC, so a verification round trip only adds a failure mode.
+- Verify without sending anything:
+  `python3 -c 'import smtplib,ssl;s=smtplib.SMTP_SSL("mail.smtp2go.com",443,timeout=20);s.login("USER","PASS");print("ok");s.quit()'`
+- `config.yml` is a subPath mount, so restart the Deployment after changing any
+  of this. Restart by **deleting the pod**, not `rollout restart`.
+
+---
+
 ## Enterprise license (free for homelab)
 
 Browser **RDP, VNC and SSH are Enterprise-Edition features**, gated behind a
@@ -236,12 +270,17 @@ fallbacks, not workarounds:
 - `postgres.connection_string` → **`POSTGRES_CONNECTION_STRING`**
   (`db/pg/driver.ts` checks the env var *before* the config file), fed straight
   from CNPG's `pangolin-cnpg-app` Secret, key `uri`.
+- `email.smtp_user` / `email.smtp_pass` → **`EMAIL_SMTP_USER`** /
+  **`EMAIL_SMTP_PASS`** (both declared
+  `.optional().transform(getEnvOrYaml("EMAIL_SMTP_*"))`, and `getEnvOrYaml`
+  returns `process.env[envVar] ?? valFromYaml`, so the environment wins).
 
 | SealedSecret | Keys | For |
 |---|---|---|
 | `pangolin-server-secret` | `SERVER_SECRET` | session signing + encryption of stored secrets. **Never rotate** — it invalidates every session and breaks stored encrypted values. |
 | `pangolin-traefik-cloudflare` | `email`, `dnsApiToken`, `zoneApiToken` | DNS-01. The cert-manager Cloudflare token re-sealed for this namespace, same zone scope. |
 | `pangolin-newt` | `NEWT_ID`, `NEWT_SECRET` | the in-cluster connector, issued by the UI. |
+| `pangolin-smtp` | `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASS` | the SMTP2GO relay login. Cheap to rotate — it is an SMTP2GO user, unrelated to Pangolin state. |
 
 DB password: CNPG creates `pangolin-cnpg-app` itself. Reseal commands are in the
 header comments of `04-` and `05-`.

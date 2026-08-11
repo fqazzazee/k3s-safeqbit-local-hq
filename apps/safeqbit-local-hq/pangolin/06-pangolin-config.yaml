@@ -1,15 +1,19 @@
 # Pangolin's config.yml, adapted from upstream's installer template
 # (fosrl/pangolin @1.21.1, install/config/config.yml).
 #
-# Two keys are DELIBERATELY absent and injected as env vars instead, so no
+# Four keys are DELIBERATELY absent and injected as env vars instead, so no
 # secret ever lands in Git or in a ConfigMap:
 #   - server.secret            -> SERVER_SECRET               (04, sealed)
 #   - postgres.connection_string -> POSTGRES_CONNECTION_STRING (CNPG's own
 #     `pangolin-cnpg-app` Secret, key `uri`)
-# Both fallbacks are real upstream behaviour, not a hack:
+#   - email.smtp_user          -> EMAIL_SMTP_USER             (16, sealed)
+#   - email.smtp_pass          -> EMAIL_SMTP_PASS             (16, sealed)
+# All of these fallbacks are real upstream behaviour, not a hack:
 # readConfigFile.ts assigns `data.server.secret = process.env.SERVER_SECRET`
-# when the key is missing, and db/pg/driver.ts checks
-# POSTGRES_CONNECTION_STRING *before* the config file.
+# when the key is missing, db/pg/driver.ts checks POSTGRES_CONNECTION_STRING
+# *before* the config file, and the two SMTP keys are declared as
+# `.optional().transform(getEnvOrYaml("EMAIL_SMTP_*"))`, whose implementation is
+# `process.env[envVar] ?? valFromYaml` — the environment wins.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -84,7 +88,33 @@ data:
         cert_resolver: letsencrypt
         prefer_wildcard_cert: true
 
+    # Outbound mail through SMTP2GO, a hosted relay: the cluster never runs a mail
+    # server and never needs port 25 open in either direction. Used for user
+    # invites, email verification and password resets.
+    #
+    # smtp_user/smtp_pass are absent on purpose — they arrive as EMAIL_SMTP_USER /
+    # EMAIL_SMTP_PASS from the sealed `pangolin-smtp` Secret (16). BOTH must be
+    # set: server/emails/index.ts builds the transport with
+    # `auth: smtp_user && smtp_pass ? {...} : null`, so a half-configured pair
+    # silently produces an unauthenticated transport.
+    #
+    # Port 443 is one of SMTP2GO's SSL ports (465 / 8465 / 443), i.e. TLS from the
+    # first byte rather than STARTTLS — hence smtp_secure: true, which becomes
+    # nodemailer's `secure` flag. On 587/2525 (STARTTLS) it would be false.
+    # 443 is chosen because outbound 443 is the one port that is never filtered.
+    #
+    # If the whole `email:` block is removed, Pangolin logs "Email SMTP
+    # configuration is missing. Emails will not be sent." and drops every message.
+    email:
+        smtp_host: "mail.smtp2go.com"
+        smtp_port: 443
+        smtp_secure: true
+        no_reply: "pg@safeqbit.com"
+
     flags:
+        # Left off deliberately. Mail works, but accounts here are created by
+        # invite or provisioned through Authentik OIDC, so a verification round
+        # trip adds a failure mode without adding a check.
         require_email_verification: false
         disable_signup_without_invite: true
         disable_user_create_org: false
