@@ -62,6 +62,19 @@ spec:
                 secretKeyRef:
                   name: pangolin-server-secret
                   key: SERVER_SECRET
+            # SMTP2GO relay login. readConfigFile.ts reads both through
+            # getEnvOrYaml, which prefers the environment, so the ConfigMap in 06
+            # carries only the non-secret half of the `email:` block.
+            - name: EMAIL_SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-smtp
+                  key: EMAIL_SMTP_USER
+            - name: EMAIL_SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: pangolin-smtp
+                  key: EMAIL_SMTP_PASS
           ports:
             - name: api
               containerPort: 3000

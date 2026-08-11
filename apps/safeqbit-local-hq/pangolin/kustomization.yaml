@@ -20,6 +20,9 @@ resources:
   # first login — see its header for the re-seal command.
   - 14-newt-deployment.yaml
   - 15-sealed-secret-newt.yaml
+  # SMTP2GO relay login, consumed by 08. Numbered last because it was added
+  # last; kustomize does not order by filename.
+  - 16-sealed-secret-smtp.yaml
 
 commonLabels:
   cluster: safeqbit-local-hq
