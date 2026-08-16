@@ -1,0 +1,30 @@
+# Camera availability probes.
+# Version: 1.0 — 2026-08-16
+#   1.0: baby cam (10.10.18.12) reachability binary sensor
+#
+# NOTE — why this is not the Ping (ICMP) integration:
+# ICMP echo to the baby cam is 100 % packet loss, both from the k3s pod
+# network and from a LAN workstation (the camera / IoT-VLAN policy drops it),
+# so a ping sensor would report the camera permanently offline. RTSP on
+# tcp/554 answers in ~0.01 s, so availability is probed with a TCP connect to
+# the port that actually matters for the live view. Ports 80/8000 are
+# filtered — do not probe those, they time out (3 s) instead of refusing.
+#
+# If ICMP is ever allowed through on the IoT VLAN, this can be replaced by the
+# Ping (ICMP) integration (UI-only — it is config-flow, no YAML schema), which
+# also gives round-trip-time sensors.
+
+command_line:
+  - binary_sensor:
+      name: Baby Cam Online
+      unique_id: baby_cam_online
+      # connectivity gives the state-dependent lan-connect/lan-disconnect icon;
+      # no static icon: on purpose.
+      device_class: connectivity
+      command: >-
+        python3 -c "import socket; s = socket.create_connection(('10.10.18.12', 554), 3); s.close()"
+        >/dev/null 2>&1 && echo ON || echo OFF
+      payload_on: "ON"
+      payload_off: "OFF"
+      scan_interval: 60
+      command_timeout: 10

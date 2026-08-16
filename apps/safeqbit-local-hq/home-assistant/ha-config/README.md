@@ -9,12 +9,13 @@ ignored by kustomize. Applying is always a manual step:
 | File | Apply with |
 |---|---|
 | `dashboard-apartment.yaml` | Dashboard ⋮ → **Raw configuration editor** → paste → save |
-| `packages/*.yaml` | `kubectl -n home-assistant cp <file> <pod>:/config/packages/` then Developer Tools → YAML → **Reload Template Entities** |
+| `packages/*.yaml` | `kubectl -n home-assistant cp <file> <pod>:/config/packages/` then Developer Tools → YAML → **Reload Template Entities** (for `camera_availability.yaml`: **Reload Command Line Entities**) |
 
 ```sh
 POD=$(kubectl -n home-assistant get pod -o jsonpath='{.items[0].metadata.name}')
-kubectl -n home-assistant cp packages/baby_comfort.yaml     "$POD":/config/packages/baby_comfort.yaml
-kubectl -n home-assistant cp packages/weather_insights.yaml "$POD":/config/packages/weather_insights.yaml
+kubectl -n home-assistant cp packages/baby_comfort.yaml        "$POD":/config/packages/baby_comfort.yaml
+kubectl -n home-assistant cp packages/weather_insights.yaml    "$POD":/config/packages/weather_insights.yaml
+kubectl -n home-assistant cp packages/camera_availability.yaml "$POD":/config/packages/camera_availability.yaml
 ```
 
 ## Versioning
@@ -33,6 +34,10 @@ compare the version comment in Git against what's pasted/copied into HA).
 - `packages/weather_insights.yaml` — trigger-based forecast pull (Met.no via
   `weather.get_forecasts`, every 15 min): storm watch (24 h), rain watch
   (12 h), nice-day verdict with reason.
+- `packages/camera_availability.yaml` — `binary_sensor.baby_cam_online`, a
+  60 s TCP-connect probe of the baby cam's RTSP port (ICMP to that camera is
+  100 % loss, so this is deliberately not the Ping integration — see the
+  file header). Feeds the availability history graph on the Security view.
 
 `packages/smart_climate.yaml` is NOT here — it predates the migration and
 lives only in `/config` on the PVC (fixed at cutover by
