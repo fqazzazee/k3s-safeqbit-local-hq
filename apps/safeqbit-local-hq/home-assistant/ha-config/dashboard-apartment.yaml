@@ -1,5 +1,11 @@
 # Apartment dashboard.
-# Version: 1.3 — 2026-07-10
+# Version: 1.6 — 2026-08-16
+#   1.6: Overview gets a Baby Cam section (still preview + 12 h availability);
+#        fofo TV badge dropped (it was already gone from the live dashboard)
+#   1.5: Baby Cam availability history graph + reachability in the glance row
+#        (needs packages/camera_availability.yaml)
+#   1.4: Baby Cam (camera.baby_cam, generic/RTSP) live view added to the
+#        Security Cameras view, next to the front door
 #   1.3: ℹ️ instead of 🛈 (missing from Android emoji font); Nice-day badge
 #        only visible when on (was showing a bare "Off")
 #   1.2: sections merged (Climate & Rooms, Weather & Outside incl. Going
@@ -10,7 +16,8 @@
 # Requires the template sensors from packages/baby_comfort.yaml
 # (sensor.baby_comfort_*, sensor.baby_comfort_score_*, sensor.baby_best_room)
 # and packages/weather_insights.yaml (sensor.weather_storm_watch,
-# sensor.weather_rain_watch, binary_sensor.weather_nice_day).
+# sensor.weather_rain_watch, binary_sensor.weather_nice_day) and
+# packages/camera_availability.yaml (binary_sensor.baby_cam_online).
 # Apply via dashboard ⋮ → Raw configuration editor.
 title: Apartment
 views:
@@ -32,8 +39,6 @@ views:
       - type: entity
         entity: sensor.sun_next_dawn
         name: Dawn
-      - type: entity
-        entity: media_player.fofo_tv
       - type: entity
         entity: sensor.backup_backup_manager_state
         name: Backups
@@ -282,6 +287,35 @@ views:
               - entity: binary_sensor.hrp_g6i_frontdoor_motion
               - entity: binary_sensor.hrp_g6i_frontdoor_person_detected
               - entity: binary_sensor.hrp_g6i_frontdoor_is_dark
+            grid_options:
+              rows: auto
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Baby Cam
+            heading_style: title
+            icon: mdi:baby-face-outline
+          # camera_view: auto = still preview here (tap for live); the Security
+          # view carries the always-live tile. Availability comes from
+          # binary_sensor.baby_cam_online (packages/camera_availability.yaml).
+          - type: picture-glance
+            camera_image: camera.baby_cam
+            camera_view: auto
+            entities:
+              - entity: binary_sensor.baby_cam_online
+              - entity: sensor.htg3_bedroom_temperature
+              - entity: sensor.htg3_bedroom_humidity
+            grid_options:
+              rows: auto
+              columns: full
+          - type: history-graph
+            title: Availability
+            hours_to_show: 12
+            entities:
+              - entity: binary_sensor.baby_cam_online
+                name: Online
             grid_options:
               rows: auto
               columns: full
@@ -1001,6 +1035,38 @@ views:
               - entity: binary_sensor.hrp_g6i_frontdoor_person_detected
               - entity: binary_sensor.hrp_g6i_frontdoor_baby_cry_detected
               - entity: binary_sensor.hrp_g6i_frontdoor_is_dark
+            grid_options:
+              rows: auto
+              columns: full
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Baby Cam
+            heading_style: title
+            icon: mdi:baby-face-outline
+          # Generic camera (RTSP, added in the UI): no motion/AI binary sensors
+          # of its own, so the glance row carries reachability + bedroom climate.
+          - type: picture-glance
+            camera_image: camera.baby_cam
+            camera_view: live
+            entities:
+              - entity: binary_sensor.baby_cam_online
+              - entity: sensor.htg3_bedroom_temperature
+              - entity: sensor.htg3_bedroom_humidity
+              - entity: sensor.baby_comfort_score_bedroom
+            grid_options:
+              rows: auto
+              columns: full
+          # Availability timeline. binary_sensor.baby_cam_online comes from
+          # packages/camera_availability.yaml — a TCP connect to 554, not ICMP
+          # (ping to this camera is 100 % loss; see the package header).
+          - type: history-graph
+            title: Baby Cam Availability
+            hours_to_show: 24
+            entities:
+              - entity: binary_sensor.baby_cam_online
+                name: Online
             grid_options:
               rows: auto
               columns: full
