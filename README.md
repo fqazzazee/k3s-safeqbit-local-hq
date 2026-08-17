@@ -17,6 +17,9 @@
 ![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-5CDD8B?style=for-the-badge&logo=uptimekuma&logoColor=black)
 ![AFFiNE](https://img.shields.io/badge/AFFiNE-1E1E1E?style=for-the-badge&logo=affine&logoColor=white)
 ![Passzilla](https://img.shields.io/badge/Passzilla-3D6EB4?style=for-the-badge&logoColor=white)
+![Guacamole](https://img.shields.io/badge/Guacamole-578B34?style=for-the-badge&logo=apacheguacamole&logoColor=white)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white)
+![Pangolin](https://img.shields.io/badge/Pangolin-F36118?style=for-the-badge&logo=pangolin&logoColor=white)
 ![Pulse](https://img.shields.io/badge/Pulse-00B4D8?style=for-the-badge&logoColor=white)
 
 > A small private cloud running in my home - three computers working together to host
@@ -171,8 +174,13 @@ flowchart TB
             ha["Home Assistant<br/>LAN LB 10.10.13.51"]
             kuma["Uptime Kuma"]
         end
+        subgraph pg["🔐 Pangolin — brings its own front door"]
+            pgedge["Gerbil + Traefik — one pod<br/>10.10.13.52 · TLS + WireGuard UDP"]
+            pango["Pangolin — access control<br/>*.pg.local.safeqbit.com"]
+            newt["Newt connectors<br/>dial out from each site"]
+        end
         subgraph db["🐘 Databases"]
-            cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>guacamole ×1")]
+            cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>guacamole · pangolin ×1")]
             ownpg[("bundled Postgres<br/>immich · photoprism")]
             sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant")]
         end
@@ -208,6 +216,14 @@ flowchart TB
     ingress -- "routes by hostname + TLS" --> apps
     me -- "IoT devices → 10.10.13.51" --> ha
 
+    %% Pangolin: a second front door, LAN-only, UDP as well as TCP
+    me -- "LAN — *.pg hostnames" --> pgedge
+    metallb -- "10.10.13.52 (reserved)" --> pgedge
+    pgedge -- "who is this? (Badger)" --> pango
+    pgedge -- "own wildcard cert, DNS-01" --> le
+    newt -- "outbound WireGuard tunnel" --> pgedge
+    pango --> cnpg
+
     %% Data path
     apps --> cnpg
     apps --> ownpg
@@ -242,8 +258,8 @@ flowchart TB
     classDef monc fill:#e0f2fe,stroke:#0ea5e9,color:#0c4a6e
     classDef gitc fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95
     class visitor,gh,cf,le,b2,slack,me,pve,nas1,nas2 ext
-    class metallb,ingress,certmgr,cfd netc
-    class auth,vw,immich,pp,nb,affine,pz,guac,ha,kuma appc
+    class metallb,ingress,certmgr,cfd,pgedge netc
+    class auth,vw,immich,pp,nb,affine,pz,guac,ha,kuma,pango,newt appc
     class cnpg,ownpg,sqlite dbc
     class longhorn,nfsprov stoc
     class velero,cnpgsnap,etcdsnap bakc
@@ -600,6 +616,7 @@ learn.
 | [AFFiNE](https://affine.pro/) | Notes & collaborative knowledge base |
 | [Passzilla](https://github.com/pglombardo/PasswordPusher) | One-time secret / password sharing links |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring |
+| [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards |
 | [Apache Guacamole](https://guacamole.apache.org/) | Clientless HTML5 remote access (RDP/VNC/SSH) — SRA demo stack |
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
