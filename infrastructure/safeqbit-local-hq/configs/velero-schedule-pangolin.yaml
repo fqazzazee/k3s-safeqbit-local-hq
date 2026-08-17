@@ -1,31 +1,34 @@
 # velero-schedule-pangolin.yaml
-# Bi-monthly Velero backup of the pangolin namespace to B2.
+# Monthly Velero backup of the pangolin namespace to B2.
 #
-# Postgres data is handled separately by the CNPG ScheduledBackup (weekly), and
-# that DB holds nearly everything that matters: orgs, users, sites, resources,
-# access policies and the EE license registration.
+# Postgres data IS in this backup, contrary to what this comment claimed until
+# 2026-08-17. Velero snapshots pangolin-cnpg-1 on every run (~609MB in the
+# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
+# the pod. The CNPG ScheduledBackup layer only writes in-cluster Longhorn
+# VolumeSnapshots, so this is the ONLY off-site copy of the DB that holds orgs,
+# users, sites, resources, access policies and the EE license registration.
 #
-# This catches the rest: Gerbil's WireGuard private key PVC (losing it forces
-# every Newt/Olm peer to re-handshake against a new server key), the Traefik
-# ACME state, and the k8s objects.
+# Also catches: Gerbil's WireGuard private key PVC (losing it forces every
+# Newt/Olm peer to re-handshake against a new server key), the Traefik ACME
+# state, and the k8s objects.
 #
-# Schedule: 11th and 26th 04:15 UTC — an unused slot in the bi-monthly rotation
-# so only one workload backs up per day (avoids B2 Class B cap spikes).
+# Schedule: 25th 04:15 UTC. Dropped from bi-monthly (11th + 26th) to monthly on
+# 2026-08-17; moved to the 25th so it stops sharing the 11th/26th with
+# passzilla, restoring one namespace to B2 per day (avoids B2 Class B spikes).
 #
-# Retention: keep the last 2 restore points. Velero retention is TTL-based
-# (there is no native "keep N"), so ttl is 28 days — longer than the ~15 day
-# interval so the previous backup survives, shorter than two intervals so the
-# one before that expires.
+# Retention: 60 days -> keep the last 2 restore points. Velero retention is
+# TTL-based (there is no native "keep N"), so the TTL sits between one monthly
+# interval (28-31d) and two (59-62d).
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: pangolin-bimonthly
+  name: pangolin-monthly
   namespace: velero
 spec:
-  schedule: "15 4 11,26 * *"
+  schedule: "15 4 25 * *"
 
   template:
-    ttl: "672h0m0s"   # 28 days -> keep last 2 bi-monthly backups
+    ttl: "1440h0m0s"
     includedNamespaces:
       - pangolin
     excludedResources:

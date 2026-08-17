@@ -1,27 +1,38 @@
 # velero-schedule-affine.yaml
-# Weekly Velero backup of the affine namespace to B2.
+# Bi-weekly Velero backup of the affine namespace to B2.
 #
-# Covers: affine-storage PVC (blobs, avatars, 15MB+), affine-config PVC
-# (private.key), SealedSecret, PVC definitions, Ingress, Deployments.
+# Covers: affine-storage PVC (blobs, avatars), affine-config PVC
+# (private.key), the affine-cnpg PVC, SealedSecret, PVC definitions,
+# Ingress, Deployments.
 #
-# Postgres data is NOT in this backup — CNPG ScheduledBackup handles that
-# separately (apps/.../affine/04-cnpg-scheduled-backup.yaml). Velero excludes
-# pods globally and won't snapshot the cnpg PVC since no non-pod object
-# directly claims it.
+# Postgres data IS in this backup, contrary to what this comment claimed until
+# 2026-08-17. Velero snapshots affine-cnpg-1 on every run (~645MB/run in the
+# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
+# the pod. That is deliberate and load-bearing: the CNPG ScheduledBackup layer
+# writes Longhorn VolumeSnapshots, which are in-cluster only, so this Velero
+# copy is the ONLY off-site copy of the affine database. Do not exclude it
+# without first giving CNPG a real off-site target (Barman/S3, improvement-plan
+# P3.1).
 #
-# Schedule: Sundays 03:00 UTC (1h after CNPG snapshot at 02:00)
-# Retention: 60 days (tuned down from 180d, 2026-07-03) (~26 weekly restore points at steady state)
+# Schedule: 2nd + 17th 03:00 UTC. Moved off Sundays 2026-08-17; `*/14` (the
+# literal bi-weekly form) resolves to 1/15/29, which home-assistant already
+# owns, and doubling up breaks the one-namespace-per-day B2 stagger.
+# Retention: 21 days -> keep the last 2 restore points. Velero retention is
+# TTL-based (there is no native "keep N"), so the TTL sits between one interval
+# (~15d, so the previous backup survives) and two (~30d, so the one before that
+# expires). Tuned down from 60d/weekly on 2026-08-17: that combination held
+# ~8.6 copies and was 10.7GB of the 31GB B2 footprint on its own.
 
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: affine-weekly
+  name: affine-biweekly
   namespace: velero
 spec:
-  schedule: "0 3 * * 0"
+  schedule: "0 3 2,17 * *"
 
   template:
-    ttl: "1440h0m0s"   # 60 days
+    ttl: "504h0m0s"
     includedNamespaces:
       - affine
     excludedResources:

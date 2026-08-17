@@ -1,5 +1,5 @@
 # velero-schedule-pulse.yaml
-# Weekly Velero backup of the pulse namespace to B2.
+# Bi-monthly Velero backup of the pulse namespace to B2.
 #
 # Covers: pulse-data PVC (Pulse's config, the *encrypted* target credentials —
 # Proxmox API tokens, Docker agent tokens, k3s access — discovered nodes, alert
@@ -11,19 +11,26 @@
 # snapshot is the only backup of that configuration. If the volume is lost
 # without this, every Proxmox / Docker / k3s target has to be re-added by hand.
 #
-# Schedule: Sundays 05:00 UTC (slots after the uptime-kuma 04:00 weekly job to
-# spread snapshot load).
-# Retention: 60 days (tuned down from 180d, 2026-07-03) (~26 weekly restore points at steady state).
+# Schedule: 6th + 21st 05:00 UTC. Dropped from weekly on 2026-08-17 and moved
+# onto free days in the day-of-month stagger (one namespace to B2 per day).
+# Retention: 21 days -> keep the last 2 restore points (TTL between one ~15d
+# interval and two). Tuned down from 60d/weekly, which held ~8.6 copies.
+#
+# SIZE WATCH: pulse-data is the largest single Velero payload in the cluster —
+# 227MB on 2026-07-25, 967MB on 2026-08-17, on a 2Gi PVC. Nearly all of it is
+# Pulse's own metrics history (metrics.db 536MB, resources 172MB, audit 103MB).
+# Trimming retention in the Pulse UI is the real fix; cutting the backup cadence
+# only slows the bleed. Re-check /data usage if this PVC nears full.
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
-  name: pulse-weekly
+  name: pulse-bimonthly
   namespace: velero
 spec:
-  schedule: "0 5 * * 0"
+  schedule: "0 5 6,21 * *"
 
   template:
-    ttl: "1440h0m0s"   # 60 days
+    ttl: "504h0m0s"
     includedNamespaces:
       - pulse
     excludedResources:

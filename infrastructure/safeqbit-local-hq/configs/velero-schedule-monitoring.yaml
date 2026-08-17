@@ -8,9 +8,16 @@
 # history is accepted DR loss per 2026-07-03 decision; it never fit the
 # B2 free tier and its DataUploads had never once succeeded anyway).
 #
-# Schedule: 9th and 24th 03:00 UTC. Spread across the month with other
-# bi-monthly workloads.
-# Retention: 60 days (tuned down from 180d, 2026-07-03)
+# The grafana-cnpg PVC (~628MB/run in the DataUploads) is the bulk of this
+# backup. CNPG's own ScheduledBackup layer only writes in-cluster Longhorn
+# VolumeSnapshots, so this really is the only off-site copy of Grafana's DB.
+#
+# Schedule: 9th and 24th 03:00 UTC (unchanged). Spread across the month with
+# other bi-monthly workloads.
+# Retention: 21 days -> keep the last 2 restore points (TTL between one ~15d
+# interval and two). Tuned down from 60d on 2026-08-17, which held ~4 copies.
+# Deliberately NOT the single copy originally requested — a sub-interval TTL
+# leaves a zero-copy window after any one failed run.
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -21,7 +28,7 @@ spec:
   schedule: "0 3 9,24 * *"
 
   template:
-    ttl: "1440h0m0s"   # 60 days
+    ttl: "504h0m0s"
     includedNamespaces:
       - monitoring
     excludedResources:
