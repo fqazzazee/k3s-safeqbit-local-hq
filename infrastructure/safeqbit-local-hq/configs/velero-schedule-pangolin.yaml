@@ -1,24 +1,16 @@
 # velero-schedule-pangolin.yaml
-# Monthly Velero backup of the pangolin namespace to B2.
+# Monthly backup of the pangolin namespace to B2.
 #
-# Postgres data IS in this backup, contrary to what this comment claimed until
-# 2026-08-17. Velero snapshots pangolin-cnpg-1 on every run (~609MB in the
-# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
-# the pod. The CNPG ScheduledBackup layer only writes in-cluster Longhorn
-# VolumeSnapshots, so this is the ONLY off-site copy of the DB that holds orgs,
-# users, sites, resources, access policies and the EE license registration.
+# Covers: pangolin-cnpg (Postgres — orgs, users, sites, resources, access
+# policies, EE license registration), pangolin-gerbil-key (the WireGuard private
+# key; losing it forces every Newt/Olm peer to re-handshake against a new server
+# key), and the namespace's k8s objects. pangolin-letsencrypt is NFS, skipped.
+# Keep pangolin-cnpg in scope — CNPG's own snapshots stay in-cluster, so this is
+# the only off-site copy of the database.
 #
-# Also catches: Gerbil's WireGuard private key PVC (losing it forces every
-# Newt/Olm peer to re-handshake against a new server key), the Traefik ACME
-# state, and the k8s objects.
-#
-# Schedule: 25th 04:15 UTC. Dropped from bi-monthly (11th + 26th) to monthly on
-# 2026-08-17; moved to the 25th so it stops sharing the 11th/26th with
-# passzilla, restoring one namespace to B2 per day (avoids B2 Class B spikes).
-#
-# Retention: 60 days -> keep the last 2 restore points. Velero retention is
-# TTL-based (there is no native "keep N"), so the TTL sits between one monthly
-# interval (28-31d) and two (59-62d).
+# Schedule: 25th, 04:15 UTC
+# Retention: 60d TTL = last 2 restore points
+
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
@@ -36,9 +28,8 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
-      # One-shot ACME workflow objects. Restoring these plants a stale
-      # CertificateRequest that squats on the name cert-manager needs for the
-      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
       - certificaterequests.cert-manager.io
       - orders.acme.cert-manager.io
       - challenges.acme.cert-manager.io
@@ -46,8 +37,7 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
-    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
-    # instead of PartiallyFailing. The pangolin-acme PVC is nfs-truenas.
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
     resourcePolicy:
       kind: configmap
       name: velero-volume-policy

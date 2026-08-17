@@ -1,24 +1,14 @@
 # velero-schedule-netbox.yaml
-# Bi-weekly Velero backup of the netbox namespace to B2.
+# Bi-weekly backup of the netbox namespace to B2.
 #
-# Covers: redis task queue PVC (Longhorn), the netbox-cnpg PVC, SealedSecrets,
-# manifests. netbox-media/-reports/-scripts are NFS and skipped by the volume
-# policy — TrueNAS protects them.
+# Covers: netbox-cnpg (Postgres), netbox-redis-tasks, SealedSecrets, manifests.
+# netbox-media/-reports/-scripts are NFS and skipped — TrueNAS protects those.
+# Keep netbox-cnpg in scope — CNPG's own snapshots stay in-cluster, so this is
+# the only off-site copy of the IPAM database.
 #
-# Postgres data IS in this backup, contrary to what this comment claimed until
-# 2026-08-17. Velero snapshots netbox-cnpg-1 on every run (~642MB in the
-# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
-# the pod. The CNPG ScheduledBackup layer only writes in-cluster Longhorn
-# VolumeSnapshots, so this is the ONLY off-site copy of the IPAM database.
-#
-# Schedule: 4th + 19th 03:00 UTC. Moved off Wednesdays 2026-08-17; `*/14` (the
-# literal bi-weekly form) resolves to 1/15/29, which home-assistant already
-# owns, so a day-of-month pair keeps the one-namespace-per-day B2 stagger.
-# Retention: 21 days -> keep the last 2 restore points (TTL between one ~15d
-# interval and two). Tuned down from 60d/weekly on 2026-08-17, which held ~8.6
-# copies. NOTE: this is a deliberate trade — 21d means an IPAM error older than
-# three weeks is no longer recoverable from B2. Raise the TTL (2160h = 90d,
-# ~6 copies, ~4.2GB) if that window is too short in practice.
+# Schedule: 4th + 19th, 03:00 UTC
+# Retention: 21d TTL = last 2 restore points. This caps IPAM rollback at three
+# weeks; raise to 2160h (90d) if that proves too short in practice.
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -37,9 +27,8 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
-      # One-shot ACME workflow objects. Restoring these plants a stale
-      # CertificateRequest that squats on the name cert-manager needs for the
-      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
       - certificaterequests.cert-manager.io
       - orders.acme.cert-manager.io
       - challenges.acme.cert-manager.io
@@ -47,8 +36,7 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
-    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
-    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
     resourcePolicy:
       kind: configmap
       name: velero-volume-policy

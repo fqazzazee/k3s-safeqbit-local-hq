@@ -1,21 +1,14 @@
 # velero-schedule-immich.yaml
-# Bi-monthly Velero backup of the immich namespace to B2.
+# Bi-monthly backup of the immich namespace to B2.
 #
-# Added 2026-07-03: immich had NO backup at all — its postgres is a plain
-# Deployment (custom image, not CNPG), so no Layer-2 snapshots exist either.
-# The database (albums, people/faces, photo metadata; ~470MB actual) was
-# protected by nothing but Longhorn replication.
+# Covers: immich-postgres-data and immich-config. Immich's postgres is a plain
+# Deployment, not CNPG, so there is no snapshot layer beneath this — the PVC
+# snapshot is crash-consistent and postgres replays WAL on restore.
+# Skipped: photo library and import/export (NFS, TrueNAS's job) and
+# immich-model-cache (velero.io/exclude-from-backup — re-downloadable models).
 #
-# Covers: immich-postgres-data (10Gi Longhorn, ~470MB used), immich-config
-# (1Gi, ~20K), k8s objects. The PVC snapshot of a running postgres is
-# crash-consistent — WAL recovery on restore, fine for this workload.
-# Skipped: photo library + import/export (static NFS PVs — TrueNAS's job,
-# volume policy), immich-model-cache (velero.io/exclude-from-backup label:
-# re-downloadable ML models).
-#
-# Schedule: 1st and 16th 03:30 UTC — free days in the bi-monthly stagger;
-# 30min offset avoids colliding with affine-weekly when the 1st is a Sunday.
-# Retention: 60 days
+# Schedule: 1st + 16th, 03:30 UTC
+# Retention: 60d
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -34,9 +27,8 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
-      # One-shot ACME workflow objects. Restoring these plants a stale
-      # CertificateRequest that squats on the name cert-manager needs for the
-      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
       - certificaterequests.cert-manager.io
       - orders.acme.cert-manager.io
       - challenges.acme.cert-manager.io
@@ -44,8 +36,7 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
-    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
-    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
     resourcePolicy:
       kind: configmap
       name: velero-volume-policy

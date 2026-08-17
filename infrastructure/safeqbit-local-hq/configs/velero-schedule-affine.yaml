@@ -1,27 +1,13 @@
 # velero-schedule-affine.yaml
-# Bi-weekly Velero backup of the affine namespace to B2.
+# Bi-weekly backup of the affine namespace to B2.
 #
-# Covers: affine-storage PVC (blobs, avatars), affine-config PVC
-# (private.key), the affine-cnpg PVC, SealedSecret, PVC definitions,
-# Ingress, Deployments.
+# Covers: affine-storage (blobs, avatars), affine-config (private.key),
+# affine-cnpg (Postgres), and the namespace's k8s objects.
+# Keep affine-cnpg in scope — CNPG's own snapshots stay in-cluster, so this is
+# the only off-site copy of the database.
 #
-# Postgres data IS in this backup, contrary to what this comment claimed until
-# 2026-08-17. Velero snapshots affine-cnpg-1 on every run (~645MB/run in the
-# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
-# the pod. That is deliberate and load-bearing: the CNPG ScheduledBackup layer
-# writes Longhorn VolumeSnapshots, which are in-cluster only, so this Velero
-# copy is the ONLY off-site copy of the affine database. Do not exclude it
-# without first giving CNPG a real off-site target (Barman/S3, improvement-plan
-# P3.1).
-#
-# Schedule: 2nd + 17th 03:00 UTC. Moved off Sundays 2026-08-17; `*/14` (the
-# literal bi-weekly form) resolves to 1/15/29, which home-assistant already
-# owns, and doubling up breaks the one-namespace-per-day B2 stagger.
-# Retention: 21 days -> keep the last 2 restore points. Velero retention is
-# TTL-based (there is no native "keep N"), so the TTL sits between one interval
-# (~15d, so the previous backup survives) and two (~30d, so the one before that
-# expires). Tuned down from 60d/weekly on 2026-08-17: that combination held
-# ~8.6 copies and was 10.7GB of the 31GB B2 footprint on its own.
+# Schedule: 2nd + 17th, 03:00 UTC
+# Retention: 21d TTL = last 2 restore points
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -40,9 +26,8 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
-      # One-shot ACME workflow objects. Restoring these plants a stale
-      # CertificateRequest that squats on the name cert-manager needs for the
-      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
       - certificaterequests.cert-manager.io
       - orders.acme.cert-manager.io
       - challenges.acme.cert-manager.io
@@ -50,8 +35,7 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
-    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
-    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
     resourcePolicy:
       kind: configmap
       name: velero-volume-policy

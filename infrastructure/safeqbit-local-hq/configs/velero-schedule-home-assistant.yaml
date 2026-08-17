@@ -1,24 +1,14 @@
 # velero-schedule-home-assistant.yaml
-# Bi-weekly Velero backup of the home-assistant namespace to B2.
+# Bi-weekly backup of the home-assistant namespace to B2.
 #
-# Covers: home-assistant-config PVC — the entire HA state: integration
-# credentials and entity registry (.storage/), configuration.yaml + packages,
-# automations, dashboards, and the recorder SQLite DB. No CNPG / external
-# database; this PVC snapshot is the only off-cluster backup of the smart
-# climate system's config and every paired integration.
+# Covers: home-assistant-config — the entire HA state: integration credentials
+# and entity registry (.storage/), configuration.yaml + packages, automations,
+# dashboards, and the recorder SQLite DB. There is no external database, so
+# this PVC is the whole workload.
 #
-# Schedule: */14 in day-of-month = 1st, 15th, 29th at 06:00 UTC — true
-# 14-day gaps except the 29th→1st stutter at month end (user chose this
-# over fixed 3,18; day-of-month resets monthly, cron can't do true
-# every-14-days). No slot collision (immich runs 1,16 at 03:30).
-# Retention: 672h (28 days) -> ~2 restore points at steady state (briefly 3
-# around month end because of the 29th run), same keep-last-2 policy as
-# guacamole. HA config is low-churn and config-loss is noticed within days;
-# history lives in the recorder DB and is expendable.
-#
-# Renamed from home-assistant-weekly 2026-07-09 (infrastructure-configs has
-# prune:false, so the old Schedule CR was deleted by hand — kubectl delete
-# is safe for Schedule CRs; it is Backup CRs that backup-sync resurrects).
+# Schedule: 1st + 15th + 29th, 06:00 UTC (*/14 stutters at month end)
+# Retention: 28d TTL = last 2 restore points (briefly 3 around month end)
+
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
@@ -36,9 +26,8 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
-      # One-shot ACME workflow objects. Restoring these plants a stale
-      # CertificateRequest that squats on the name cert-manager needs for the
-      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
       - certificaterequests.cert-manager.io
       - orders.acme.cert-manager.io
       - challenges.acme.cert-manager.io
@@ -46,8 +35,7 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
-    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
-    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
     resourcePolicy:
       kind: configmap
       name: velero-volume-policy
