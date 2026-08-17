@@ -643,12 +643,23 @@ learn.
 
 ### Things I'm building
 
+Side projects I've published, mostly terminal-first Linux and networking tools:
+
 | Project | Description |
 |---|---|
-| [NetScan](https://github.com/fqazzazee/NetScan-WoL) | Network scanning & Wake-on-LAN management |
+| [NetScan](https://github.com/fqazzazee/NetScan-WoL) | ARP-based network discovery and Wake-on-LAN, with an interactive CLI and an optional web dashboard |
+| [TGT](https://github.com/fqazzazee/Traffic-Generation-Toolkit) | Generates realistic OT/ICS + IT traffic onto a virtual interface, so a passive monitor (Zeek, Suricata, Claroty…) has something to capture and classify |
+| [syslog-yard](https://github.com/fqazzazee/syslog-yard) | Self-hosted syslog toolkit - traffic generator, a syslog-ng router/filter, and an email-style triage server in three containers |
+| [distrofetch](https://github.com/fqazzazee/distrofetch) | Matrix-styled system information for Linux - like neofetch, with falling glyphs |
+| [TTD](https://github.com/fqazzazee/TTD) | Terminal tower defense - real-time, Python standard library only, no dependencies |
+| [howdy-fedora-helper-script](https://github.com/fqazzazee/howdy-fedora-helper-script) | Automated facial-authentication setup for Fedora Workstation with GNOME |
+| [dex-manager-linux](https://github.com/fqazzazee/dex-manager-linux) | Menu-driven `scrcpy` wrapper that runs Samsung DeX as a window on Fedora |
+| [Cisco SDSI notes](https://github.com/fqazzazee/Cisco-SDSI-Notes) | Study notes for the 300-745 SDSI exam - the architecture-focused CCNP Security concentration |
 
-I develop and run my own tools on the same cluster and through the same GitOps pipeline as
-everything else - a realistic place to test things in something close to production.
+The cluster and these projects feed each other: the tools get exercised against a real
+network with real services before I publish them, and anything that needs somewhere to run
+lands here, on the same GitOps pipeline as everything above - a realistic place to test
+things in something close to production.
 
 ---
 
