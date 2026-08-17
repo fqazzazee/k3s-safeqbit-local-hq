@@ -29,7 +29,9 @@ spec:
       # wal_keep_size=512MB, max_wal_size=1GB — pinned pg_wal at ~561MB on every
       # cluster in this fleet while the actual `base/` dir was only 33-245MB.
       # Velero snapshots these PVCs whole, so ~90% of every CNPG backup shipped
-      # to B2 was empty WAL ring. These values shrink pg_wal to ~150-200MB.
+      # to B2 was empty WAL ring. Measured after the 2026-08-17 rollout: pg_wal
+      # settles at 209MB (128MB keep + headroom + in-flight = 13 x 16MB segs),
+      # taking total pgdata from 3.85GB to 1.74GB across the six clusters.
       #
       # Safe here because replicationSlots.highAvailability is on by default:
       # standbys hold their own slot, so wal_keep_size is only belt-and-braces
