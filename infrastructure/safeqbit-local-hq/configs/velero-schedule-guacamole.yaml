@@ -1,23 +1,14 @@
 # velero-schedule-guacamole.yaml
-# Monthly Velero backup of the guacamole namespace to B2.
+# Monthly backup of the guacamole namespace to B2.
 #
-# Postgres data IS in this backup, contrary to what this comment claimed until
-# 2026-08-17. Velero snapshots guacamole-cnpg-1 on every run (~621MB in the
-# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
-# the pod. The CNPG ScheduledBackup layer only writes in-cluster Longhorn
-# VolumeSnapshots, so this is the ONLY off-site copy of the connection/vaulted-
-# credential database. Also catches the k8s objects (Ingress, ConfigMap,
-# Deployments, Services, PVC defs). guacamole-recordings is NFS and skipped by
-# the volume policy — TrueNAS protects the recordings.
+# Covers: guacamole-cnpg (Postgres — connections and vaulted credentials) and
+# the namespace's k8s objects. guacamole-recordings is NFS and skipped.
+# Keep guacamole-cnpg in scope — CNPG's own snapshots stay in-cluster, so this
+# is the only off-site copy of the database.
 #
-# Schedule: 10th 04:30 UTC. Dropped from bi-monthly (8th + 23rd) to monthly on
-# 2026-08-17 — this is a demo workload with near-zero change velocity.
-#
-# Retention: 45 days -> keep the last 2 restore points. Velero retention is
-# TTL-based (there is no native "keep N"), so the TTL sits between one monthly
-# interval (28-31d) and two (59-62d). Deliberately NOT the 30d/single-copy
-# originally requested: at 30d the expiry races the next run, so a single failed
-# backup drops the namespace to zero off-site copies.
+# Schedule: 10th, 04:30 UTC
+# Retention: 45d TTL = last 2 restore points
+
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
@@ -35,9 +26,8 @@ spec:
       - events.events.k8s.io
       - pods
       - replicasets
-      # One-shot ACME workflow objects. Restoring these plants a stale
-      # CertificateRequest that squats on the name cert-manager needs for the
-      # next renewal, silently stalling it (vaultwarden-tls, 2026-07-18).
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
       - certificaterequests.cert-manager.io
       - orders.acme.cert-manager.io
       - challenges.acme.cert-manager.io
@@ -45,8 +35,7 @@ spec:
     snapshotMoveData: true
     defaultVolumesToFsBackup: false
     storageLocation: default
-    # Skip NFS volumes (TrueNAS owns their protection) so backups complete
-    # instead of PartiallyFailing. See velero-volume-policy.yaml.
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
     resourcePolicy:
       kind: configmap
       name: velero-volume-policy
