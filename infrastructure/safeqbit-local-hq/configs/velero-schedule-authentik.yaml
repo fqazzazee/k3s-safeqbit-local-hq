@@ -1,14 +1,22 @@
 # velero-schedule-authentik.yaml
 # Bi-monthly Velero backup of the authentik namespace to B2.
 #
-# Postgres data handled separately by CNPG ScheduledBackup (weekly).
-# This catches the k8s objects (Ingress, SealedSecret, HelmRelease state,
-# etc). authentik-media/-templates are NFS and skipped by the volume
-# policy — TrueNAS protects them.
+# Postgres data IS in this backup, contrary to what this comment claimed until
+# 2026-08-17. Velero snapshots authentik-cnpg-2 on every run (~851MB in the
+# DataUploads) because the PVC is claimed by the CNPG Cluster CR, not only by
+# the pod. That is deliberate: the CNPG ScheduledBackup layer writes Longhorn
+# VolumeSnapshots, which are in-cluster only, so this is the ONLY off-site copy
+# of the identity database. Also catches the k8s objects (Ingress, SealedSecret,
+# HelmRelease state). authentik-media/-templates are NFS and skipped by the
+# volume policy — TrueNAS protects them.
 #
-# Schedule: 5th and 20th 03:00 UTC. Spread across the month with other
-# bi-monthly workloads so only one fires per day (avoids B2 cap spikes).
-# Retention: 90 days (tuned down from 180d, 2026-07-03)
+# Schedule: 5th and 20th 03:00 UTC (unchanged). Spread across the month with
+# other bi-monthly workloads so only one fires per day (avoids B2 cap spikes).
+# Retention: 21 days -> keep the last 2 restore points (TTL between one ~15d
+# interval and two). Tuned down from 90d on 2026-08-17, which held ~6 copies.
+# Deliberately NOT the single copy originally requested: a sub-interval TTL
+# would leave a window with zero off-site copies of identity after any one
+# failed run.
 
 apiVersion: velero.io/v1
 kind: Schedule
@@ -19,7 +27,7 @@ spec:
   schedule: "0 3 5,20 * *"
 
   template:
-    ttl: "2160h0m0s"   # 90 days
+    ttl: "504h0m0s"
     includedNamespaces:
       - authentik
     excludedResources:

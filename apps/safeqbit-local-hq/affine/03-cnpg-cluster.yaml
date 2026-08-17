@@ -23,6 +23,25 @@ metadata:
 spec:
   instances: 2
 
+  postgresql:
+    parameters:
+      # WAL ring sizing (added 2026-08-17). CNPG's defaults —
+      # wal_keep_size=512MB, max_wal_size=1GB — pinned pg_wal at ~561MB on every
+      # cluster in this fleet while the actual `base/` dir was only 33-245MB.
+      # Velero snapshots these PVCs whole, so ~90% of every CNPG backup shipped
+      # to B2 was empty WAL ring. These values shrink pg_wal to ~150-200MB.
+      #
+      # Safe here because replicationSlots.highAvailability is on by default:
+      # standbys hold their own slot, so wal_keep_size is only belt-and-braces
+      # for slotless catch-up. These are sighup parameters — CNPG applies them
+      # with a config reload, no Postgres restart and no failover.
+      #
+      # Lower max_wal_size means more frequent checkpoints; negligible on these
+      # low-write DBs. Revisit if a cluster ever becomes write-heavy.
+      max_wal_size: "256MB"
+      min_wal_size: "80MB"
+      wal_keep_size: "128MB"
+
   bootstrap:
     initdb:
       database: affine
