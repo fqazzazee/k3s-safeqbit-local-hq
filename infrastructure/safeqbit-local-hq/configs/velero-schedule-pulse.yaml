@@ -10,10 +10,17 @@
 # Schedule: 6th + 21st, 05:00 UTC
 # Retention: 21d TTL = last 2 restore points
 #
-# SIZE WATCH: largest Velero payload in the cluster and growing fast — 227MB on
-# 2026-07-25, 967MB on 2026-08-17, on a 2Gi PVC. Nearly all of it is Pulse's own
-# metrics history (metrics.db). Trim retention in the Pulse UI; changing this
-# cadence only slows the growth.
+# SIZE: ~950MB, the largest Velero payload in the cluster — almost all of it
+# Pulse's tiered metrics store (metrics.db 544MB, unified_resources.db 176MB).
+# This is STEADY STATE, not growth: the v6.1.1 upgrade on 2026-07-25 stepped
+# pulse-data from 228MB to 1032MB in a single day when the tiered metrics store
+# arrived, and it has oscillated 947-1133MB since (it has gone down twice).
+# Retention is working — Pulse prunes every tier hourly. Nothing to fix here;
+# ~1.1GB of headroom remains on the 2Gi PVC.
+#
+# If it ever does need shrinking, the levers in order are: slow
+# pvePollingInterval (10s, inflates the raw tier), then metricsRetentionMinuteHours
+# (24h default, ~60% of all rows) in /data/system.json. See workbook.
 
 apiVersion: velero.io/v1
 kind: Schedule
