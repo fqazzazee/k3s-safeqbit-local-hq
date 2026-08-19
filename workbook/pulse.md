@@ -138,8 +138,26 @@ All four v6 pins re-verified against the `v6.2.1` binary before merging
 Kubernetes resource kinds in the release notes; if a panel comes up empty, grep
 the agent log for `kubernetes access forbidden (RBAC)`.
 
-Take the restore points and use the Flux suspend/resume order from the v6
-runbook below anyway — the mechanics are the same for a minor.
+**Cutover, 2026-08-19 03:05 UTC — clean.** Both pods rolled on the first try,
+`0 restarts`, no `error`-level lines on the server, no `kubernetes access
+forbidden (RBAC)` on the agent. `/api/version` reports `6.2.1` with
+`updateAvailable:false`; the agent logs `auto_update:false` and
+`Health/metrics server listening addr :9191`, so the two pins that would fail
+silently are both confirmed live. **No restore points were taken** — deliberate
+call, given no `/data` migration in a minor. Flux needed a manual
+`reconcile.fluxcd.io/requestedAt` nudge: `apps` had just failed a reconcile on
+`dependency 'infrastructure-configs' is not ready` and would otherwise have sat
+on the old revision for the rest of its 10m interval.
+
+Two readings that look like failures and are not, both already documented for
+v6.1.1 and both reproduced here: the agent logs one burst of `connection
+refused` at startup when both pods roll together (it buffers and recovers on the
+next 30s cycle), and `pulse_agent_destination_delivery_up` reads **0** until the
+first cycle lands — measured at t+25s it was 0, at t+35s it was 1. Read it after
+a full interval or you will chase a non-problem.
+
+For a future *major*, still take the restore points and use the Flux
+suspend/resume order from the v6 runbook below.
 
 ---
 
