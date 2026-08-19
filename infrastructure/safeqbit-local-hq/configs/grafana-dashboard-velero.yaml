@@ -1,0 +1,1252 @@
+# grafana-dashboard-velero.yaml
+# Velero dashboard, delivered as a ConfigMap rather than clicked into Grafana
+# so it survives a Grafana rebuild and reviews like the rest of the cluster.
+#
+# The kube-prometheus-stack Grafana runs a `grafana-sc-dashboard` sidecar with
+# LABEL=grafana_dashboard, LABEL_VALUE=1, NAMESPACE=ALL and METHOD=WATCH, so
+# this lands in Grafana within seconds of Flux applying it -- no pod restart.
+# Editing the dashboard in the UI works, but the sidecar re-applies this file
+# on the next change, so UI edits are throwaway: change the JSON here instead.
+#
+# Metrics come from the velero ServiceMonitor in monitoring-servicemonitors.yaml
+# (velero.velero:8085). The dashboard deliberately mirrors the alerting in
+# monitoring-alert-rules.yaml rather than inventing new thresholds.
+#
+# Metric-name and query behaviour verified against live Prometheus and against
+# the velero 1.18.2 /metrics endpoint on 2026-08-19:
+#   - velero_backup_last_status reads 1 for PartiallyFailed too, so "Last
+#     status" alone never catches the silent skipped-volume case. That is what
+#     the Partial column and the PartiallyFailed (16d) tile are for.
+#   - Counters live in the Velero process and reset when the pod restarts.
+#     Every failure panel uses increase() over a window, which handles resets
+#     and reads through a restart from Prometheus history -- the same reason a
+#     PartiallyFailed alert does not clear just because Velero was restarted.
+#   - velero_backup_last_successful_timestamp is only re-populated when a
+#     schedule next succeeds, so a freshly renamed schedule has no Age until
+#     its first run. Those rows show an empty Age rather than disappearing.
+#   - Renamed schedules keep emitting under their OLD name until the Velero
+#     pod restarts. Range-counter queries are intersected with the currently
+#     reported schedules (`and on (schedule) velero_backup_last_status`) so
+#     ghosts like affine-weekly / pulse-weekly stay out of the tables.
+#   - There is NO velero_repo_maintenance_failure_total in 1.18.2 -- only
+#     _success_total and the duration histogram. A failing kopia sweep shows
+#     up as a missing run, never as an error count.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-velero
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  velero.json: |-
+    {
+      "title": "Velero \u2014 backups & repositories",
+      "uid": "safeqbit-velero",
+      "tags": [
+        "velero",
+        "backup",
+        "safeqbit"
+      ],
+      "timezone": "browser",
+      "editable": true,
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "5m",
+      "time": {
+        "from": "now-30d",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "label": "Data source",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0
+          },
+          {
+            "name": "schedule",
+            "label": "Schedule",
+            "type": "query",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "query": "label_values(velero_backup_last_status{schedule!=\"\"}, schedule)",
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true,
+            "allValue": ".*",
+            "current": {
+              "text": "All",
+              "value": "$__all"
+            },
+            "sort": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Backup storage location",
+          "description": "velero_backup_location_status_gauge for the `default` BSL (B2 bucket k3s-safeqbit-local-hq-velero). Unavailable means Velero could not validate the bucket \u2014 credentials, B2 caps, or network. Validation runs hourly (validationFrequency: 1h), so this lags a real outage by up to an hour.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(velero_backup_location_status_gauge)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "Unavailable",
+                      "color": "red",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "Available",
+                      "color": "green",
+                      "index": 1
+                    }
+                  }
+                }
+              ],
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Backups in bucket",
+          "description": "velero_backup_total \u2014 Backup CRs Velero currently knows about, i.e. what is restorable. Falls only when a backup passes its TTL and is reaped, or is deleted with `velero backup delete`. Note this is object count, not bytes on B2: kopia keeps freed blobs until the next maintenance sweep.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(velero_backup_total)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "none",
+            "graphMode": "area"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Schedules failing",
+          "description": "Count of schedules whose most recent backup ended Failed. Mirrors the VeleroBackupFailed alert. This does NOT count PartiallyFailed \u2014 velero_backup_last_status reads 1 for those; see the next tile.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "count(velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"} == 0) or vector(0)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "PartiallyFailed (16d)",
+          "description": "sum(increase(velero_backup_partial_failure_total[16d])) \u2014 the silent case where a backup reports success but volumes were skipped. 16d matches the alert window in monitoring-alert-rules.yaml (longest schedule interval + slack). Triage with workbook/velero-partial-failed-cleanup.md.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(velero_backup_partial_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[16d])) or vector(0)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Last-run size, all schedules",
+          "description": "Sum of the most recent tarball per schedule. A rough proxy for per-cycle B2 write volume, NOT bucket size \u2014 kopia dedups across backups and holds deleted blobs until maintenance. The B2 free tier is 10 GB decimal per account.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(velero_backup_tarball_size_bytes{schedule!=\"\", schedule=~\"$schedule\"})",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "none",
+            "graphMode": "area"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Stalest schedule",
+          "description": "Age of the oldest last-successful-backup across all schedules. Amber past 16d, red past 31d \u2014 sized for the bi-monthly (twice-monthly) schedules, so a weekly schedule has to miss two runs to colour.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(time() - velero_backup_last_successful_timestamp{schedule!=\"\", schedule=~\"$schedule\"})",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1382400
+                  },
+                  {
+                    "color": "red",
+                    "value": 2678400
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 7,
+          "type": "table",
+          "title": "Schedule freshness",
+          "description": "One row per schedule. Age = time since the last SUCCESSFUL backup. Failed / Partial / Warnings are counted over the dashboard time range, so widen the range to see further back. Counter columns are scoped to schedules Velero is currently reporting on, so a renamed schedule drops out of this table rather than leaving a half-empty ghost row \u2014 but note its old series stay in Prometheus, and a deleted Schedule CR keeps reporting here until the Velero pod restarts.",
+          "gridPos": {
+            "h": 11,
+            "w": 24,
+            "x": 0,
+            "y": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max by (schedule) (time() - velero_backup_last_successful_timestamp{schedule!=\"\", schedule=~\"$schedule\"}) and on (schedule) velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"}",
+              "instant": true,
+              "format": "table"
+            },
+            {
+              "refId": "B",
+              "expr": "max by (schedule) (velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"})",
+              "instant": true,
+              "format": "table"
+            },
+            {
+              "refId": "C",
+              "expr": "max by (schedule) (velero_backup_tarball_size_bytes{schedule!=\"\", schedule=~\"$schedule\"})",
+              "instant": true,
+              "format": "table"
+            },
+            {
+              "refId": "D",
+              "expr": "sum by (schedule) (increase(velero_backup_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[$__range])) and on (schedule) velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"}",
+              "instant": true,
+              "format": "table"
+            },
+            {
+              "refId": "E",
+              "expr": "sum by (schedule) (increase(velero_backup_partial_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[$__range])) and on (schedule) velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"}",
+              "instant": true,
+              "format": "table"
+            },
+            {
+              "refId": "F",
+              "expr": "sum by (schedule) (increase(velero_backup_warning_total{schedule!=\"\", schedule=~\"$schedule\"}[$__range])) and on (schedule) velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"}",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "joinByField",
+              "options": {
+                "byField": "schedule",
+                "mode": "outer"
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Time 1": true,
+                  "Time 2": true,
+                  "Time 3": true,
+                  "Time 4": true,
+                  "Time 5": true,
+                  "Time 6": true
+                },
+                "renameByName": {
+                  "schedule": "Schedule",
+                  "Value #A": "Age of last success",
+                  "Value #B": "Last status",
+                  "Value #C": "Last size",
+                  "Value #D": "Failed",
+                  "Value #E": "Partial",
+                  "Value #F": "Warnings"
+                }
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {
+                "sort": [
+                  {
+                    "field": "Age of last success",
+                    "desc": true
+                  }
+                ]
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "filterable": true
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Age of last success"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 1
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green",
+                          "value": null
+                        },
+                        {
+                          "color": "orange",
+                          "value": 1382400
+                        },
+                        {
+                          "color": "red",
+                          "value": 2678400
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last status"
+                },
+                "properties": [
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "0": {
+                            "text": "Failed",
+                            "color": "red",
+                            "index": 0
+                          },
+                          "1": {
+                            "text": "Success",
+                            "color": "green",
+                            "index": 1
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Last size"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "bytes"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "Failed|Partial|Warnings"
+                },
+                "properties": [
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "text",
+                          "value": null
+                        },
+                        {
+                          "color": "orange",
+                          "value": 1
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Backup size per schedule",
+          "description": "velero_backup_tarball_size_bytes, stepped per schedule \u2014 each step is a new run. A step change without a config change is usually data growth; a step change right after a CNPG or PVC change is worth explaining. This is what drives B2 usage.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 15
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "velero_backup_tarball_size_bytes{schedule!=\"\", schedule=~\"$schedule\"}",
+              "legendFormat": "{{schedule}}"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "lineInterpolation": "stepAfter",
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": true
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 9,
+          "type": "bargauge",
+          "title": "Average backup duration per run (range)",
+          "description": "increase(duration_sum) / increase(duration_count) over the dashboard time range \u2014 mean wall-clock per run, not a lifetime average. Long durations on the data-mover schedules usually mean Longhorn snapshot/temp-volume pressure rather than B2 throughput.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 15
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (schedule) (increase(velero_backup_duration_seconds_sum{schedule!=\"\", schedule=~\"$schedule\"}[$__range])) / sum by (schedule) (increase(velero_backup_duration_seconds_count{schedule!=\"\", schedule=~\"$schedule\"}[$__range])) and on (schedule) velero_backup_last_status{schedule!=\"\", schedule=~\"$schedule\"}",
+              "instant": true,
+              "legendFormat": "{{schedule}}"
+            }
+          ],
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "showUnfilled": true
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 600
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1800
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 10,
+          "type": "timeseries",
+          "title": "Backup outcomes per day",
+          "description": "increase(...[1d]) per outcome. Counters live in the Velero process and reset when the pod restarts; increase() handles the reset, which is also why a past PartiallyFailed keeps showing here (and keeps its alert firing) across a Velero restart \u2014 the history is in Prometheus, not in Velero.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(velero_backup_success_total{schedule!=\"\", schedule=~\"$schedule\"}[1d]))",
+              "legendFormat": "success"
+            },
+            {
+              "refId": "B",
+              "expr": "sum(increase(velero_backup_partial_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[1d]))",
+              "legendFormat": "partially failed"
+            },
+            {
+              "refId": "C",
+              "expr": "sum(increase(velero_backup_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[1d]))",
+              "legendFormat": "failed"
+            },
+            {
+              "refId": "D",
+              "expr": "sum(increase(velero_backup_validation_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[1d]))",
+              "legendFormat": "validation failed"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "custom": {
+                "fillOpacity": 15,
+                "lineWidth": 1,
+                "showPoints": "never"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "success"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "partially failed"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "orange"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failed"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "validation failed"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "purple"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 11,
+          "type": "timeseries",
+          "title": "CSI snapshots per day",
+          "description": "The data-mover leg: Velero takes a CSI snapshot, then uploads it. Failures here are usually Longhorn-side \u2014 the 2026-06-28 case was ReplicaSchedulingFailure at the over-provisioning ceiling, which broke every data-mover backup while physical disk usage still looked fine. Cross-check the Longhorn scheduling alert.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(velero_csi_snapshot_success_total[1d]))",
+              "legendFormat": "success"
+            },
+            {
+              "refId": "B",
+              "expr": "sum(increase(velero_csi_snapshot_failure_total[1d]))",
+              "legendFormat": "failure"
+            },
+            {
+              "refId": "C",
+              "expr": "sum(increase(velero_csi_snapshot_attempt_total[1d]))",
+              "legendFormat": "attempt"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "custom": {
+                "fillOpacity": 10,
+                "lineWidth": 1,
+                "showPoints": "never"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "success"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "green"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failure"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "attempt"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "text"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 12,
+          "type": "table",
+          "title": "Kopia repository maintenance",
+          "description": "One row per BackupRepository. Maintenance is what actually frees deleted blobs on B2 \u2014 until it runs, a deleted backup still bills. Global cadence is 168h (defaultRepoMaintainFrequency in controllers/velero.yaml); the pulse repo alone gets a daily sweep via configs/velero-repo-maintenance-pulse.yaml because it dedups badly. A repo with no runs in the range is what to chase when the bucket will not shrink. There is no failure counter \u2014 Velero 1.18 exposes only successes and durations \u2014 so a failing sweep shows up as an absent run, not as an error. Rows for renamed apps (e.g. sra-dev-demo) are stale repos that outlived their schedule.",
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 0,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (repository_name) (increase(velero_repo_maintenance_success_total[$__range]))",
+              "instant": true,
+              "format": "table"
+            },
+            {
+              "refId": "C",
+              "expr": "sum by (repository_name) (increase(velero_repo_maintenance_duration_seconds_sum[$__range])) / sum by (repository_name) (increase(velero_repo_maintenance_duration_seconds_count[$__range]))",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "joinByField",
+              "options": {
+                "byField": "repository_name",
+                "mode": "outer"
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Time 1": true,
+                  "Time 2": true
+                },
+                "renameByName": {
+                  "repository_name": "Repository",
+                  "Value #A": "Maintenance runs",
+                  "Value #C": "Avg duration"
+                }
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {
+                "sort": [
+                  {
+                    "field": "Maintenance runs",
+                    "desc": false
+                  }
+                ]
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "filterable": true,
+                "minWidth": 160
+              },
+              "decimals": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Maintenance runs"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "orange",
+                          "value": null
+                        },
+                        {
+                          "color": "green",
+                          "value": 1
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Avg duration"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 16,
+          "type": "timeseries",
+          "title": "Repository maintenance sweeps per day",
+          "description": "increase(velero_repo_maintenance_success_total[1d]) per repository. This is the visual answer to \u201cdid maintenance actually run?\u201d \u2014 the pulse repo should show a bar most days, every other repo roughly weekly. A flat line on a repo whose backups you have been deleting means the freed space is still being billed on B2.",
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 12,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (repository_name) (increase(velero_repo_maintenance_success_total[1d]))",
+              "legendFormat": "{{repository_name}}"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "sum"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 60,
+                "lineWidth": 0,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 13,
+          "type": "stat",
+          "title": "Restores succeeded (range)",
+          "description": "Restores are rare here, so any non-zero value should match a deliberate action. If one appears unexpectedly, check who has velero write access.",
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 0,
+            "y": 41
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(velero_restore_success_total[$__range])) or vector(0)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "none",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 14,
+          "type": "stat",
+          "title": "Restores failed / partial (range)",
+          "description": "Failed plus partially-failed restores over the range. After any restore, re-read workbook/velero-partial-failed-cleanup.md and check for restored CertificateRequests \u2014 they silently block cert-manager renewals while the Certificate still reports Ready.",
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 8,
+            "y": 41
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(sum(increase(velero_restore_failed_total[$__range])) + sum(increase(velero_restore_partial_failure_total[$__range]))) or vector(0)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 15,
+          "type": "stat",
+          "title": "Backup deletions (range)",
+          "description": "increase(velero_backup_deletion_success_total) \u2014 deletions Velero processed. Deleting a Backup CR with kubectl does NOT show up here and does not free anything: backup-sync resurrects the CR from the bucket. Always use `velero backup delete --confirm`.",
+          "gridPos": {
+            "h": 4,
+            "w": 8,
+            "x": 16,
+            "y": 41
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(velero_backup_deletion_success_total[$__range])) or vector(0)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "none",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0
+            },
+            "overrides": []
+          }
+        }
+      ]
+    }
