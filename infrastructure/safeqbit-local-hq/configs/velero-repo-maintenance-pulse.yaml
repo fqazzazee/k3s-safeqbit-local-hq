@@ -1,0 +1,94 @@
+# velero-repo-maintenance-pulse.yaml
+# Daily kopia maintenance for the pulse repo only.
+#
+# Why this exists
+# ---------------
+# controllers/velero.yaml sets defaultRepoMaintainFrequency: 168h0m0s because
+# hourly maintenance across every repo burnt the B2 free-tier transaction cap.
+# That global setting is still correct and is deliberately left alone.
+#
+# The cost of 168h is that blobs freed by a deleted backup keep billing until
+# the next sweep. For most repos that is fine: kopia dedups their PVCs well, so
+# one uncollected snapshot is a rounding error.
+#
+# pulse is the exception. pulse-data is a tiered metrics store that rewrites
+# itself continuously, so consecutive snapshots share almost no content - each
+# backup lands ~920MB of essentially new blobs. When the 2026-08-17 retention
+# rework expired six of them at once, the repo sat at 4.7GB (46% of the whole
+# bucket) against 1.9GB of live data, and pushed the account past the 10GB
+# free tier. See workbook/backup-strategy.md.
+#
+# Daily is the floor that matters: kopia refuses to run full maintenance more
+# than once per 24h regardless of how often it is invoked (verified 2026-08-19 -
+# a second run 8 minutes after the first opened the repo and exited without
+# doing any work). Running this more often would only burn API calls.
+#
+# Cost is one extra maintenance run per day, a few hundred B2 Class B/C calls.
+# Compare the ~50/day that backupSyncPeriod+validationFrequency use at 1h, and
+# the 2,500/day cap. Dropping defaultRepoMaintainFrequency to 24h globally
+# would instead mean 12 runs/day and would re-open the original problem.
+#
+# The pod spec mirrors what the velero server generates for its own maintenance
+# jobs (velero v1.18.2, `/velero repo-maintenance`); no init container is needed
+# because kopia's S3 backend is built into the velero binary.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: velero-repo-maintenance-pulse
+  namespace: velero
+spec:
+  # 07:00 UTC daily - clear of the 05:00 pulse backup window and of velero's
+  # own 168h sweep, which lands around 05:25.
+  schedule: "0 7 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: velero-server
+          containers:
+            - name: velero-repo-maintenance
+              image: velero/velero:v1.18.2   # keep in step with controllers/velero.yaml
+              command:
+                - /velero
+              args:
+                - repo-maintenance
+                - --repo-name=pulse
+                - --repo-type=kopia
+                - --backup-storage-location=default
+                - --log-level=info
+                - --log-format=text
+              env:
+                - name: VELERO_SCRATCH_DIR
+                  value: /scratch
+                - name: VELERO_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: LD_LIBRARY_PATH
+                  value: /plugins
+                - name: AWS_SHARED_CREDENTIALS_FILE
+                  value: /credentials/cloud
+              volumeMounts:
+                - name: plugins
+                  mountPath: /plugins
+                - name: cloud-credentials
+                  mountPath: /credentials
+                - name: scratch
+                  mountPath: /scratch
+          volumes:
+            - name: cloud-credentials
+              secret:
+                secretName: cloud-credentials
+            - name: plugins
+              emptyDir: {}
+            - name: scratch
+              emptyDir: {}

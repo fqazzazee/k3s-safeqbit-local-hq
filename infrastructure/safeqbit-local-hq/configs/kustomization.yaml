@@ -45,3 +45,4 @@ resources:
   - cluster-slack-bot-tokens.yaml
   - cluster-slack-bot-wiki.yaml
   - longhorn-recurring-jobs.yaml
+  - velero-repo-maintenance-pulse.yaml
