@@ -71,6 +71,15 @@ spec:
       # Default kopia maintenance every 7 days (was hourly, which burnt B2 free-tier
       # transaction cap). Each existing BackupRepository was also patched at runtime
       # with maintenanceFrequency: 168h on 2026-05-27 so this matches new defaults.
+      #
+      # Keep this at 168h. The tradeoff is that blobs freed by a deleted backup
+      # keep billing until the next sweep, which is what let the pulse repo reach
+      # 4.7GB of mostly-dead data and push the account past the 10GB free tier on
+      # 2026-08-18. The fix for that is per-repo, not global: velero exposes no
+      # per-repository frequency, so configs/velero-repo-maintenance-pulse.yaml
+      # runs a daily sweep for pulse alone (the only repo whose PVC dedups badly
+      # enough to matter). Dropping this to 24h would mean 12 maintenance runs a
+      # day and would re-open the transaction-cap problem this setting solved.
       defaultRepoMaintainFrequency: 168h0m0s
     credentials:
       useSecret: true
