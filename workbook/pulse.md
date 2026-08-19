@@ -9,7 +9,7 @@ Server added 2026-06-29. k3s agent added 2026-06-30.
 - **Namespace:** `pulse`
 - **Hostname:** https://pulse.local.safeqbit.com (admin UI, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/pulse/`
-- **Image:** `rcourtman/pulse:v6.1.1` (pinned; bump deliberately after reading upstream release notes — see [v5 → v6 upgrade](#v5--v6-upgrade-2026-07-24))
+- **Image:** `rcourtman/pulse:v6.2.1` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
 - **Server port:** `7655` (ClusterIP `pulse`, in-cluster DNS `pulse.pulse.svc.cluster.local:7655`)
 - **Storage:** `pulse-data` 2Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
 - **Web-UI auth:** built-in, `PULSE_AUTH_USER` / `PULSE_AUTH_PASS` from SealedSecret `pulse-auth` (`03-sealed-secret.yaml`). Plaintext pass auto-hashed on startup → auth enforced from first boot, no open window. Admin password stored in Vaultwarden.
@@ -103,6 +103,43 @@ kubectl -n pulse logs deploy/pulse-agent --tail=20
 
 Target config lives only in the `pulse-data` PVC → it's covered by the weekly
 Velero backup. Nothing about targets is in Git.
+
+---
+
+## Version history
+
+Server and agent run the **same tag** — keep them in step. The four v6 manifest
+requirements below apply to every v6 tag, so re-verify them (`--help` in a
+throwaway pod) before any future bump rather than assuming they survived.
+
+| Date | Tag | Scope | Notes |
+| --- | --- | --- | --- |
+| 2026-06-29 | `v5.1.35` | server | first deploy |
+| 2026-06-30 | `v5.1.35` | + agent | k3s agent added |
+| 2026-07-08 | `v5.1.36` | both | patch bump |
+| 2026-07-25 | `v6.1.1` | both | major — one-way `/data` migration, see below |
+| 2026-08-02 | `v6.1.2` | **server only** | patch, edited straight on GitHub; left the agent on `v6.1.1` and this doc unamended |
+| 2026-08-18 | `v6.2.1` | both | minor, realigns the two on one tag |
+
+### v6.1.2 → v6.2.1 (2026-08-18)
+
+Minor, no migration and no manifest changes. `v6.2.0` is the feature release
+(external probes with signed config delivery, libvirt/XCP-ng/certificate
+monitoring, ZFS-dataset / PBS-disk / LXC-filesystem coverage, an Actions inbox
+with approve-execute-verify); `v6.2.1` is a hotfix on top of it (agent downloads
+now follow redirects while still validating checksums, Agent Doctor credential
+recovery, Pro activation, update-panel cache labels). Nothing in either touches
+the Kubernetes agent path.
+
+All four v6 pins re-verified against the `v6.2.1` binary before merging
+(`pulse-agent --help` in a throwaway pod): `--health-addr` still defaults to
+`127.0.0.1:9191`, `--disable-auto-update` and `--enable-kubernetes` unchanged,
+`/var/lib/pulse-agent` still the identity path. RBAC unchanged — no new
+Kubernetes resource kinds in the release notes; if a panel comes up empty, grep
+the agent log for `kubernetes access forbidden (RBAC)`.
+
+Take the restore points and use the Flux suspend/resume order from the v6
+runbook below anyway — the mechanics are the same for a minor.
 
 ---
 
