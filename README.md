@@ -173,6 +173,7 @@ flowchart TB
             guac["Guacamole"]
             ha["Home Assistant<br/>LAN LB 10.10.13.51"]
             kuma["Uptime Kuma"]
+            bt["Baby Tracker"]
         end
         subgraph pg["🔐 Pangolin — brings its own front door"]
             pgedge["Gerbil + Traefik — one pod<br/>10.10.13.52 · TLS + WireGuard UDP"]
@@ -182,7 +183,7 @@ flowchart TB
         subgraph db["🐘 Databases"]
             cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>guacamole · pangolin ×1")]
             ownpg[("bundled Postgres<br/>immich · photoprism")]
-            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant")]
+            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant<br/>plain-text log: babytracker")]
         end
         subgraph storage["💾 Storage"]
             longhorn[("Longhorn<br/>replicated block storage")]
@@ -617,6 +618,7 @@ learn.
 | [Passzilla](https://github.com/pglombardo/PasswordPusher) | One-time secret / password sharing links |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring |
 | [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards |
+| [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms |
 | [Apache Guacamole](https://guacamole.apache.org/) | Clientless HTML5 remote access (RDP/VNC/SSH) — SRA demo stack |
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |

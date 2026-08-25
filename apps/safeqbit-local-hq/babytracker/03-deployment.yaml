@@ -1,0 +1,236 @@
+# 03-deployment.yaml
+# Ultimate Baby Tracker Deployment + ClusterIP Service.
+#
+# Upstream: https://github.com/fqazzazee/ultimate-baby-tracker
+#
+# ── Why there is no application image ─────────────────────────────────────
+# The app publishes no container image, and this cluster has no registry to
+# push one to. It doesn't need either: it is zero-dependency ESM JavaScript
+# with no build step and no `npm install`, so a stock Node image plus the
+# source tree is a complete deployment.
+#
+# So the initContainer clones the repo at ONE PINNED COMMIT into an emptyDir
+# and the Node container runs it from there. Upstream stays the single source
+# of truth, and upgrading is a one-line commit here rather than a build-and-
+# push dance.
+#
+# The trade-offs, stated plainly:
+#   - A pod start needs egress to github.com. A pod that is already running
+#     does not, so a GitHub outage cannot take the tracker down — it can only
+#     delay a restart.
+#   - The upstream repo has to stay PUBLIC. The anonymous clone is what keeps
+#     a token out of the cluster; if it goes private again the pod fails to
+#     start with "could not read Username for 'https://github.com'" and the
+#     fix is a read-only PAT sealed into this namespace.
+#   - Pinned to a full SHA, never a branch. Two pods started a week apart run
+#     byte-identical code, and `main` moving cannot restart you onto new code
+#     that changes the on-disk format of events.log.
+#
+# TO UPGRADE: change BT_REF below to the new commit SHA, commit, let Flux
+# reconcile. Read the upstream diff first — events.log is replayed at startup,
+# so a format change is a one-way door for existing data. Take a backup first
+# (workbook/babytracker.md has the full procedure):
+#   kubectl -n velero exec deploy/velero -- \
+#     /velero backup create babytracker-manual-<date> --from-schedule babytracker-daily
+#
+# ── Single replica, and why it stays that way ─────────────────────────────
+# The store is an append-only file replayed into memory at boot, with the SSE
+# stream broadcasting from that same in-memory state. Two replicas would mean
+# two divergent in-memory copies writing the same log, on an RWO Longhorn
+# volume that will not attach twice anyway. Same single-writer doctrine as
+# vaultwarden / uptime-kuma / home-assistant: resilience comes from fast
+# rescheduling, not from a second replica.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: babytracker
+  namespace: babytracker
+  labels:
+    app.kubernetes.io/name: babytracker
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # Recreate: the data PVC is RWO Longhorn — RollingUpdate would deadlock on
+  # Multi-Attach with the new pod waiting for a volume the old pod still holds.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: babytracker
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: babytracker
+        app.kubernetes.io/component: server
+      annotations:
+        # Makes "which code is this pod running" answerable from
+        # `kubectl describe pod` without digging into initContainer args.
+        babytracker.safeqbit.com/source-ref: "047d682168289ae8485b69d0973c23283236d80b"
+    spec:
+      # Single-writer app: availability is reschedule speed. Evict after 60s
+      # of node not-ready/unreachable instead of the 300s default; Longhorn's
+      # nodeDownPodDeletionPolicy force-releases the volume so the replacement
+      # can attach elsewhere. Same doctrine as the other pinned single-writers.
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        # Longhorn volume and the emptyDirs come up group-owned by 1000 so the
+        # unprivileged uid can write the log and the clone.
+        fsGroup: 1000
+      initContainers:
+        # Fetches exactly one commit (GitHub serves arbitrary SHAs to
+        # `fetch --depth 1`) into the shared emptyDir: no history, no tags,
+        # a couple hundred KB on the wire.
+        - name: fetch-source
+          image: alpine/git:2.54.0
+          # The image's ENTRYPOINT is `git` itself, so it has to be overridden
+          # to run a script.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # The emptyDir survives an initContainer RETRY, so start from a
+              # clean slate: a fetch interrupted halfway would otherwise leave
+              # a half-built repo that wedges every later attempt ("remote
+              # origin already exists") into a permanent crash loop.
+              find /app -mindepth 1 -delete
+              git init -q /app
+              cd /app
+              git remote add origin "$BT_REPO"
+              git fetch -q --depth 1 origin "$BT_REF"
+              git checkout -q FETCH_HEAD
+              echo "checked out $BT_REF"
+          env:
+            - name: BT_REPO
+              value: https://github.com/fqazzazee/ultimate-baby-tracker.git
+            # ── The pinned commit. This is the version knob. ──
+            - name: BT_REF
+              value: "047d682168289ae8485b69d0973c23283236d80b"
+            # git wants somewhere writable to look for a user config.
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /app
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      containers:
+        - name: babytracker
+          # Node 22 LTS, pinned to a patch release. The app needs >=18 and
+          # nothing else — no npm install runs here.
+          image: node:22.23.2-alpine3.24
+          command: ["node", "/app/server.js"]
+          env:
+            - name: BT_PORT
+              value: "8477"
+            - name: BT_HOST
+              value: 0.0.0.0
+            # Everything that matters lives here, on the Longhorn PVC.
+            - name: BT_DATA_DIR
+              value: /data
+            # Entries are stored as ISO timestamps, but the server evaluates
+            # "at time" alarms against LOCAL midnight (lib/alarms.js calls
+            # setHours), so this has to be the household's zone — matching
+            # netbox and the report CronJobs.
+            #
+            # Gotcha if you ever debug this: alpine ships no /usr/share/zoneinfo,
+            # so `kubectl exec ... date` in this pod prints UTC and looks like
+            # TZ was ignored. It wasn't — Node reads its own bundled ICU tzdata,
+            # and `node -e 'new Date().toString()'` shows the real local time.
+            - name: TZ
+              value: America/New_York
+          ports:
+            - containerPort: 8477
+              name: http
+          # No /healthz upstream. GET / serves the 1.2KB app shell off disk and
+          # only answers once the HTTP server is actually listening, which is
+          # exactly what these probes are asking about.
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /app
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        # Thrown away on every restart and refilled by the initContainer —
+        # this is the app code, not app state.
+        - name: source
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: babytracker-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: babytracker
+  namespace: babytracker
+  labels:
+    app.kubernetes.io/name: babytracker
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: babytracker
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 8477
+      targetPort: http
+      protocol: TCP

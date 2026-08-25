@@ -22,6 +22,9 @@ resources:
   # Brings its own edge (Gerbil + Traefik in one pod, on its own MetalLB IP)
   # rather than going through ingress-nginx — see workbook/pangolin.md.
   - pangolin
+  # Zero-dependency Node app with no upstream image: the pod clones a pinned
+  # commit at start and runs it on stock node:alpine. LAN-only, no auth.
+  - babytracker
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx

@@ -1,0 +1,61 @@
+# 04-ingress.yaml
+# Ingress for the baby tracker at https://babytracker.local.safeqbit.com
+# cert-manager auto-issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+#
+# DNS: babytracker.local.safeqbit.com must CNAME to ingress.local.safeqbit.com
+# (→ 10.10.13.50) on the router, the same as every other app here. The
+# certificate does NOT depend on that record — DNS-01 proves control of the
+# safeqbit.com zone through Cloudflare's API, not through reachability.
+#
+# ── LAN only, on purpose ──────────────────────────────────────────────────
+# This app has NO authentication and NO authorization of any kind: every HTTP
+# endpoint answers anyone who can reach it, and the whole log is readable and
+# writable unauthenticated. Upstream says so in as many words. It is on the
+# internal name and nothing else, and it must stay that way:
+#   - no cloudflared tunnel pointing at this Service (that is what makes
+#     passzilla public — do not copy that pattern here),
+#   - no record for it in the public safeqbit.com zone.
+# The 4-digit profile PINs are a courtesy lock between people who already
+# trust each other, not a security control — they gate switching users in the
+# UI and nothing else.
+#
+# ── Server-sent events ────────────────────────────────────────────────────
+# /api/stream is an SSE connection the UI keeps open forever; every log entry
+# pushes down it, which is how a phone in another room updates instantly.
+# The app already sets `x-accel-buffering: no` on that response and heartbeats
+# every 25s, so nginx neither buffers it nor times it out — but the explicit
+# annotations below mean a change to the ingress-nginx defaults can't quietly
+# break live updates.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: babytracker
+  namespace: babytracker
+  labels:
+    app.kubernetes.io/name: babytracker
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Hold the SSE stream open rather than tearing it down after the default
+    # 60s of one-way traffic.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Never accumulate the event stream in a buffer waiting for it to end.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - babytracker.local.safeqbit.com
+      secretName: babytracker-tls
+  rules:
+    - host: babytracker.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: babytracker
+                port:
+                  number: 8477
