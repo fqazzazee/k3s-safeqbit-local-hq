@@ -158,6 +158,24 @@ upstream repo went private (see [above](#why-there-is-no-image)). A network
 error means egress to github.com is broken; the running pod was fine until this
 restart, so nothing is lost by waiting.
 
+**`Init:CrashLoopBackOff` with `fatal: detected dubious ownership in repository
+at '/app'`** — this one bit on day one. `fsGroup: 1000` sets the emptyDir's
+*group* to 1000 but leaves it owned by **root** (`0:1000`, `drwxrwsr-x`), and
+git refuses to operate on a repository whose directory belongs to another uid.
+That is why the clone goes into `/app/src` — a directory the init process
+mkdirs and therefore owns — rather than into `/app` itself. If someone
+"simplifies" that subdirectory away, this comes straight back.
+
+Worth knowing generally: **`fsGroup` never changes the owner**, only the group
+and the setgid bit. Anything that checks *ownership* rather than writability
+will trip on it; anything that just writes files is fine, which is why the app
+itself has no trouble with `/data`.
+
+```sh
+# what the volume actually looks like
+kubectl -n babytracker exec deploy/babytracker -- ls -lnd /app /app/src /data
+```
+
 **`CrashLoopBackOff` right after an upgrade** — almost certainly the new code
 choking on the existing `events.log`. Put `BT_REF` back to the old SHA; the data
 is untouched.
