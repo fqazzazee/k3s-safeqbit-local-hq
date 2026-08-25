@@ -105,8 +105,17 @@ spec:
               # a half-built repo that wedges every later attempt ("remote
               # origin already exists") into a permanent crash loop.
               find /app -mindepth 1 -delete
-              git init -q /app
-              cd /app
+              # The repo goes in a SUBDIRECTORY, not in /app itself. fsGroup
+              # sets the emptyDir's GROUP to 1000 but leaves it owned by root
+              # (it comes up 0:1000, drwxrwsr-x), and git refuses to touch a
+              # repository whose directory belongs to another uid:
+              #   fatal: detected dubious ownership in repository at '/app'
+              # A directory we mkdir ourselves is owned by uid 1000, so git is
+              # satisfied without a safe.directory exception — the ownership
+              # check keeps doing its job. Don't "simplify" this back to /app.
+              mkdir /app/src
+              git init -q /app/src
+              cd /app/src
               git remote add origin "$BT_REPO"
               git fetch -q --depth 1 origin "$BT_REF"
               git checkout -q FETCH_HEAD
@@ -141,7 +150,9 @@ spec:
           # Node 22 LTS, pinned to a patch release. The app needs >=18 and
           # nothing else — no npm install runs here.
           image: node:22.23.2-alpine3.24
-          command: ["node", "/app/server.js"]
+          # /app/src, not /app — the initContainer clones into a subdirectory
+          # it owns; see the note on the fetch-source script above.
+          command: ["node", "/app/src/server.js"]
           env:
             - name: BT_PORT
               value: "8477"
