@@ -1,0 +1,36 @@
+# 02-pvc.yaml
+# babytracker-data (1Gi RWO) → /data
+#
+# This volume is the ONLY copy of the baby log. The app keeps everything as
+# plain text under BT_DATA_DIR:
+#
+#   config.json    babies, people, buttons, alarms, settings
+#   events.log     one JSON object per line, append-only journal
+#   timers.json    timers currently running (survives a restart)
+#   alarms.json    snooze / last-fired state
+#
+# There is no database and no second copy anywhere — the pod's own filesystem
+# is an emptyDir that is thrown away on every restart. Treat this PVC as the
+# source of truth and make sure the Velero schedule
+# (infrastructure/safeqbit-local-hq/configs/velero-schedule-babytracker.yaml)
+# keeps backing it up.
+#
+# 1Gi is deliberate overkill: a year of feeds, diapers and sleeps is a few MB
+# of JSON lines. Expandable if that ever stops being true:
+#   kubectl patch pvc babytracker-data -n babytracker \
+#     -p '{"spec":{"resources":{"requests":{"storage":"2Gi"}}}}'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: babytracker-data
+  namespace: babytracker
+  labels:
+    app.kubernetes.io/name: babytracker
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

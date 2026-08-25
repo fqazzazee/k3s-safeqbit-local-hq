@@ -1,0 +1,51 @@
+# velero-schedule-babytracker.yaml
+# Daily backup of the babytracker namespace to B2.
+#
+# Covers: babytracker-data — config.json, events.log, timers.json,
+# alarms.json — plus the k8s objects. events.log is the entire history of
+# feeds, diapers and sleeps, and this PVC is the only copy of it anywhere.
+# The pod's own filesystem is an emptyDir refilled from GitHub on every
+# restart, so nothing else in the cluster holds this data.
+#
+# Schedule: daily 03:30 UTC
+# Retention: 30d
+#
+# Daily rather than weekly because the log gains entries hourly and a week of
+# lost nights is a week you cannot reconstruct. 30 days of restore points is
+# enough: events.log is append-only and cumulative, so the newest backup
+# already contains all of the history — the older ones only exist to undo a
+# bad edit or a compaction gone wrong, not to reach further back in time.
+# Each backup is a few MB and dedupes against the last one.
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: babytracker-daily
+  namespace: velero
+spec:
+  schedule: "30 3 * * *"
+
+  template:
+    ttl: "720h0m0s"   # 30 days
+    includedNamespaces:
+      - babytracker
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
+      - certificaterequests.cert-manager.io
+      - orders.acme.cert-manager.io
+      - challenges.acme.cert-manager.io
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false
