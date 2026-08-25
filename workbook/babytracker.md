@@ -8,7 +8,7 @@ alarms. Added 2026-08-25.
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
 - **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own, MIT)
 - **Image:** none of its own — `node:22.23.2-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
-- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `047d682` = v1.1.1
+- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `65abca4` = v1.2.0
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
 
@@ -101,6 +101,12 @@ is built around that fact rather than in spite of it:
 - The 4-digit profile PINs gate *switching users in the UI* and nothing else.
   They stop entries being logged under the wrong name between people who already
   trust each other. They are not a control on the API.
+- **1.2.0 raised the stakes here.** `GET /api/backup` hands anyone who can
+  reach the pod a gzip of *everything* — every entry, plus the salted PIN
+  hashes — and `POST /api/restore` lets them replace the whole dataset. Both
+  are unauthenticated like the rest of the API. The restore does write
+  `pre-restore-<timestamp>.json` first, so an accidental one is recoverable,
+  but treat a downloaded bundle as being as sensitive as the volume itself.
 - If it ever needs to be reachable from outside the LAN, put Authentik forward
   auth in front of it first — the embedded-outpost pattern in
   `maintenance.md` ("Authentik forward auth"), with the auth-url hairpinned
@@ -142,7 +148,15 @@ config.json    babies, people, buttons, alarms, settings (pretty JSON)
 events.log     one JSON object per line, append-only journal
 timers.json    timers currently running (a running timer survives a restart)
 alarms.json    snooze / last-fired state
+
+pre-restore-<timestamp>.json   written automatically before a restore
+                               overwrites anything (1.2.0+)
 ```
+
+Those `pre-restore-*.json` files are never cleaned up on their own. They are
+small, but on a 1Gi volume it is worth deleting the stale ones after a restore
+you are happy with:
+`kubectl -n babytracker exec deploy/babytracker -- ls -la /data`
 
 `events.log` is a journal: edits and deletions are appended as further lines and
 the file is replayed at startup, so a crash can't corrupt earlier entries. It
