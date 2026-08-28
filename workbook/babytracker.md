@@ -8,7 +8,7 @@ alarms. Added 2026-08-25.
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
 - **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own, MIT)
 - **Image:** none of its own — `node:22.23.2-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
-- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `65abca4` = v1.2.0
+- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `481ee4e` = v1.4.4
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
 
@@ -70,8 +70,19 @@ What this costs, stated plainly:
 
 ## Upgrading
 
-1. Read the upstream diff. `events.log` is replayed into memory at startup, so a
-   change to how entries are written is a **one-way door** for existing data.
+1. Read the upstream diff. Two things can be a **one-way door** for existing
+   data, and both live in `lib/store.js`:
+   - **`events.log` format.** It is replayed into memory at startup, so a change
+     to how entries are written can't be undone by rolling back.
+   - **`CONFIG_VERSION` / `migrate()`.** A stored `config.json` is migrated
+     *forward* on load — there is no down-migration. The migration is lazy: it
+     runs in memory on every load and only reaches the disk the first time
+     something saves the config, so a rollback taken before any settings save
+     leaves the file untouched.
+
+   Also check `package.json` for dependencies. The whole model here rests on the
+   app having none — a `dependencies` block means this deployment needs an
+   `npm install` step (or a real image) before it can move to that version.
 2. Back up first:
    ```sh
    kubectl -n velero exec deploy/velero -- \
@@ -86,7 +97,28 @@ What this costs, stated plainly:
 4. Commit, push, `flux reconcile kustomization apps --with-source`.
 
 Rollback is the same edit with the old SHA — the code is stateless, only `/data`
-carries forward.
+carries forward. Caveat since 1.3.0: if the config has been saved under the new
+version, `config.json` is at the newer schema and an older release will read it
+back through its own `mergeConfig`, keeping the extra keys but resetting
+`version`. Harmless in practice, but it means a rollback is no longer perfectly
+byte-clean — restore the `/data` from the pre-upgrade backup if you want it to be.
+
+### Dry-running an upgrade
+
+Cheap and worth it before anything that migrates config. Copy the live data out
+and run the candidate SHA against the copy, not against the PVC:
+
+```sh
+kubectl -n babytracker exec deploy/babytracker -- cat /data/config.json > /tmp/bt/data/config.json
+kubectl -n babytracker exec deploy/babytracker -- cat /data/events.log  > /tmp/bt/data/events.log
+```
+
+Then run `node:22.23.2-alpine3.24` over a checkout of the candidate commit with
+`BT_DATA_DIR=/data` and check the startup line's event count against the live
+one. **Bind mounts from a Claude Code scratchpad are invisible to the docker
+daemon** — the container sees an empty directory and Node says
+`Cannot find module`. Use named volumes and `docker cp` instead. Delete the copy
+afterwards: it holds every entry and the salted PINs.
 
 ## Security posture
 
