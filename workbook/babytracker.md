@@ -8,7 +8,7 @@ alarms. Added 2026-08-25.
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
 - **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own, MIT)
 - **Image:** none of its own — `node:22.23.2-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
-- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `481ee4e` = v1.4.4
+- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `e1e18a8` = v1.6.0
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
 
