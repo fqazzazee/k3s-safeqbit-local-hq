@@ -66,7 +66,7 @@ spec:
       annotations:
         # Makes "which code is this pod running" answerable from
         # `kubectl describe pod` without digging into initContainer args.
-        babytracker.safeqbit.com/source-ref: "481ee4e7d83b58c00808962630d135b4310cf4bd"
+        babytracker.safeqbit.com/source-ref: "e1e18a843a131bdfb788bb9e2a6ef189e948572d"
     spec:
       # Single-writer app: availability is reschedule speed. Evict after 60s
       # of node not-ready/unreachable instead of the 300s default; Longhorn's
@@ -125,7 +125,7 @@ spec:
               value: https://github.com/fqazzazee/ultimate-baby-tracker.git
             # ── The pinned commit. This is the version knob. ──
             - name: BT_REF
-              value: "481ee4e7d83b58c00808962630d135b4310cf4bd"
+              value: "e1e18a843a131bdfb788bb9e2a6ef189e948572d"
             # git wants somewhere writable to look for a user config.
             - name: HOME
               value: /tmp
