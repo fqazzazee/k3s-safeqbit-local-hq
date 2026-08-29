@@ -16,7 +16,10 @@ resources:
   - photoprism
   - cloudflared
   - uptime-kuma
-  - guacamole
+  # Disabled 2026-08-29 — decommissioned (namespace deleted by hand; this
+  # layer is prune:false so removing it here only orphans, never deletes).
+  # Manifests kept in guacamole/ so it can be redeployed by uncommenting.
+  # - guacamole
   - pulse
   - home-assistant
   # Brings its own edge (Gerbil + Traefik in one pod, on its own MetalLB IP)

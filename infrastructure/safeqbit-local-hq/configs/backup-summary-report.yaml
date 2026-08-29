@@ -103,7 +103,7 @@ data:
 
     # Keep in sync with the `prune` lines in cnpg-backup-retention.yaml.
     CNPG_KEEP = {"authentik": 10, "affine": 30, "netbox": 30,
-                 "monitoring": 30, "guacamole": 10}
+                 "monitoring": 30}
     B2_FREE_TIER = 10 * 1024**3
 
     ICON = {"OK": ":white_check_mark:", "PARTIAL": ":warning:",

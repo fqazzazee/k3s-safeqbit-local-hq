@@ -114,8 +114,8 @@ spec:
                   prune affine       7    # daily × 1 week
                   prune netbox       7    # daily × 1 week
                   prune monitoring   7    # daily × 1 week (grafana-cnpg)
-                  prune guacamole   10    # weekly × ~10 weeks (tiny ~34M snaps;
-                                          # was missing until 06-05, grew unbounded)
+                  # 2026-08-29: guacamole decommissioned — cluster gone.
+                  # prune guacamole 10    # weekly × ~10 weeks (~34M snaps)
 
                   echo "done"
               resources:

@@ -8,8 +8,8 @@
 
 LAN-only — nothing is forwarded from the WAN.
 
-> Sibling stack: [[guacamole]] covers the same RDP/VNC/SSH need via Apache
-> Guacamole. They overlap; keep both only while comparing them.
+> Sole remote-access stack as of 2026-08-29: the Guacamole sibling that
+> overlapped with it ([[guacamole]]) was decommissioned.
 
 ---
 

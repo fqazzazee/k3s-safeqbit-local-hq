@@ -1,5 +1,23 @@
 # SRA Dev Demo — Secure Remote Access stack (Apache Guacamole)
 
+> **DECOMMISSIONED 2026-08-29.** Namespace deleted, Velero schedule removed,
+> app commented out of `apps/safeqbit-local-hq/kustomization.yaml`. Pangolin
+> ([[pangolin]]) now covers the RDP/VNC/SSH need. The manifests are still in
+> `apps/safeqbit-local-hq/guacamole/` and the schedule in
+> `configs/velero-schedule-guacamole.yaml` — uncomment both entries to bring it
+> back. Nothing was preserved: the B2 kopia repo had already been deleted and
+> the CNPG database was let go, so a redeploy starts from an empty DB and every
+> connection has to be re-added in the UI. Everything below describes how it was
+> built and stays accurate for that rebuild.
+>
+> **Session recordings survived.** `guacamole-recordings` was `nfs-truenas` with
+> `Retain`, so deleting the PV objects left the data on the NAS at
+> `10.10.10.5:/mnt/nvme2tb/k8s/pvs/guacamole-guacamole-recordings-${.PV.name}`
+> (and the pre-rename `sra-dev-demo-guacamole-recordings-${.PV.name}`). Those
+> `${.PV.name}` literals are the [[nfs-truenas-pathpattern-bug]], not a typo —
+> a recreated PVC would re-adopt the same directory. Delete them on the NAS by
+> hand when you no longer want the recordings.
+
 **Created:** 2026-06-04
 **Namespace:** `guacamole`
 **Hostname:** `guacamole.local.safeqbit.com`

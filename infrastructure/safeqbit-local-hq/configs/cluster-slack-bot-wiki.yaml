@@ -502,7 +502,7 @@ data:
       Databases and app state live here.
     • *nfs-truenas*: RWX shares from TrueNAS #1 (NVMe pool
       nvme2tb/k8s) via nfs-subdir-external-provisioner — NetBox media,
-      Guacamole recordings, anything shared.
+      anything shared.
     • *nfs-bulk-media*: spinning-disk array; static PVs point Immich/
       PhotoPrism at the existing photo/video folders
       (10.10.10.5:/mnt/mach2/mach2nas/Media).
@@ -543,7 +543,6 @@ data:
     • `grafana-cnpg` — 2 (moved off SQLite after deadlocks)
     • `netbox-cnpg` — 2
     • `affine-cnpg` — 2
-    • `guacamole-cnpg` — 1 (demo workload)
     Primary+standby always on different nodes (anti-affinity);
     failover automatic.
     Outliers (not in cnpg output):
@@ -599,14 +598,12 @@ data:
     `*.local.safeqbit.com`
     • *vaultwarden* — passwords; SQLite/Longhorn
     • *authentik* — SSO/IdP (authentik01.…); CNPG ×2; forward-auth
-      for prometheus/alertmanager, OIDC for guacamole
+      for prometheus/alertmanager
     • *immich* — photos; own Postgres + NFS bulk media
     • *photoprism* — photos/AI tagging; own DB + NFS bulk media
     • *netbox* — IPAM/DCIM; CNPG ×2 + 2 Redis + NFS RWX
     • *affine* — notes; CNPG ×2 + Redis + Longhorn ×2 PVCs
     • *passzilla* — one-time secret links
-    • *guacamole* — browser RDP/VNC/SSH; CNPG ×1; guacd records
-      sessions to NFS RWX; OIDC via Authentik
     • *home-assistant* — home automation (home-assistant-01.…, LAN LB
       10.10.13.51 for IoT devices); image PINNED 2026.4.1 (recorder
       schema one-way + Sensi compat) — do not bump casually
@@ -674,7 +671,7 @@ data:
     • `slack-bot.md` / `slack-bot-manual.md` — this bot: architecture
       + incident playbooks (bot vs terminal)
     • `improvement-plan.md` — prioritized backlog
-    • `uptime-kuma.md`, `pulse.md`, `guacamole.md`,
+    • `uptime-kuma.md`, `pulse.md`,
       `home-assistant-migration.md`, `authentik-migration.md`,
       `netbox-migration.md`, `affine-migration.md`,
       `immich-photoprism-migration.md` — per-app docs & migrations
