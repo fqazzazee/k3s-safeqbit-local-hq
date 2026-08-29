@@ -45,7 +45,7 @@ spec:
                   key: password
       containers:
         - name: netbox
-          image: netboxcommunity/netbox:v4.6.5-5.0.2
+          image: netboxcommunity/netbox:v4.6.9-5.0.2
           ports:
             - containerPort: 8080
           env:

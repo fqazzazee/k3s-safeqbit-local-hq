@@ -9,7 +9,7 @@ Server added 2026-06-29. k3s agent added 2026-06-30.
 - **Namespace:** `pulse`
 - **Hostname:** https://pulse.local.safeqbit.com (admin UI, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/pulse/`
-- **Image:** `rcourtman/pulse:v6.2.1` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
+- **Image:** `rcourtman/pulse:v6.4.1` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
 - **Server port:** `7655` (ClusterIP `pulse`, in-cluster DNS `pulse.pulse.svc.cluster.local:7655`)
 - **Storage:** `pulse-data` 2Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
 - **Web-UI auth:** built-in, `PULSE_AUTH_USER` / `PULSE_AUTH_PASS` from SealedSecret `pulse-auth` (`03-sealed-secret.yaml`). Plaintext pass auto-hashed on startup → auth enforced from first boot, no open window. Admin password stored in Vaultwarden.
@@ -120,6 +120,28 @@ throwaway pod) before any future bump rather than assuming they survived.
 | 2026-07-25 | `v6.1.1` | both | major — one-way `/data` migration, see below |
 | 2026-08-02 | `v6.1.2` | **server only** | patch, edited straight on GitHub; left the agent on `v6.1.1` and this doc unamended |
 | 2026-08-18 | `v6.2.1` | both | minor, realigns the two on one tag |
+| 2026-08-29 | `v6.4.1` | both | two minors + a patch; **went straight to `v6.4.1`** — `v6.4.0` shipped a non-executable embedded agent |
+
+### v6.2.1 → v6.4.1 (2026-08-29)
+
+Two minor releases and a patch, no migration and no manifest changes.
+`v6.3.0` adds durable Patrol objectives and an Actions approval inbox;
+`v6.4.0` rebuilds alert state from a durable event log (so incidents,
+acknowledgements and snoozes survive a restart instead of flashing a false
+all-clear), adds rolling-CPU and predictive-storage alerts, and routes
+notification destinations by severity. Both say existing configuration stays
+valid and the alert-identity migration runs automatically.
+
+**Skip `v6.4.0`.** Its server image shipped an embedded Unified Agent that was
+not executable, which breaks exactly the entrypoint this repo uses
+(`command: /opt/pulse/bin/pulse-agent-linux-amd64`). `v6.4.1` is the fix.
+
+All four v6 pins re-verified against the `v6.4.1` image before merging, using
+the manifest's own binary path rather than the one on `$PATH`:
+`--health-addr` still defaults to `127.0.0.1:9191` (so the explicit `:9191`
+override is still load-bearing), `--disable-auto-update` and
+`--enable-kubernetes` unchanged, and `/var/lib/pulse-agent` still the identity
+path. RBAC unchanged — no new Kubernetes resource kinds in either release.
 
 ### v6.1.2 → v6.2.1 (2026-08-18)
 

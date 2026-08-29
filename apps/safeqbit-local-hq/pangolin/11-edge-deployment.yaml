@@ -110,7 +110,7 @@ spec:
         # Shares this pod's netns with gerbil, so it binds :80/:443 on the very
         # same address Gerbil serves WireGuard on — upstream's topology exactly.
         - name: traefik
-          image: docker.io/traefik:v3.7.9
+          image: docker.io/traefik:v3.7.12
           args:
             - --configFile=/etc/traefik/traefik_config.yml
           securityContext:
