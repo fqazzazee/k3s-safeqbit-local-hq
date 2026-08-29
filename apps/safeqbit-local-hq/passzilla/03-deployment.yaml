@@ -39,7 +39,7 @@ spec:
           # Pinned to a specific tag — `:latest` would silently roll on every
           # pod restart that triggered a pull, breaking reproducibility.
           # Bump deliberately when you've reviewed the upstream changelog.
-          image: pglombardo/pwpush:2.9.3
+          image: pglombardo/pwpush:2.11.5
 
           # PasswordPusher listens on 5100 by default.
           ports:

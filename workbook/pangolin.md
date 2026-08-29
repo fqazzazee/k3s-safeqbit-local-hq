@@ -63,7 +63,7 @@ against an image at 1.21.1. Everything here is hand-authored plain manifests.
 |---|---|---|---|
 | Pangolin | `fosrl/pangolin:ee-postgresql-1.21.1` | `08-pangolin-deployment.yaml` | ClusterIP `pangolin` :3000/3001/3002/3003 |
 | Gerbil | `fosrl/gerbil:1.4.3` | `11-edge-deployment.yaml` (container 1) | UDP 51820/21820 + TCP 3004 internal |
-| Traefik | `traefik:v3.7.9` | `11-edge-deployment.yaml` (container 2, **same pod**) | TCP 80/443 + UDP 443 (h3) |
+| Traefik | `traefik:v3.7.12` | `11-edge-deployment.yaml` (container 2, **same pod**) | TCP 80/443 + UDP 443 (h3) |
 | Database | CNPG `pangolin-cnpg` | `02-cnpg-cluster.yaml` | Longhorn 5Gi, `instances: 1` |
 | Newt (in-cluster) | `fosrl/newt:1.15.0` | `14-newt-deployment.yaml` | none — outbound only |
 
