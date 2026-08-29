@@ -101,10 +101,42 @@ manifests).
 
 **Gotchas already known** (from backup-strategy.md — check them off during the drill):
 - NFS PVC data is **not** in Velero backups (volume policy). Passzilla has
-  none, but any drill on netbox/authentik/guacamole needs the manual NFS
+  none, but any drill on netbox/authentik needs the manual NFS
   copy-back step documented in backup-strategy.md → "Restoring".
 - Restored PVCs get new PV names; Longhorn shows them as new volumes (old
   replicas become orphans — auto-cleanup handles them).
+- **A Velero restore orphans every SealedSecret in the namespace.** Velero
+  recreates the plain Secret without the `ownerReference` pointing at its
+  SealedSecret, so the controller refuses to touch it:
+  `Synced=False`, `failed update: Resource "<name>" already exists and is not
+  managed by SealedSecret`. The app keeps working — the Secret is there with
+  the right data — so nothing alerts, but the SealedSecret in Git has silently
+  stopped being the source of truth and **any future re-seal is ignored**.
+  Same shape as the restored-`CertificateRequest` trap in backup-strategy.md:
+  a restore leaves an object that quietly breaks a controller's ownership.
+  Check after every restore:
+  ```sh
+  kubectl get sealedsecrets -A -o custom-columns=\
+  'NS:.metadata.namespace,NAME:.metadata.name,SYNCED:.status.conditions[?(@.type=="Synced")].status'
+  ```
+  Fix — adopt, don't delete and re-create (deleting risks a window where the
+  app restarts without its Secret):
+  ```sh
+  kubectl annotate secret -n <ns> <name> sealedsecrets.bitnami.com/managed=true --overwrite
+  kubectl delete pod -n kube-system -l app.kubernetes.io/name=sealed-secrets
+  ```
+  The controller restart is **required** — it reconciles on SealedSecret
+  changes, and annotating the *Secret* does not trigger one, so the annotation
+  alone does nothing. Restarting resyncs everything.
+  Before adopting, confirm the sealed value still matches what is live, because
+  adoption lets the controller overwrite the Secret. Compare hashes rather than
+  printing plaintext:
+  ```sh
+  kubectl get secret -n kube-system -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml > k.yaml
+  kubeseal --recovery-unseal --recovery-private-key k.yaml -f <sealedsecret>.yaml -o json
+  # sha256 each key, compare to the live Secret, then: shred -u k.yaml
+  ```
+  A clean adoption logs `update suppressed, no changes in spec`.
 
 ---
 
