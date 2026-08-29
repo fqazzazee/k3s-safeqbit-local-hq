@@ -94,7 +94,6 @@ All Velero schedules use `snapshotMoveData: true`, which:
 | `pulse-bimonthly` | `0 5 6,21 * *` | 6th + 21st 05:00 | 21d (keep 2) | pulse |
 | `vaultwarden-bimonthly` | `0 3 7,22 * *` | 7th + 22nd 03:00 | 180d | vaultwarden |
 | `monitoring-bimonthly` | `0 3 9,24 * *` | 9th + 24th 03:00 | 21d (keep 2) | monitoring |
-| `guacamole-monthly` | `30 4 10 * *` | 10th 04:30 | 45d (keep 2) | guacamole |
 | `passzilla-bimonthly` | `0 3 11,26 * *` | 11th + 26th 03:00 | 28d | passzilla |
 | `photoprism-bimonthly` | `0 3 13,28 * *` | 13th + 28th 03:00 | 60d | photoprism |
 | `immich-bimonthly` | `30 3 1,16 * *` | 1st + 16th 03:30 | 60d | immich |
@@ -117,7 +116,7 @@ with zero off-site copies, which is why nothing in this table is set that way.
 **Postgres IS in these backups.** Every namespace with a CNPG cluster ships its
 `*-cnpg-1` PVC in the Velero run. The Layer-2 CNPG ScheduledBackups write
 Longhorn VolumeSnapshots, which never leave the cluster — so for affine,
-netbox, authentik, grafana, guacamole and pangolin, the Velero copy is the
+netbox, authentik, grafana and pangolin, the Velero copy is the
 **only** off-site copy of the database. Do not "optimise" it away before
 improvement-plan P3.1 gives CNPG a real Barman/S3 target.
 
@@ -142,7 +141,7 @@ rule skips any NFS-sourced volume. Rationale:
   the two NAS boxes + the NAS's own cloud backup. Duplicating bulk files into
   the B2 free tier adds transactions/cost, not durability.
 - Affected data: netbox media/reports/scripts, authentik media/templates,
-  guacamole recordings, grafana NFS home (plugins — rebuildable), photoprism
+  grafana NFS home (plugins — rebuildable), photoprism
   library (static PVs). All under `10.10.10.5:/mnt/nvme2tb/k8s/pvs` (dynamic)
   or `/mnt/mach2/mach2nas/Media` (static). **Both datasets must stay covered
   by the TrueNAS snapshot/replication/cloud tasks — verify when changing NAS
@@ -204,7 +203,6 @@ prune authentik    6    # weekly × ~6 weeks (~900M/snap)
 prune affine       7    # daily × 1 week
 prune netbox       7    # daily × 1 week
 prune monitoring   7    # daily × 1 week (grafana-cnpg)
-prune guacamole   10    # weekly × ~10 weeks (tiny ~34M snaps)
 ```
 
 **Why only 7 dailies (trimmed from 30 on 2026-07-21):** the CNPG databases are
@@ -420,3 +418,4 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | 2026-06-28 | Incident response. (1) `cnpg-backup-retention` was `ImagePullBackOff` ~30d (`bitnami/kubectl:1.34` removed from Docker Hub) → repinned to `alpine/k8s:1.34.1`; ran a manual prune (authentik 176→10). (2) `monitoring-default-kopia` was uninitialized → monitoring DataUploads PartiallyFailed ~6 weeks; fixed by deleting the stale `BackupRepository` CR to force re-init. (3) Longhorn scheduling ceiling (over-provisioning 100%) blocked all data-mover temp volumes after a Prometheus PVC expansion; reclaimed orphaned `sra-dev-demo` ns, then grew each node's sdb 150→250 GiB (`xfs_growfs`). (4) Added `LonghornNodeSchedulingCeiling` + self-healing `VeleroBackupPartiallyFailed` alerts; removed orphan `pangolin-bimonthly`. Full runbooks in [maintenance.md](maintenance.md). |
 | 2026-08-17 | B2 tuning round 3 (~31GB source / ~10GB stored → ~8GB source / ~2.7GB stored). (1) **CNPG WAL ring shrunk** — the real cause of the footprint: CNPG defaults `wal_keep_size=512MB` / `max_wal_size=1GB` pinned `pg_wal` at ~561MB on all six clusters while `base/` was only 33–245MB, so ~90% of every CNPG backup was empty WAL. Set to 128MB/256MB fleet-wide (sighup params, no restart). Saves ~400MB per CNPG backup — more than every TTL change combined. (2) Cadence/TTL rework: affine weekly→bi-weekly (2nd+17th, 21d), netbox weekly→bi-weekly (4th+19th, 21d), pulse weekly→bi-monthly (6th+21st, 21d), guacamole bi-monthly→monthly (10th, 45d), pangolin bi-monthly→monthly (25th, 60d), authentik 90d→21d, monitoring 60d→21d — all now "keep last 2". Five schedules renamed to match their cadence; old Schedule CRs hand-deleted (infrastructure-configs has `prune: false`). (3) Stale one-off backups purged (~3.8GB source): netbox-weekly-manual-nfspolicy-test, authentik-postupgrade-20260719c, monitoring-bimonthly-manual-20260706, photoprism-bimonthly-manual-20260706, immich-manual-initial, pulse-pre/post-v6-20260725, and 2 orphaned vaultwarden-frequent backups. (4) `VeleroBackupPartiallyFailed` window 16d→32d so a monthly cadence can still self-heal. (5) Corrected the "Postgres data is NOT in this backup" comment, which was wrong in every schedule file. (6) Also deleted the orphaned `sra-dev-demo-default-kopia` BackupRepository, left behind by the guacamole namespace rename and still being maintained weekly (these CRs are runtime-created by Velero, not in Git). |
 | 2026-08-17 | **Correction to the row above.** It recorded `pulse-data` as "grew 227MB→967MB in three weeks … needs retention trimming". That was wrong — it read a one-time step change as a growth trend. The v6.1.1 upgrade on 2026-07-25 took pulse-data from 228MB to 1032MB **in a single day** (v6 introduced the tiered metrics store); since then it has oscillated 947–1133MB and decreased twice. It is at **steady state**, ~875MB live on a 2Gi PVC, with retention pruning every tier hourly. No action needed and none taken. Verified separately that the SQLite files are not bloated: `metrics.db` (544MB) and `unified_resources.db` (176MB) both report a **freelist of 0**, so the space is live rows, not reclaimable free pages — VACUUM would gain nothing. Only `notification_queue.db` is bloated (18.5MB of 23.7MB reclaimable), which is immaterial. Tuning levers if it ever is needed, in upstream's recommended order: lower `pvePollingInterval` (currently 10s, inflates the 2h raw tier), then `metricsRetentionMinuteHours` (24h default = ~60% of all rows) in `/data/system.json`; both need a Pulse restart. Defaults are raw 2h / minute 24h / hourly 7d / daily 90d. |
+| 2026-08-29 | **Guacamole decommissioned; two kopia repos found deleted from B2.** (1) `kopia/guacamole/` and `kopia/pulse/` were removed from the bucket by hand during the round-3 cleanup, but their `BackupRepository` CRs and `backups/<name>/` metadata stayed. Velero retried maintenance on both every 5 min for days ("repository not initialized in the provided storage"), each retry burning 3 pods → a `KubeJobFailed` storm → Slack hit `message_limit_exceeded` (HTTP 429), which then broke `cluster-summary-report` (daily) and `backup-summary-report` (Mondays) too. **Lesson: deleting a kopia prefix in the B2 console is not a complete deletion — delete the `BackupRepository` CR and the Backup CRs (`velero backup delete`) in the same breath, or Velero retries forever.** (2) Guacamole retired (Pangolin covers browser RDP/VNC/SSH): `guacamole-monthly` Schedule and the app removed from Git, namespace deleted by hand — every layer below `flux-system` is `prune: false`, so removing from Git only orphans. Manifests kept at `apps/safeqbit-local-hq/guacamole/` and `configs/velero-schedule-guacamole.yaml` for a redeploy. Its B2 backups were already unrestorable and the database was let go deliberately. (3) `pulse-default-kopia` deleted so the next `pulse-bimonthly` run re-initializes a fresh repo. |

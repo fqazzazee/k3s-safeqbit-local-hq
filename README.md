@@ -17,7 +17,6 @@
 ![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-5CDD8B?style=for-the-badge&logo=uptimekuma&logoColor=black)
 ![AFFiNE](https://img.shields.io/badge/AFFiNE-1E1E1E?style=for-the-badge&logo=affine&logoColor=white)
 ![Passzilla](https://img.shields.io/badge/Passzilla-3D6EB4?style=for-the-badge&logoColor=white)
-![Guacamole](https://img.shields.io/badge/Guacamole-578B34?style=for-the-badge&logo=apacheguacamole&logoColor=white)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white)
 ![Pangolin](https://img.shields.io/badge/Pangolin-F36118?style=for-the-badge&logo=pangolin&logoColor=white)
 ![Pulse](https://img.shields.io/badge/Pulse-00B4D8?style=for-the-badge&logoColor=white)
@@ -170,7 +169,6 @@ flowchart TB
             nb["NetBox"]
             affine["AFFiNE"]
             pz["Passzilla"]
-            guac["Guacamole"]
             ha["Home Assistant<br/>LAN LB 10.10.13.51"]
             kuma["Uptime Kuma"]
             bt["Baby Tracker"]
@@ -181,7 +179,7 @@ flowchart TB
             newt["Newt connectors<br/>dial out from each site"]
         end
         subgraph db["🐘 Databases"]
-            cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>guacamole · pangolin ×1")]
+            cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>pangolin ×1")]
             ownpg[("bundled Postgres<br/>immich · photoprism")]
             sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant<br/>plain-text log: babytracker")]
         end
@@ -260,7 +258,7 @@ flowchart TB
     classDef gitc fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95
     class visitor,gh,cf,le,b2,slack,me,pve,nas1,nas2 ext
     class metallb,ingress,certmgr,cfd,pgedge netc
-    class auth,vw,immich,pp,nb,affine,pz,guac,ha,kuma,pango,newt appc
+    class auth,vw,immich,pp,nb,affine,pz,ha,kuma,pango,newt appc
     class cnpg,ownpg,sqlite dbc
     class longhorn,nfsprov stoc
     class velero,cnpgsnap,etcdsnap bakc
@@ -619,7 +617,6 @@ learn.
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring |
 | [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards |
 | [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms |
-| [Apache Guacamole](https://guacamole.apache.org/) | Clientless HTML5 remote access (RDP/VNC/SSH) — SRA demo stack |
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
 | [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine |
