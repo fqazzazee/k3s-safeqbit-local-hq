@@ -6,9 +6,9 @@ alarms. Added 2026-08-25.
 - **Namespace:** `babytracker`
 - **Hostname:** https://babytracker.local.safeqbit.com (internal only — see [Security posture](#security-posture))
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
-- **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own, MIT)
+- **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own; relicensed MIT → PolyForm Strict 1.0.0 on 2026-08-30 — noncommercial self-hosting only, which this is)
 - **Image:** none of its own — `node:22.23.2-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
-- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `e1e18a8` = v1.6.0
+- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `2073238` = v1.13.0 (upgraded 2026-09-07 from `e1e18a8` = v1.6.0)
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
 
@@ -103,6 +103,14 @@ back through its own `mergeConfig`, keeping the extra keys but resetting
 `version`. Harmless in practice, but it means a rollback is no longer perfectly
 byte-clean — restore the `/data` from the pre-upgrade backup if you want it to be.
 
+The 1.6.0 → 1.13.0 hop (2026-09-07) is the worked example: it migrates
+`config.json` 4 → 6 (adds the per-side breastfeeding fields, the growth button
+and the medicine picker — all additive, and only written on the first settings
+save) and starts writing `del` lines that carry an `at`. Both directions still
+read: 1.6.0 ignores the extra key and applies the delete as it always did. The
+dry run against a copy of the live data replayed all 319 events, wrote nothing
+to disk on boot, and served `GET /`.
+
 ### Dry-running an upgrade
 
 Cheap and worth it before anything that migrates config. Copy the live data out
@@ -183,7 +191,18 @@ alarms.json    snooze / last-fired state
 
 pre-restore-<timestamp>.json   written automatically before a restore
                                overwrites anything (1.2.0+)
+
+backups/            unattended backup copies, only if you turn them on (1.8.0+)
+backup-state.json   when the scheduler last ran; deliberately not in a bundle
 ```
+
+**Unattended backups are off by default and should stay off here.** 1.8.0 added
+a scheduler that drops gzipped bundles into `/data/backups` (or `$BT_BACKUP_DIR`,
+which this deployment does not set). It exists for installs with nothing else
+backing them up; this one has Velero to B2 daily. Turning it on would put a
+second copy of every entry *on the same 1Gi Longhorn volume it is a copy of* —
+same disk, same failure, and a default `keep: 14` inside the volume Velero is
+already carrying off-site.
 
 Those `pre-restore-*.json` files are never cleaned up on their own. They are
 small, but on a 1Gi volume it is worth deleting the stale ones after a restore
@@ -192,7 +211,11 @@ you are happy with:
 
 `events.log` is a journal: edits and deletions are appended as further lines and
 the file is replayed at startup, so a crash can't corrupt earlier entries. It
-compacts itself once tombstones pile up. All of it is readable text — `kubectl
+compacts itself once superseded lines pile up (2000 lines, 30% of them edits or
+deletions). Since 1.11.0 compaction keeps one `del` line per deleted entry
+instead of dropping it — a tombstone, so restoring a bundle no longer
+resurrects entries that were deleted after it was taken. They are never pruned;
+about 60 bytes each. All of it is readable text — `kubectl
 -n babytracker exec deploy/babytracker -- cat /data/events.log` is a legitimate
 debugging move, and copying the folder is a legitimate backup.
 
