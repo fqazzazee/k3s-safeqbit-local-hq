@@ -1,7 +1,7 @@
 # Cluster Maintenance Runbook
 
 **Cluster:** safeqbit-local-hq  
-**Last updated:** 2026-05-29 (added Graceful Node Shutdown section)
+**Last updated:** 2026-09-13 (quick path synced with Proxmox Notes; CoreDNS drain deadlock fixed)
 
 A living document. Add entries as new patterns emerge.
 
@@ -43,24 +43,54 @@ Use this procedure when taking a node offline for hardware changes - RAM, disk, 
 For a plain shutdown or reboot of ONE VM with no hardware/volume work, the full
 procedure below is overkill: every Longhorn volume runs 3 replicas
 (`defaultReplicaCount: 3`), so steps 2 (replica juggling) and 3 (Flux suspend)
-are unnecessary. This short form lives in each VM's Notes field in Proxmox:
+are unnecessary. This short form lives in each VM's Notes field in Proxmox
+(keep the two in sync):
 
 ```bash
-# BEFORE shutting down this VM — from any other node or the workstation:
-kubectl drain k3s-server-01 --ignore-daemonsets --delete-emptydir-data \
-  --grace-period=60 --timeout=300s
-kubectl get pods -A --field-selector=spec.nodeName=k3s-server-01   # only DaemonSets left
-# now shut the VM down (Proxmox shutdown = ACPI = clean k3s stop)
+NODE=k3s-server-03    # change per VM
 
-# AFTER boot:
-kubectl get nodes                    # wait for Ready
-kubectl uncordon k3s-server-01
-# sanity: /cluster nodes and /cluster pods in Slack
+# 1. Pre-flight — don't continue unless all pass
+kubectl get nodes                          # all 3 Ready
+kubectl get --raw=/healthz/etcd; echo      # ok
+kubectl get cluster -A                     # CNPG all healthy
+kubectl get volumes.longhorn.io -n longhorn-system \
+  -o custom-columns=NAME:.metadata.name,ROBUST:.status.robustness | grep -v healthy
+                                           # header only
+
+# 2. Drain (from the workstation or another node)
+kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data \
+  --grace-period=60 --timeout=300s
+
+# 3. Verify only DaemonSets remain
+kubectl get pods -A --field-selector spec.nodeName=$NODE \
+  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind \
+  | grep -v DaemonSet                      # header only
+
+# 4. Proxmox → Shutdown (never Stop; ACPI = graceful kubelet shutdown)
+
+# 5. After boot
+kubectl get nodes -w                       # wait Ready
+kubectl uncordon $NODE
+kubectl get --raw=/healthz/etcd; echo      # ok
+kubectl get volumes.longhorn.io -n longhorn-system \
+  -o custom-columns=NAME:.metadata.name,ROBUST:.status.robustness | grep -v healthy
+                                           # repeat until header only
 ```
 
-Rules: one server at a time (etcd quorum is 2/3); if the drain hangs past
-5 min, see "If drain is stuck" below; for hardware/disk work use the full
-procedure from step 1.
+Rules:
+- One server at a time (etcd quorum is 2/3). Don't touch the next node
+  until every Longhorn volume is `healthy` again.
+- "Degraded" volumes between steps 3 and 5 are expected — the drained node's
+  replica stopped, the other two are serving.
+- **Drain stuck on a `*-cnpg-1` pod** (single-instance CNPG): its primary PDB
+  never allows eviction. `kubectl delete pod -n <ns> <pod>` (DB down ~1-2 min
+  while it moves), then re-run the drain.
+- **Drain stuck on CoreDNS** should no longer happen (PDB is
+  `maxUnavailable: 1` since 2026-09-13 — see [CoreDNS HA](#coredns-ha)). If
+  it does, delete the pod on `$NODE`; never `kubectl scale` it (the
+  autoscaler reverts it within seconds).
+- For hardware/disk work use the full procedure from step 1; for any other
+  stuck drain see "If drain is stuck" below.
 
 ---
 
@@ -686,6 +716,14 @@ k3s restarts (three consecutive Addon re-applies, DNS stayed 3/3).
 Host spread needs no configuration: the k3s-bundled template already carries
 hostname `topologySpreadConstraints` (`DoNotSchedule`) + required
 podAntiAffinity, so the 3 replicas always land one per node.
+
+**Drains:** the CPA counts only *schedulable* nodes
+(`includeUnschedulableNodes: false`), so cordoning a node drops CoreDNS to
+**2** replicas. The PDB is therefore `maxUnavailable: 1` — the original
+`minAvailable: 2` equalled the replica count mid-drain and made the CoreDNS
+pod on the drained node un-evictable (every drain timed out; hit
+2026-09-13). The drain briefly leaves 1 replica for the ~2s its replacement
+takes to start on the free node; uncordon restores 3.
 
 **Verify:**
 ```bash

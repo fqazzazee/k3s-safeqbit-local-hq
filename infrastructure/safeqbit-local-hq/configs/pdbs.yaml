@@ -8,17 +8,17 @@
 # `controllers/cert-manager.yaml`.
 
 ---
-# CoreDNS — managed by k3s Addon, not a HelmChart. Scaled to 3 replicas in
-# 2026-05 (one per host) via direct edit of the source manifest on each
-# control-plane node. minAvailable: 2 keeps DNS resolving cluster-wide during
-# the drain of any single node.
+# CoreDNS — managed by k3s Addon, not a HelmChart. Replica count comes from
+# coredns-autoscaler.yaml (one per SCHEDULABLE node, min 2). Cordoning a node
+# drops CoreDNS to 2 replicas, so this must be maxUnavailable, not
+# minAvailable: 2 — that deadlocked every drain (2026-09-13, server-03).
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: coredns
   namespace: kube-system
 spec:
-  minAvailable: 2
+  maxUnavailable: 1
   selector:
     matchLabels:
       k8s-app: kube-dns
