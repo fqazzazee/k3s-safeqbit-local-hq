@@ -17,6 +17,18 @@
 > `${.PV.name}` literals are the [[nfs-truenas-pathpattern-bug]], not a typo —
 > a recreated PVC would re-adopt the same directory. Delete them on the NAS by
 > hand when you no longer want the recordings.
+>
+> **It came back, and was deleted a second time on 2026-09-13.** The namespace
+> was hand-deleted at 08:37 ET on 08-29, but PR #105 didn't merge until 08:59.
+> In that window Flux reconciled `main`, which still listed `guacamole`, and
+> recreated everything, including the `guacamole-monthly` Velero schedule. After
+> the merge, `prune: false` left it running. It ran unnoticed for 14 days with
+> an empty DB and took one B2 backup. The second cleanup: delete the Schedule,
+> then `velero backup delete --confirm` (exec in the `velero-*` server pod),
+> the namespace, the `guacamole-default-kopia` BackupRepository (a leftover
+> repo caused the 08-29 Slack storm), and the Released `nfs-truenas` PV.
+> **Decommission order for any app here: merge the Git removal FIRST, confirm
+> Flux applied that revision, THEN delete by hand.**
 
 **Created:** 2026-06-04
 **Namespace:** `guacamole`
