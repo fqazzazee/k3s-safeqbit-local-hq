@@ -1,25 +1,40 @@
 # safeqbit-local-hq - my self-hosted Kubernetes home cluster
 
+**Platform**
+
 ![K3s](https://img.shields.io/badge/K3s-FFC61C?style=for-the-badge&logo=k3s&logoColor=black)
 ![Flux](https://img.shields.io/badge/Flux-5468FF?style=for-the-badge&logo=flux&logoColor=white)
-![Longhorn](https://img.shields.io/badge/Longhorn-5F224E?style=for-the-badge&logo=longhorn&logoColor=white)
-![Proxmox](https://img.shields.io/badge/Proxmox-E57000?style=for-the-badge&logo=proxmox&logoColor=white)
 ![Helm](https://img.shields.io/badge/Helm-0F1689?style=for-the-badge&logo=helm&logoColor=white)
+![Proxmox](https://img.shields.io/badge/Proxmox-E57000?style=for-the-badge&logo=proxmox&logoColor=white)
+![Longhorn](https://img.shields.io/badge/Longhorn-5F224E?style=for-the-badge&logo=longhorn&logoColor=white)
+![TrueNAS](https://img.shields.io/badge/TrueNAS-0095D5?style=for-the-badge&logo=truenas&logoColor=white)
+![NGINX](https://img.shields.io/badge/ingress--nginx-009639?style=for-the-badge&logo=nginx&logoColor=white)
 ![Let's Encrypt](https://img.shields.io/badge/Let's%20Encrypt-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)
+![Cloudflare](https://img.shields.io/badge/Cloudflare%20Tunnel-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)
+
+**Data, backups & observability**
+
+![CloudNativePG](https://img.shields.io/badge/CloudNativePG-336791?style=for-the-badge&logo=postgresql&logoColor=white)
+![Velero](https://img.shields.io/badge/Velero-00A5A8?style=for-the-badge&logoColor=white)
+![Backblaze B2](https://img.shields.io/badge/Backblaze%20B2-E21E29?style=for-the-badge&logo=backblaze&logoColor=white)
 ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)
 ![Grafana](https://img.shields.io/badge/Grafana-F46800?style=for-the-badge&logo=grafana&logoColor=white)
-![CloudNativePG](https://img.shields.io/badge/CloudNativePG-336791?style=for-the-badge&logo=postgresql&logoColor=white)
-![Vaultwarden](https://img.shields.io/badge/Vaultwarden-175DDC?style=for-the-badge&logo=vaultwarden&logoColor=white)
+![Slack](https://img.shields.io/badge/Slack%20ChatOps-4A154B?style=for-the-badge&logo=slack&logoColor=white)
+
+**Apps**
+
 ![Authentik](https://img.shields.io/badge/Authentik-FD4B2D?style=for-the-badge&logo=authentik&logoColor=white)
+![Vaultwarden](https://img.shields.io/badge/Vaultwarden-175DDC?style=for-the-badge&logo=vaultwarden&logoColor=white)
 ![Immich](https://img.shields.io/badge/Immich-4250AF?style=for-the-badge&logo=immich&logoColor=white)
 ![PhotoPrism](https://img.shields.io/badge/PhotoPrism-7B4FFF?style=for-the-badge&logo=photoprism&logoColor=white)
 ![NetBox](https://img.shields.io/badge/NetBox-006F94?style=for-the-badge&logo=netbox&logoColor=white)
-![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-5CDD8B?style=for-the-badge&logo=uptimekuma&logoColor=black)
 ![AFFiNE](https://img.shields.io/badge/AFFiNE-1E1E1E?style=for-the-badge&logo=affine&logoColor=white)
 ![Passzilla](https://img.shields.io/badge/Passzilla-3D6EB4?style=for-the-badge&logoColor=white)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white)
+![Uptime Kuma](https://img.shields.io/badge/Uptime%20Kuma-5CDD8B?style=for-the-badge&logo=uptimekuma&logoColor=black)
 ![Pangolin](https://img.shields.io/badge/Pangolin-F36118?style=for-the-badge&logo=pangolin&logoColor=white)
 ![Pulse](https://img.shields.io/badge/Pulse-00B4D8?style=for-the-badge&logoColor=white)
+![Baby Tracker](https://img.shields.io/badge/Baby%20Tracker-FF6F91?style=for-the-badge&logoColor=white)
 
 > A small private cloud running in my home - three computers working together to host
 > my passwords, photos, notes, and a handful of other apps I'd rather not rent from a
@@ -258,7 +273,7 @@ flowchart TB
     classDef gitc fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95
     class visitor,gh,cf,le,b2,slack,me,pve,nas1,nas2 ext
     class metallb,ingress,certmgr,cfd,pgedge netc
-    class auth,vw,immich,pp,nb,affine,pz,ha,kuma,pango,newt appc
+    class auth,vw,immich,pp,nb,affine,pz,ha,kuma,bt,pango,newt appc
     class cnpg,ownpg,sqlite dbc
     class longhorn,nfsprov stoc
     class velero,cnpgsnap,etcdsnap bakc
@@ -616,7 +631,7 @@ learn.
 | [Passzilla](https://github.com/pglombardo/PasswordPusher) | One-time secret / password sharing links |
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring |
 | [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards |
-| [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms |
+| [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms ([my own project](#things-im-building)) |
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
 | [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine |
@@ -642,7 +657,15 @@ learn.
 
 ### Things I'm building
 
-Side projects I've published, mostly terminal-first Linux and networking tools:
+**What I'm working on right now**
+
+| Project | Description |
+|---|---|
+| [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep, custom buttons and programmable alarms. Zero dependencies, no build step, plain-text storage; it runs on this cluster (see [the app list](#apps-i-actually-use)) from a pinned commit of its own repo, and an Android companion app is in private development. |
+| QubeCommander (`qube`) | An htop-style terminal commander for this cluster. It runs the Slack bot's own code, so it answers the same commands - and its trace pane doubles as a kubectl teacher, showing the command you'd type by hand for every answer on screen. Not published yet. |
+| cluster-slack-bot | The read-only `/cluster` ChatOps bot and in-Slack wiki described [above](#cluster-slack-bot-chatops--a-built-in-wiki) - still growing new commands as I find things I want to check from my phone. |
+
+**Published side projects**, mostly terminal-first Linux and networking tools:
 
 | Project | Description |
 |---|---|
