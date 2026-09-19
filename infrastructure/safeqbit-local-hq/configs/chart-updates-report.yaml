@@ -1,0 +1,407 @@
+# chart-updates-report.yaml
+# Weekly Slack digest of Helm chart version drift: every HelmRelease's pinned
+# chart version against the newest stable version upstream publishes, sorted
+# by semver bump (major first), each with a changelog link.
+#
+# Runs Mondays 08:30 America/New_York in the monitoring namespace (so it can
+# reuse the alertmanager-slack-webhook SealedSecret; SealedSecrets are
+# namespace-scoped) — 30 min after backup-summary-report, which shares the
+# slot. Also available on demand as `/cluster updates` from the Slack bot,
+# which execs THIS ConfigMap's script (same pattern as summary/backups).
+#
+# WHY WEEKLY, NOT DAILY: nothing here changes hour to hour, and upgrades land
+# in batches weeks apart (the July 2026 wave). A daily copy of the same six
+# lines becomes wallpaper, and a noisy channel has already cost this cluster
+# once (the orphaned-kopia storm hit Slack's message_limit_exceeded and broke
+# both report CronJobs). Type `/cluster updates` when you want it sooner.
+#
+# ── Where the version data comes from ─────────────────────────────────────
+# source-controller ALREADY fetches and caches every HelmRepository's
+# index.yaml and serves it in-cluster at
+#   http://source-controller.flux-system.svc.cluster.local./helmrepository/...
+# so the normal path makes NO external calls, needs no credentials, and
+# cannot hit a registry rate limit. If that artifact is missing (repo not yet
+# reconciled) the job falls back to the upstream index URL over the internet
+# and says so in the footer.
+#
+# SCOPE — charts only. The ~40 sidecar images the charts themselves manage
+# (Longhorn's CSI sidecars, cert-manager's three, the prometheus-stack's six)
+# are deliberately NOT reported: you cannot move them without bumping the
+# chart, which is what this report already tells you. Git-pinned application
+# images (home-assistant, vaultwarden, uptime-kuma, …) are a separate,
+# bigger job — they need a per-image registry map — and are not covered here.
+#
+# HOLDS (in the script) is the pin list: a chart there is reported under
+# "Held" with the reason instead of nagging. Add to it whenever an upgrade
+# is deliberately declined, or the report will argue with a decision you
+# already made.
+#
+# Manual run:
+#   kubectl -n monitoring create job --from=cronjob/chart-updates-report updates-now
+#
+# Local test (prints instead of posting; falls back to upstream indexes):
+#   kubectl proxy &
+#   API_BASE=http://127.0.0.1:8001 DRY_RUN=1 python3 <script below>
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chart-updates-report
+  namespace: monitoring
+---
+# Read-only: the HelmReleases' pinned versions and the HelmRepositories'
+# cached-artifact URLs. No write verbs, no secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: chart-updates-report
+rules:
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["helmrepositories"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: chart-updates-report
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: chart-updates-report
+subjects:
+  - kind: ServiceAccount
+    name: chart-updates-report
+    namespace: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chart-updates-report-script
+  namespace: monitoring
+data:
+  report.py: |
+    #!/usr/bin/env python3
+    """Post a one-message Slack digest of Helm chart version drift."""
+    import json, os, ssl, sys, time
+    import urllib.error, urllib.request
+    from datetime import datetime, timezone
+
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    # In-cluster: use the env-injected API IP, not kubernetes.default.svc.
+    # The cluster's ndots:5 + local.safeqbit.com search domain makes short
+    # in-cluster names flap under musl resolvers (alpine images).
+    API_BASE = os.environ.get("API_BASE") or (
+        "https://" + os.environ["KUBERNETES_SERVICE_HOST"] + ":"
+        + os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443"))
+    NOW = datetime.now(timezone.utc)
+
+    # Charts deliberately pinned behind upstream, with WHY. Without this the
+    # digest nags every week about a decision already made and written down —
+    # which is exactly how a recurring report stops being read.
+    # Keep in sync with the holdout list in workbook/slack-bot.md.
+    HOLDS = {
+        "cert-manager": "held at 1.16.1 by choice (July 2026 wave): no issues,"
+                        " 1.21.x has known crash-loop bugs — target 1.20.x if ever",
+    }
+
+    # Pre-release tags never count as "available"; nobody runs an rc in prod here.
+    PRERELEASE = ("rc", "alpha", "beta", "dev", "pre", "snapshot", "nightly", "next")
+
+    UA = "cluster-chart-updates-report (k3s-safeqbit-local-hq)"
+
+    ICON = {"major": ":red_circle:", "minor": ":warning:", "patch": ":arrow_up:"}
+
+
+    def api(path):
+        req = urllib.request.Request(API_BASE + path)
+        ctx = None
+        if API_BASE.startswith("https"):
+            req.add_header("Authorization", f"Bearer {open(f'{SA}/token').read()}")
+            ctx = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+        # Retry 429/5xx: API priority-and-fairness throttles bursts of list calls.
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                if e.code not in (429, 500, 503) or attempt == 4:
+                    raise
+                time.sleep(2 * (attempt + 1))
+
+
+    # ---------- semver ----------
+
+    def parse_ver(v):
+        """'v1.21.2-rc1+build' → ((1,21,2), 'rc1'). Junk sorts lowest."""
+        v = str(v).strip().lstrip("vV").split("+", 1)[0]
+        core, _, pre = v.partition("-")
+        nums = []
+        for part in core.split("."):
+            if not part.isdigit():
+                return None, pre
+            nums.append(int(part))
+        return tuple(nums + [0] * (3 - len(nums)))[:3], pre
+
+
+    def is_prerelease(v):
+        nums, pre = parse_ver(v)
+        return nums is None or any(p in pre.lower() for p in PRERELEASE)
+
+
+    def bump_kind(cur, new):
+        a, b = parse_ver(cur)[0], parse_ver(new)[0]
+        if not a or not b:
+            return "minor"
+        return "major" if b[0] != a[0] else "minor" if b[1] != a[1] else "patch"
+
+
+    # ---------- Helm index.yaml, parsed without PyYAML ----------
+    #
+    # The report image is stdlib-only (same rule as the sibling digests), and a
+    # chart index is a strictly machine-generated document: `entries:` at column
+    # 0, chart names at indent 2, one `- ` list item per version at indent 2 with
+    # its own fields at indent 4. Matching `version:`/`created:`/`home:` at
+    # EXACTLY indent 4 is what keeps a chart's nested `dependencies:` block (which
+    # carries its own `version:` at indent 6) and annotation block scalars out of
+    # the results. Parsed line-by-line so a 6 MB index never lands in memory.
+
+    def parse_index(stream, chart):
+        """→ [{'version', 'created', 'home'}] for one chart, newest first."""
+        out, cur, inside, entries = [], None, False, False
+        for raw in stream:
+            line = raw.decode() if isinstance(raw, bytes) else raw
+            line = line.rstrip()          # tolerate CRLF / trailing space
+            if not line.strip():
+                continue
+            if not line.startswith(" "):                      # column-0 key
+                entries = line.startswith("entries:")
+                if inside:
+                    break
+                continue
+            if not entries:
+                continue
+            # A chart key is indent-2 and is not a list item ("  - annotations:").
+            if line[:2] == "  " and line[2] not in " -" and line.endswith(":"):
+                if inside:                                    # next chart: done
+                    break
+                inside = line.strip()[:-1] == chart
+                continue
+            if not inside:
+                continue
+            if line.startswith("  - "):
+                cur = {"version": None, "created": "", "home": ""}
+                out.append(cur)
+                line = "    " + line[4:]                      # 1st field of the item
+            if cur is None:
+                continue
+            # Only this item's OWN fields (indent 4) — never nested dependencies.
+            if line.startswith("    ") and line[4] != " ":
+                k, _, v = line[4:].partition(":")
+                if k in ("version", "created", "home"):
+                    cur[k] = v.strip().strip('"\'')
+        return [e for e in out if e["version"]]
+
+
+    def fetch_index(repo, chart):
+        """Prefer source-controller's cached artifact (no egress, no rate limit);
+        fall back to the upstream index only if that is unavailable."""
+        art = (repo.get("status") or {}).get("artifact", {}).get("url")
+        urls = [(art, "cache")] if art else []
+        urls.append((repo["spec"]["url"].rstrip("/") + "/index.yaml", "upstream"))
+        last = None
+        for url, kind in urls:
+            if not url or url.startswith("oci://"):
+                continue
+            # Cloudflare-fronted chart repos (jetstack, goauthentik) 403 the
+            # default Python-urllib User-Agent — send a real one.
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return parse_index(r, chart), kind
+            except Exception as e:                            # noqa: BLE001
+                last = e
+        raise RuntimeError(f"{type(last).__name__}: {last}")
+
+
+    # ---------- report ----------
+
+    def newest(versions):
+        stable = [e for e in versions if not is_prerelease(e["version"])]
+        return max(stable, key=lambda e: parse_ver(e["version"])[0] or ()) \
+            if stable else None
+
+
+    def age(ts):
+        try:
+            d = (NOW - datetime.fromisoformat(ts.replace("Z", "+00:00"))).days
+        except Exception:                                     # noqa: BLE001
+            return ""
+        return f"{d}d ago" if d < 90 else f"{d // 30}mo ago"
+
+
+    def collect():
+        repos = {}
+        for r in api("/apis/source.toolkit.fluxcd.io/v1/helmrepositories")["items"]:
+            repos[(r["metadata"]["namespace"], r["metadata"]["name"])] = r
+
+        rows, broken = [], []
+        for hr in api("/apis/helm.toolkit.fluxcd.io/v2/helmreleases")["items"]:
+            meta, spec = hr["metadata"], hr["spec"]
+            cs = (spec.get("chart") or {}).get("spec") or {}
+            chart, pinned = cs.get("chart"), cs.get("version")
+            if not chart or not pinned:
+                # chartRef (OCI) releases carry no inline version to compare.
+                broken.append(f"{meta['namespace']}/{meta['name']}: no chart version")
+                continue
+            ref = cs.get("sourceRef") or {}
+            repo = repos.get((ref.get("namespace", meta["namespace"]), ref.get("name")))
+            if not repo:
+                broken.append(f"{meta['namespace']}/{meta['name']}: "
+                              f"HelmRepository {ref.get('name')} not found")
+                continue
+            try:
+                versions, src = fetch_index(repo, chart)
+                top = newest(versions)
+            except Exception as e:                            # noqa: BLE001
+                broken.append(f"{meta['namespace']}/{meta['name']} ({chart}): "
+                              f"{str(e)[:120]}")
+                continue
+            if not top:
+                broken.append(f"{meta['namespace']}/{meta['name']}: no stable versions")
+                continue
+            cur = parse_ver(pinned)[0]
+            ahead = [e for e in versions
+                     if not is_prerelease(e["version"])
+                     and cur and (parse_ver(e["version"])[0] or ()) > cur]
+            rows.append({
+                "ns": meta["namespace"], "name": meta["name"], "chart": chart,
+                "cur": pinned, "new": top["version"], "home": top["home"],
+                "released": age(top["created"]), "behind": len(ahead),
+                "kind": bump_kind(pinned, top["version"]),
+                "src": src,
+                "stale": bool(cur) and (parse_ver(top["version"])[0] or ()) > cur,
+            })
+        return rows, broken
+
+
+    def render(rows, broken):
+        order = {"major": 0, "minor": 1, "patch": 2}
+        behind = sorted((r for r in rows if r["stale"] and r["chart"] not in HOLDS),
+                        key=lambda r: (order[r["kind"]], -r["behind"]))
+        held = [r for r in rows if r["stale"] and r["chart"] in HOLDS]
+        current = sorted({r["chart"] for r in rows if not r["stale"]})
+
+        out = [f":package: *Chart updates* — {len(rows) + len(broken)} Helm"
+               f" releases · {NOW.strftime('%Y-%m-%d')}"]
+
+        if behind:
+            out.append("")
+            out.append(f"*Behind* ({len(behind)})")
+            for r in behind:
+                link = f" · <{r['home']}|changelog>" if r["home"].startswith("http") else ""
+                plus = f" · {r['behind']} releases" if r["behind"] > 1 else ""
+                out.append(f"{ICON[r['kind']]} `{r['chart']}` {r['cur']} → *{r['new']}*"
+                           f"  _{r['kind']}_{plus} · released {r['released']}"
+                           f"{link}\n      {r['ns']}/{r['name']}")
+        else:
+            out.append("\n:white_check_mark: every chart is on the newest stable release")
+
+        if held:
+            out.append("")
+            out.append(f"*Held* ({len(held)})")
+            for r in held:
+                out.append(f":double_vertical_bar: `{r['chart']}` {r['cur']} →"
+                           f" {r['new']} — {HOLDS[r['chart']]}")
+
+        if current:
+            out.append("")
+            out.append(f"*Current* ({len(current)}): " + ", ".join(current))
+
+        if broken:
+            out.append("")
+            out.append("*Not checked*")
+            out.extend(f":grey_question: {b}" for b in broken)
+
+        if any(r["src"] == "upstream" for r in rows):
+            out.append("\n_:information_source: some indexes came from upstream —"
+                       " source-controller's cache was unavailable_")
+        out.append("\n_bump `version:` in `infrastructure/.../controllers/<chart>.yaml`"
+                   " · `/cluster flux` for reconcile state_")
+        return "\n".join(out)
+
+
+    def post(msg):
+        if os.environ.get("DRY_RUN"):
+            print(msg)
+            return
+        req = urllib.request.Request(
+            os.environ["SLACK_WEBHOOK_URL"],
+            data=json.dumps({"text": msg}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            if r.read().decode() != "ok":
+                sys.exit(1)
+        print("report posted")
+
+
+    post(render(*collect()))
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: chart-updates-report
+  namespace: monitoring
+spec:
+  schedule: "30 8 * * 1"
+  timeZone: America/New_York
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Hard stop so a hung job can never wedge the schedule (see the
+      # netbox-housekeeping incident: stuck Active job + Forbid = silently
+      # never runs again).
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          serviceAccountName: chart-updates-report
+          restartPolicy: Never
+          # ndots:1 so hooks.slack.com and source-controller's trailing-dot
+          # FQDN resolve as absolute names. The cluster default (ndots:5 +
+          # local.safeqbit.com search domain) breaks multi-dot names under
+          # musl resolvers (python:alpine). The k8s API needs no DNS at all.
+          dnsConfig:
+            options:
+              - name: ndots
+                value: "1"
+          containers:
+            - name: report
+              # Stdlib-only script; pinned digest-stable minor tag.
+              image: python:3.13-alpine
+              command: ["python3", "/scripts/report.py"]
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: alertmanager-slack-webhook
+                      key: webhook-url
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  # The 6 MB prometheus-community index is streamed line by
+                  # line, never held whole — this stays flat.
+                  memory: 128Mi
+          volumes:
+            - name: script
+              configMap:
+                name: chart-updates-report-script

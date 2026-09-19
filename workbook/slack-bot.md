@@ -19,6 +19,10 @@ pane defaults to a **how-to view** — every call each command makes is
 shown as the kubectl/grep (or Grafana → Explore) step a human would type
 to get the same answer, F7 flips to the raw `kubectl get --raw` calls.
 
+**2026-09-19:** `updates` — weekly Helm chart version drift digest
+(`chart-updates-report.yaml`), on demand from the bot or Mondays 08:30
+from its own CronJob (see "Chart updates" below).
+
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
 > **[slack-bot-manual.md](slack-bot-manual.md)**. This file covers
@@ -78,6 +82,9 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
+/cluster updates                         chart version drift: every HelmRelease's pinned version vs
+                                         the newest stable upstream, sorted major→minor→patch,
+                                         with changelog links (~5s; aliases upgrades/versions/charts)
 /cluster velero [n | name]               last n backups (default 12); with a name (prefix ok):
                                          errors, failureReason, expiry, per-volume PVB detail
 /cluster certs                           cert-manager expiries, soonest first (red <7d, amber <21d)
@@ -112,7 +119,8 @@ If double answers ever DO appear, that assumption broke: drop back to
 Singular/plural aliases work (`pod`, `deploy`, `log`, `event`, `pvc`,
 `ingress`…), plus `triage`/`debug`→why, `volumes`/`lh`→longhorn,
 `usage`/`disk`→storage, `cron`→jobs, `nslookup`/`resolve`→dns,
-`snapshots`→etcd, `kb`/`docs`/`howto`/`guide`/`runbooks`→wiki,
+`snapshots`→etcd, `upgrades`/`versions`/`charts`/`drift`→updates,
+`kb`/`docs`/`howto`/`guide`/`runbooks`→wiki,
 `manual`→man. `help` shows each command with the kubectl command
 you'd type on a terminal.
 
@@ -179,17 +187,77 @@ v4 caveats worth remembering:
   expiring silences stays in the Alertmanager UI, on purpose.
 
 Replies go through the slash command's `response_url` → visible **only to
-the invoker**, in whatever channel the command was typed. `summary` and
-`backups` execute the existing report ConfigMaps
-(`cluster-summary-report-script`, `backup-summary-report-script`) as
-subprocesses with `SLACK_WEBHOOK_URL` overridden to the `response_url` —
-the CronJobs and the bot share one copy of the report code.
+the invoker**, in whatever channel the command was typed. `summary`,
+`backups` and `updates` execute the existing report ConfigMaps
+(`cluster-summary-report-script`, `backup-summary-report-script`,
+`chart-updates-report-script`) as subprocesses with `SLACK_WEBHOOK_URL`
+overridden to the `response_url` — the CronJobs and the bot share one copy
+of the report code.
+
+## Chart updates (`updates`)
+
+Answers one question: **which Helm charts are we behind on, and how far.**
+Manifest `configs/chart-updates-report.yaml` — ConfigMap script + its own
+ServiceAccount/ClusterRole + a CronJob (Mondays 08:30 ET, 30 min after the
+backup digest). The bot execs the same script for `/cluster updates`.
+
+**No external calls on the normal path.** source-controller already fetches
+and caches every `HelmRepository`'s `index.yaml` and serves it in-cluster at
+`http://source-controller.flux-system.svc.cluster.local./helmrepository/<ns>/<name>/index-<hash>.yaml`
+(it is on `.status.artifact.url`). The report reads that — no credentials,
+no egress, no registry rate limit. Only if the artifact is missing does it
+fall back to the upstream index URL, and it says so in the message footer.
+
+- **The index parser is hand-rolled**, because the report images are
+  stdlib-only (no PyYAML, same rule as the sibling digests). A chart index
+  is machine-generated and rigid — `entries:` at column 0, chart names at
+  indent 2, one `- ` item per version with its fields at indent 4 — so the
+  parser matches `version:`/`created:`/`home:` at **exactly indent 4**.
+  That precision is what keeps an entry's nested `dependencies:` block
+  (which has its own `version:` at indent 6) and `annotations:` block
+  scalars out of the results. It was validated line-for-line against
+  PyYAML on all ten chart repos in use (1138-version
+  `kube-prometheus-stack` included) and streams, so a 6 MB index never
+  lands in memory.
+- **Severity is the semver bump, not a CVE score.** major → :red_circle:,
+  minor → :warning:, patch → :arrow_up:, sorted in that order, then by how
+  many stable releases you are behind. Nothing in a chart index knows
+  about vulnerabilities; real CVE severity would need a scanner
+  (trivy-operator) and is a separate project.
+- **Changelog links** come from the index entry's own `home:` field, so
+  they cost nothing and cannot drift out of date.
+- **Pre-releases never count as available** — `rc`/`alpha`/`beta`/`dev`/
+  `pre`/`snapshot`/`nightly`/`next` are filtered out, so the report never
+  suggests an rc.
+- **`HOLDS` in the script is the pin list.** A chart listed there reports
+  under *Held* with the reason instead of nagging. Today: `cert-manager`,
+  held at v1.16.1 (July 2026 wave — 1.21.x has known crash-loop bugs,
+  target 1.20.x if ever). **Add to `HOLDS` whenever an upgrade is
+  deliberately declined**, or the digest will argue every week with a
+  decision already made.
+- **Weekly, not daily**, on purpose: upgrades land in batches weeks apart,
+  so a daily copy of the same six lines becomes wallpaper — and a noisy
+  channel already cost this cluster once (the orphaned-kopia storm hit
+  Slack's `message_limit_exceeded` and broke both report CronJobs). Type
+  `/cluster updates` when you want it sooner.
+
+**Scope — charts only.** The ~40 sidecar images the charts themselves
+manage (Longhorn's CSI sidecars, cert-manager's three, the
+prometheus-stack's six) are deliberately not reported: you cannot move one
+without bumping its chart, which the report already tells you, so listing
+them is pure noise. Git-pinned *application* images (home-assistant,
+vaultwarden, uptime-kuma, pulse, …) are not covered either — those need a
+per-image registry map plus per-registry API handling (Docker Hub's tag
+API is usable, but GHCR's `tags/list` is unordered and paginates at 1000,
+so GitHub-hosted images have to go through the GitHub Releases API
+instead). That is a bigger, separate job.
 
 ## Security posture
 
 - **Read-only by design.** The bot's RBAC is `get,list` on pods, pods/log,
   nodes, events, PVCs, deployments/statefulsets/daemonsets, ingresses,
-  Flux kustomizations/helmreleases, cert-manager certificates, CNPG
+  Flux kustomizations/helmreleases/helmrepositories, cert-manager
+  certificates, CNPG
   clusters, batch jobs/cronjobs, Longhorn volumes/nodes/settings/
   snapshots/replicas/recurringjobs, k3s
   etcdsnapshotfiles and velero podvolumebackups, plus reuse of the
