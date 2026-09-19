@@ -247,7 +247,7 @@ data:
                 root = ElementTree.fromstring(
                     s3_list_page(host, bucket, region, ak, sk, token))
                 ns = root.tag.split("}")[0].strip("{") if "}" in root.tag else ""
-                def find(el, name):
+                def find(el, name, ns=ns):
                     return el.find(f"{{{ns}}}{name}" if ns else name)
                 for c in root.iter(f"{{{ns}}}Contents" if ns else "Contents"):
                     total += int(find(c, "Size").text)
