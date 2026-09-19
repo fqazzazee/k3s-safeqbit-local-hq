@@ -49,9 +49,11 @@
 #                 the cluster: chart index.yaml files from the UPSTREAM chart
 #                 repos (source-controller's in-cluster cache is blocked by
 #                 Flux's own NetworkPolicies), plus the GitHub releases and
-#                 Docker Hub tag APIs for the image half. It also lists
-#                 workloads to learn which image tags are RUNNING — the bot
-#                 already has apps/batch read for `deploys` and `jobs`.
+#                 Docker Hub tag APIs for the image half, and registry
+#                 manifest HEADs for floating-tag digest drift. It also lists
+#                 workloads to learn which image tags are RUNNING, and pods
+#                 for the digests actually pulled — the bot already has
+#                 apps/batch/pods read for `deploys`, `jobs` and `pods`.
 #                 See chart-updates-report.yaml's header.
 #   dns           socket.getaddrinfo from THIS pod. NB: the pod runs
 #                 ndots=1 (dnsConfig below), so it does NOT reproduce the

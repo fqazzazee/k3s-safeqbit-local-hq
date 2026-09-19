@@ -22,7 +22,8 @@ to get the same answer, F7 flips to the raw `kubectl get --raw` calls.
 **2026-09-19:** `updates` — weekly version-drift digest
 (`chart-updates-report.yaml`), on demand from the bot or Mondays 08:30
 from its own CronJob. Landed as Helm charts, extended the same day to
-Git-pinned container images (see "Updates" below).
+Git-pinned container images and to digest drift on floating tags
+(see "Updates" below).
 
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
@@ -83,10 +84,11 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
-/cluster updates                         version drift, two halves: every HelmRelease's pinned chart
-                                         version and every Git-pinned image's running tag vs the
-                                         newest stable upstream, sorted major→minor→patch, with
-                                         changelog links (~3s; aliases upgrades/versions/charts)
+/cluster updates                         version drift, three parts: HelmRelease chart versions,
+                                         Git-pinned image tags (both vs newest stable upstream,
+                                         sorted major→minor→patch with changelog links), and
+                                         digest drift on floating tags
+                                         (~7s; aliases upgrades/versions/charts)
 /cluster velero [n | name]               last n backups (default 12); with a name (prefix ok):
                                          errors, failureReason, expiry, per-volume PVB detail
 /cluster certs                           cert-manager expiries, soonest first (red <7d, amber <21d)
@@ -198,12 +200,12 @@ of the report code.
 
 ## Updates (`updates`)
 
-Answers one question: **what are we behind on, and how far.** Two halves —
-Helm charts and Git-pinned container images. Manifest
+Answers one question: **what are we behind on, and how far.** Three parts —
+Helm charts, Git-pinned container images, and floating-tag digest drift. Manifest
 `configs/chart-updates-report.yaml` — ConfigMap script + its own
 ServiceAccount/ClusterRole + a CronJob (Mondays 08:30 ET, 30 min after the
 backup digest). The bot execs the same script for `/cluster updates`.
-A full run is ~3s and ~4 KB of Slack message.
+A full run is ~7s and ~5 KB of Slack message.
 
 The file and its resources are still named `chart-updates-*` from when it
 only did charts. That is deliberate: every layer below `flux-system` is
@@ -300,15 +302,47 @@ than a guess. 17 images are tracked today.
   switches it on if `/cluster updates` is ever run by hand often enough to
   matter.
 
-**Not tracked, on purpose.** The ~40 sidecar images the charts themselves
-manage (Longhorn's CSI sidecars, cert-manager's three, the
+**Not version-tracked, on purpose.** The ~40 sidecar images the charts
+themselves manage (Longhorn's CSI sidecars, cert-manager's three, the
 prometheus-stack's six): you cannot move one without bumping its chart,
-which the chart half already tells you. And floating tags —
-`affine:stable`, `redis:7-alpine`, `postgres:16-alpine`, the
-alpine/python/node bases — where "newer" means the tag moved to a new
-digest, not a new tag, so semver tracking would be a lie. Both sit in
-`IGNORE` with their reason. Digest drift on floating tags is the next
-piece of work.
+which the chart half already tells you. They sit in `IGNORE` with their
+reason.
+
+### The floating half
+
+For a tag that carries no version — `affine:stable`, `redis:7-alpine`,
+`postgres:16-alpine`, the alpine/python/node bases — "newer" means the tag
+was rebuilt and now points at a different digest. Semver has nothing to
+say. What *can* be said is whether the digest these pods are running is
+still the one the tag resolves to: if not, **a restart would silently
+change what runs**.
+
+- **The digest comes from pod status**, the only place the digest actually
+  pulled is recorded — a workload spec carries just the tag, which is the
+  whole problem. Reading all pods is ~1.5 MB of JSON for 167 pods and ~33 MB
+  peak RSS, comfortably inside the job's 128Mi limit.
+- **Both sides are the multi-arch *index* digest**, so the comparison is
+  apples-to-apples. That was worth verifying rather than assuming: if the
+  kubelet reported a platform-specific manifest digest, every image would
+  read as drifted forever. `alpine:3.20` is the control — it matched its
+  registry digest exactly, while the others differed because the tags really
+  had moved.
+- **Only drift older than `FLOAT_STALE_DAYS` (30) is listed.** python, redis
+  and postgres are rebuilt weekly, so a row per moved tag would be permanent
+  wallpaper — the exact failure this report is built to avoid. Recent moves
+  collapse into a single "routine base-image rebuilds" line. In practice
+  that is 9 moved, 2 listed.
+- **An unknown move date always lists.** Docker Hub reports when a tag last
+  moved; a bare OCI `HEAD` does not. The only such image here is
+  `affine:stable`, an *app* rather than a base image, where a move really
+  does mean a new release worth acting on.
+- **The set checked is derived from `IGNORE`** — an entry whose reason starts
+  with `floating` is digest-checked — so there is one list to keep, not two.
+  `ghcr.io/immich-app/postgres` is excluded by having a different reason: a
+  bump there is a data migration, not a restart.
+
+To pick a moved tag up: **delete the pod**. Not `rollout restart` — Flux SSA
+strips the `restartedAt` annotation and double-rolls the deployment.
 
 ## Security posture
 
