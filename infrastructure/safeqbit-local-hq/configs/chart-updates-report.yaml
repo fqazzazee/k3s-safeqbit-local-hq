@@ -1,7 +1,16 @@
 # chart-updates-report.yaml
-# Weekly Slack digest of Helm chart version drift: every HelmRelease's pinned
-# chart version against the newest stable version upstream publishes, sorted
-# by semver bump (major first), each with a changelog link.
+# Weekly Slack digest of version drift, in two halves:
+#   CHARTS — every HelmRelease's pinned chart version vs the newest stable
+#            version upstream publishes.
+#   IMAGES — every Git-pinned container image's running tag vs the newest
+#            stable tag upstream publishes (added 2026-09-19).
+# Both sorted by semver bump (major first), each row with a changelog link.
+#
+# NAME: the file and its resources are still called chart-updates-* from when
+# it only did charts. Renaming them would orphan the old CronJob and
+# ConfigMap — every layer below flux-system is prune:false, so a rename
+# leaves the OLD objects running and you get two digests every Monday until
+# they are deleted by hand. Not worth it for a filename.
 #
 # Runs Mondays 08:30 America/New_York in the monitoring namespace (so it can
 # reuse the alertmanager-slack-webhook SealedSecret; SealedSecrets are
@@ -38,17 +47,52 @@
 # report starts using the cache with NO code change if that policy is ever
 # added. Do not "fix" the refusals — they are expected.
 #
-# SCOPE — charts only. The ~40 sidecar images the charts themselves manage
-# (Longhorn's CSI sidecars, cert-manager's three, the prometheus-stack's six)
-# are deliberately NOT reported: you cannot move them without bumping the
-# chart, which is what this report already tells you. Git-pinned application
-# images (home-assistant, vaultwarden, uptime-kuma, …) are a separate,
-# bigger job — they need a per-image registry map — and are not covered here.
+# SCOPE — the ~40 sidecar images the charts themselves manage (Longhorn's
+# CSI sidecars, cert-manager's three, the prometheus-stack's six) are
+# deliberately NOT reported: you cannot move them without bumping the chart,
+# which the chart half already tells you. Neither are floating tags
+# (affine:stable, redis:7-alpine, postgres:16-alpine, the alpine/python/node
+# bases): for those "newer" means the tag moved to a new digest, not a new
+# tag, so semver tracking would be a lie. Both groups sit in IGNORE with
+# their reason. Digest drift on floating tags is the next piece of work.
 #
-# HOLDS (in the script) is the pin list: a chart there is reported under
-# "Held" with the reason instead of nagging. Add to it whenever an upgrade
-# is deliberately declined, or the report will argue with a decision you
-# already made.
+# HOLDS / IMAGE_HOLDS (in the script) are the pin lists: an entry there is
+# reported under "Held" with the reason instead of nagging. Add to them
+# whenever an upgrade is deliberately declined, or the report will argue with
+# a decision you already made. Today: cert-manager and Home Assistant.
+#
+# ── The image half ────────────────────────────────────────────────────────
+# IMAGES in the script is an explicit map, image repo → where to look and a
+# tag pattern; IGNORE is an explicit prefix list of what not to track, with
+# the reason. Anything RUNNING that matches neither is reported under
+# "Untracked images", so a newly deployed app gets noticed instead of quietly
+# going unwatched. That is the whole point of listing rather than guessing.
+#
+# The running version comes from the workloads, not from Git: a tag bumped in
+# a manifest but not yet reconciled should still read as pending.
+#
+# Sources are per image, because the tag you must paste into the manifest is
+# not always the tag upstream names its release:
+#   github  the releases API — it is also the changelog, so it is preferred
+#           WHERE the release tag and the image tag are the same string.
+#   hub     Docker Hub's tag list, for the ones where they differ:
+#           pwpush releases v2.13.0 but ships 2.13.0; photoprism releases
+#           260728-bbde8f452 but ships 260728; netbox compounds two versions
+#           into v4.7.1-5.1.1; pangolin ships an ee-postgresql- variant.
+#           These link to the GitHub releases page instead of a tagged one.
+# The per-image `pat` regex matches the running tag AND the candidate tags,
+# which (a) filters pre-releases with no keyword blocklist — betas, rcs,
+# "latest" and external-snapshotter's client/v8.6.0 simply do not match —
+# and (b) guarantees the version this report prints is a REAL tag you can
+# paste straight into the manifest.
+#
+# Flux is tracked as flux2 (what you actually upgrade) rather than as four
+# controller images, reading the running version from source-controller's
+# app.kubernetes.io/version label.
+#
+# GitHub anonymous is 60 requests/hour and a run makes ~13, so no token is
+# needed; set the optional github-token key in the bot's SealedSecret if
+# `/cluster updates` is ever run by hand often enough to matter.
 #
 # Manual run:
 #   kubectl -n monitoring create job --from=cronjob/chart-updates-report updates-now
@@ -76,6 +120,15 @@ rules:
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["helmrepositories"]
     verbs: ["get", "list"]
+  # The image half learns what is RUNNING from the workloads themselves,
+  # so a manifest bumped in Git but not yet reconciled is not reported as
+  # already done.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -99,8 +152,9 @@ data:
   report.py: |
     #!/usr/bin/env python3
     """Post a one-message Slack digest of Helm chart version drift."""
-    import json, os, ssl, sys, time
+    import json, os, re, ssl, sys, time
     import urllib.error, urllib.request
+    import concurrent.futures as futures
     from datetime import datetime, timezone
 
     SA = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -146,30 +200,28 @@ data:
                 time.sleep(2 * (attempt + 1))
 
 
-    # ---------- semver ----------
+    # ---------- versions ----------
+    #
+    # One model for both halves: a regex whose numeric groups ARE the version,
+    # matched against the whole string. It doubles as the pre-release filter —
+    # anything the pattern does not match (v1.21.0-beta.0, 6.4.5-beta.1,
+    # "latest", "client/v8.6.0") is simply not a candidate, with no keyword
+    # blocklist to keep in sync.
 
-    def parse_ver(v):
-        """'v1.21.2-rc1+build' → ((1,21,2), 'rc1'). Junk sorts lowest."""
-        v = str(v).strip().lstrip("vV").split("+", 1)[0]
-        core, _, pre = v.partition("-")
-        nums = []
-        for part in core.split("."):
-            if not part.isdigit():
-                return None, pre
-            nums.append(int(part))
-        return tuple(nums + [0] * (3 - len(nums)))[:3], pre
+    SEMVER = r"^v?(\d+)\.(\d+)\.(\d+)$"
 
 
-    def is_prerelease(v):
-        nums, pre = parse_ver(v)
-        return nums is None or any(p in pre.lower() for p in PRERELEASE)
+    def vtuple(text, pat=SEMVER):
+        m = re.match(pat, str(text).strip())
+        return tuple(int(g) for g in m.groups()) if m else None
 
 
     def bump_kind(cur, new):
-        a, b = parse_ver(cur)[0], parse_ver(new)[0]
-        if not a or not b:
-            return "minor"
-        return "major" if b[0] != a[0] else "minor" if b[1] != a[1] else "patch"
+        """major/minor/patch, from the first component that differs."""
+        for i in range(min(3, len(cur), len(new))):
+            if cur[i] != new[i]:
+                return ("major", "minor", "patch")[i]
+        return "patch"
 
 
     # ---------- Helm index.yaml, parsed without PyYAML ----------
@@ -242,12 +294,305 @@ data:
         raise RuntimeError(f"{type(last).__name__}: {last}")
 
 
+
+    # ---------- Git-pinned images ----------
+
+    def canon(repo):
+        """Normalise a repo to one spelling. The API reports the registry's own
+        form (docker.io/library/busybox) while manifests use the short one
+        (busybox), and both must land on the same key."""
+        if repo.startswith("docker.io/"):
+            repo = repo[len("docker.io/"):]
+        if repo.startswith("library/"):
+            repo = repo[len("library/"):]
+        return repo
+
+
+
+    # ── What we track ─────────────────────────────────────────────────────────
+    # Keyed by image repo exactly as written in the manifests (no tag). Every
+    # entry is deliberate: an image NOT listed here and not matched by IGNORE
+    # below is reported as "untracked", so a newly deployed app gets noticed
+    # instead of silently going unwatched.
+    #
+    #   src   "github"   releases API — also the changelog, so prefer it
+    #         "hub"      Docker Hub tag listing (when the image tag is not a
+    #                    GitHub release tag)
+    #   pat   regex matched against the WHOLE tag; its numeric groups form the
+    #         version tuple. This doubles as the pre-release filter: a tag the
+    #         pattern does not match is not a candidate, so betas, rcs,
+    #         "latest", "client/v8.6.0" and friends drop out for free.
+    #         INVARIANT: the same pattern matches the RUNNING tag and the
+    #         candidate tags, so the version this report prints is always a real
+    #         tag you can paste into the manifest. That is why an image whose
+    #         GitHub release tag differs in shape from its image tag (pwpush
+    #         v2.13.0 vs 2.13.0, photoprism 260728-bbde8f45 vs 260728) is read
+    #         from the REGISTRY and merely links to GitHub for the changelog.
+    #   name  display name, when the repo name is not the obvious one
+    #   label (ns, deployment) — take the RUNNING version from that Deployment's
+    #         app.kubernetes.io/version label instead of the image tag.
+
+    IMAGES = {
+        "ghcr.io/home-assistant/home-assistant":
+            dict(src="github", repo="home-assistant/core", pat=r"^(\d+)\.(\d+)\.(\d+)$"),
+        "ghcr.io/immich-app/immich-server":
+            dict(src="github", repo="immich-app/immich", pat=SEMVER),
+        "ghcr.io/immich-app/immich-machine-learning":
+            dict(src="github", repo="immich-app/immich", pat=SEMVER),
+        "louislam/uptime-kuma":
+            dict(src="github", repo="louislam/uptime-kuma", pat=SEMVER),
+        "vaultwarden/server":
+            dict(src="github", repo="dani-garcia/vaultwarden", pat=SEMVER,
+                 name="vaultwarden"),
+        "rcourtman/pulse":
+            dict(src="github", repo="rcourtman/Pulse", pat=SEMVER),
+        "pglombardo/pwpush":
+            dict(src="hub", repo="pglombardo/pwpush", pat=r"^(\d+)\.(\d+)\.(\d+)$",
+                 link="https://github.com/pglombardo/PasswordPusher/releases"),
+        "cloudflare/cloudflared":
+            dict(src="github", repo="cloudflare/cloudflared", pat=r"^(\d+)\.(\d+)\.(\d+)$"),
+        "docker.io/fosrl/gerbil":
+            dict(src="github", repo="fosrl/gerbil", pat=SEMVER),
+        "docker.io/fosrl/newt":
+            dict(src="github", repo="fosrl/newt", pat=SEMVER),
+        "docker.io/traefik":
+            dict(src="github", repo="traefik/traefik", pat=SEMVER),
+        # Release tags carry a build suffix the image tag drops (260728-bbde8f45),
+        # and the registry also holds -ce/-legacy/-postgres variants we do not
+        # run; the bare-date pattern picks the plain image out of both.
+        "photoprism/photoprism":
+            dict(src="hub", repo="photoprism/photoprism", pat=r"^(\d{6})$",
+                 link="https://github.com/photoprism/photoprism/releases"),
+        # Upstream releases are the netbox-docker version (5.1.1) while the image
+        # tag compounds it with NetBox's own: v4.7.1-5.1.1. Only the registry
+        # knows which pairs exist, so the tag list is the source of truth.
+        "netboxcommunity/netbox":
+            dict(src="hub", repo="netboxcommunity/netbox",
+                 pat=r"^v(\d+)\.(\d+)\.(\d+)-(\d+)\.(\d+)\.(\d+)$",
+                 link="https://github.com/netbox-community/netbox-docker/releases"),
+        # Same: the ee-postgresql- variant is a registry-only tag.
+        "docker.io/fosrl/pangolin":
+            dict(src="hub", repo="fosrl/pangolin",
+                 pat=r"^ee-postgresql-(\d+)\.(\d+)\.(\d+)$",
+                 link="https://github.com/fosrl/pangolin/releases"),
+        # The four controllers are versioned together as Flux itself, and that is
+        # what you upgrade (flux bootstrap), so track flux2 and read the running
+        # version off the controller's own version label.
+        "ghcr.io/fluxcd/source-controller":
+            dict(src="github", repo="fluxcd/flux2", pat=SEMVER, name="flux2",
+                 label=("flux-system", "source-controller")),
+        "registry.k8s.io/cpa/cluster-proportional-autoscaler":
+            dict(src="github", repo="kubernetes-sigs/cluster-proportional-autoscaler",
+                 pat=SEMVER),
+        "registry.k8s.io/sig-storage/snapshot-controller":
+            dict(src="github", repo="kubernetes-csi/external-snapshotter", pat=SEMVER),
+    }
+
+    # Prefix → why it is not tracked. Order matters: first match wins.
+    IGNORE = [
+        ("docker.io/longhornio/", "Longhorn chart"),
+        ("quay.io/jetstack/", "cert-manager chart"),
+        ("quay.io/metallb/", "metallb chart"),
+        ("quay.io/frrouting/", "metallb chart"),
+        ("quay.io/prometheus", "kube-prometheus-stack chart"),
+        ("quay.io/kiwigrid/", "kube-prometheus-stack chart"),
+        ("docker.io/grafana/", "kube-prometheus-stack chart"),
+        ("registry.k8s.io/kube-state-metrics/", "kube-prometheus-stack chart"),
+        ("registry.k8s.io/ingress-nginx/", "ingress-nginx chart"),
+        ("registry.k8s.io/sig-storage/nfs-subdir", "nfs-provisioner chart"),
+        ("docker.io/bitnami/sealed-secrets", "sealed-secrets chart"),
+        ("ghcr.io/goauthentik/", "authentik chart"),
+        ("ghcr.io/cloudnative-pg/", "cloudnative-pg chart"),
+        ("velero/velero", "velero chart"),
+        ("ghcr.io/fluxcd/", "versioned together as Flux (see flux2)"),
+        ("rancher/mirrored-", "shipped by k3s itself"),
+        # Floating or base tags: "newer" means the tag moved to a new digest, not
+        # a new tag, so semver tracking would be a lie. Phase 3 (digest drift).
+        ("ghcr.io/toeverything/affine", "floating tag :stable"),
+        ("docker.io/valkey/valkey", "floating base image"),
+        ("ghcr.io/immich-app/postgres", "pinned DB image; a bump is a data migration"),
+        ("postgres", "floating base image"),
+        ("redis", "floating base image"),
+        ("python", "floating base image"),
+        ("node", "floating base image"),
+        ("alpine", "floating base image"),
+        ("busybox", "floating base image"),
+    ]
+
+    # Images deliberately pinned behind upstream, with why. Same contract as the
+    # chart HOLDS: without this the digest re-argues a settled decision weekly.
+    IMAGE_HOLDS = {
+        "ghcr.io/home-assistant/home-assistant":
+            "Sensi HACS integration gate — never downgrade, see the"
+            " home-assistant workbook",
+    }
+
+
+
+    # Both sides of every comparison go through canon() so the map stays
+    # readable (written as the manifests spell it) while matching is exact.
+    TRACKED = {}
+    IGNORE_C = []
+    HOLDS_C = {}
+
+
+    def _canonicalise():
+        TRACKED.update({canon(k): v for k, v in IMAGES.items()})
+        IGNORE_C.extend((canon(p), r) for p, r in IGNORE)
+        HOLDS_C.update({canon(k): v for k, v in IMAGE_HOLDS.items()})
+
+
+
+    def get_json(url, headers=None):
+        h = {"User-Agent": UA}
+        h.update(headers or {})
+        tok = os.environ.get("GITHUB_TOKEN")
+        if tok and "api.github.com" in url:
+            h["Authorization"] = f"Bearer {tok}"
+        with urllib.request.urlopen(
+                urllib.request.Request(url, headers=h), timeout=30) as r:
+            return json.load(r)
+
+
+    def canon(repo):
+        """Normalise a repo to one spelling. The API reports the registry's own
+        form (docker.io/library/busybox) while manifests use the short one
+        (busybox), and both must land on the same key."""
+        if repo.startswith("docker.io/"):
+            repo = repo[len("docker.io/"):]
+        if repo.startswith("library/"):
+            repo = repo[len("library/"):]
+        return repo
+
+
+
+    # ---------- where images are running ----------
+
+    WORKLOADS = [("/apis/apps/v1/deployments", "spec.template"),
+                 ("/apis/apps/v1/statefulsets", "spec.template"),
+                 ("/apis/apps/v1/daemonsets", "spec.template"),
+                 ("/apis/batch/v1/cronjobs", "spec.jobTemplate.spec.template")]
+
+
+    def running_images():
+        """image repo → {'tags': {tag: [where…]}}"""
+        found = {}
+        for path, tpl_path in WORKLOADS:
+            for i in api(path)["items"]:
+                tpl = i
+                for k in tpl_path.split("."):
+                    tpl = (tpl or {}).get(k) or {}
+                ps = tpl.get("spec") or {}
+                where = f"{i['metadata']['namespace']}/{i['metadata']['name']}"
+                for c in (ps.get("containers") or []) + (ps.get("initContainers") or []):
+                    img = c.get("image", "")
+                    img = img.split("@", 1)[0]                 # drop any digest pin
+                    # The last colon separates the tag only when no "/" follows it
+                    # — otherwise it is a registry port (host:5000/repo).
+                    if ":" in img and "/" not in img.rsplit(":", 1)[1]:
+                        repo, tag = img.rsplit(":", 1)
+                    else:
+                        repo, tag = img, "latest"
+                    found.setdefault(canon(repo), {}).setdefault(tag, []).append(where)
+        return found
+
+
+    def version_label(ns, name):
+        d = api(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        return (d["metadata"].get("labels") or {}).get("app.kubernetes.io/version")
+
+
+
+    # ---------- upstream sources ----------
+
+    def github_tags(repo, pat):
+        """→ [(vtuple, tag, url, published)] for non-prerelease releases."""
+        rel = get_json(f"https://api.github.com/repos/{repo}/releases?per_page=100")
+        out = []
+        for r in rel:
+            if r.get("prerelease") or r.get("draft"):
+                continue
+            v = vtuple(r["tag_name"], pat)
+            if v:
+                out.append((v, r["tag_name"], r["html_url"], r.get("published_at", "")))
+        return out
+
+
+    def hub_tags(repo, pat):
+        d = get_json(f"https://hub.docker.com/v2/repositories/{repo}/tags"
+                     f"?page_size=100&ordering=last_updated")
+        out = []
+        for t in d.get("results", []):
+            v = vtuple(t["name"], pat)
+            if v:
+                out.append((v, t["name"], "", t.get("last_updated", "")))
+        return out
+
+
+    def lookup(image, spec):
+        fn = github_tags if spec["src"] == "github" else hub_tags
+        return fn(spec["repo"], spec["pat"])
+
+
+
+    def collect_images():
+        running = running_images()
+        rows, broken, untracked = [], [], []
+
+        for repo, tags in sorted(running.items()):
+            if repo in TRACKED:
+                continue
+            why = next((r for p, r in IGNORE_C if repo.startswith(p)), None)
+            if not why:
+                untracked.append((repo, sorted(tags)[0]))
+
+        todo = [(repo, spec) for repo, spec in TRACKED.items() if repo in running]
+        with futures.ThreadPoolExecutor(8) as ex:
+            results = dict(zip([r for r, _ in todo],
+                               ex.map(lambda rs: _safe(rs[0], rs[1]), todo)))
+
+        for repo, spec in todo:
+            tags = running[repo]
+            err, cands = results[repo]
+            name = spec.get("name") or repo.rsplit("/", 1)[-1]
+            if err:
+                broken.append(f"{name}: {err}")
+                continue
+            if spec.get("label"):
+                cur_tag = version_label(*spec["label"]) or "?"
+            else:
+                # If one image runs at several tags, report the laggard — that is
+                # the one still needing the bump.
+                cur_tag = min(tags, key=lambda t: vtuple(t, spec["pat"]) or ())
+            cur = vtuple(cur_tag, spec["pat"])
+            if not cands:
+                broken.append(f"{name}: no upstream tag matched {spec['pat']}")
+                continue
+            top = max(cands)
+            if cur is None:
+                broken.append(f"{name}: running tag {cur_tag} does not match its pattern")
+                continue
+            where = sorted({w for ws in tags.values() for w in ws})
+            rows.append(dict(
+                name=name, repo=repo, cur=cur_tag, new=top[1],
+                link=top[2] or spec.get("link", ""), released=age(top[3]),
+                behind=sum(1 for c in cands if c[0] > cur),
+                kind=bump_kind(cur, top[0]), stale=top[0] > cur, where=where))
+        return rows, broken, untracked
+
+
+    def _safe(repo, spec):
+        try:
+            return None, lookup(repo, spec)
+        except Exception as e:                                 # noqa: BLE001
+            return f"{type(e).__name__}: {str(e)[:90]}", None
+
+
     # ---------- report ----------
 
     def newest(versions):
-        stable = [e for e in versions if not is_prerelease(e["version"])]
-        return max(stable, key=lambda e: parse_ver(e["version"])[0] or ()) \
-            if stable else None
+        stable = [e for e in versions if vtuple(e["version"])]
+        return max(stable, key=lambda e: vtuple(e["version"])) if stable else None
 
 
     def age(ts):
@@ -258,7 +603,7 @@ data:
         return f"{d}d ago" if d < 90 else f"{d // 30}mo ago"
 
 
-    def collect():
+    def collect_charts():
         repos = {}
         for r in api("/apis/source.toolkit.fluxcd.io/v1/helmrepositories")["items"]:
             repos[(r["metadata"]["namespace"], r["metadata"]["name"])] = r
@@ -288,64 +633,105 @@ data:
             if not top:
                 broken.append(f"{meta['namespace']}/{meta['name']}: no stable versions")
                 continue
-            cur = parse_ver(pinned)[0]
+            cur = vtuple(pinned)
             ahead = [e for e in versions
-                     if not is_prerelease(e["version"])
-                     and cur and (parse_ver(e["version"])[0] or ()) > cur]
+                     if cur and (vtuple(e["version"]) or ()) > cur]
             rows.append({
                 "ns": meta["namespace"], "name": meta["name"], "chart": chart,
                 "cur": pinned, "new": top["version"], "home": top["home"],
                 "released": age(top["created"]), "behind": len(ahead),
-                "kind": bump_kind(pinned, top["version"]),
+                "kind": bump_kind(cur or (), vtuple(top["version"]) or ()),
                 "src": src,
-                "stale": bool(cur) and (parse_ver(top["version"])[0] or ()) > cur,
+                "stale": bool(cur) and (vtuple(top["version"]) or ()) > cur,
             })
         return rows, broken
 
 
-    def render(rows, broken):
-        order = {"major": 0, "minor": 1, "patch": 2}
-        behind = sorted((r for r in rows if r["stale"] and r["chart"] not in HOLDS),
-                        key=lambda r: (order[r["kind"]], -r["behind"]))
-        held = [r for r in rows if r["stale"] and r["chart"] in HOLDS]
-        current = sorted({r["chart"] for r in rows if not r["stale"]})
+    ORDER = {"major": 0, "minor": 1, "patch": 2}
 
-        out = [f":package: *Chart updates* — {len(rows) + len(broken)} Helm"
-               f" releases · {NOW.strftime('%Y-%m-%d')}"]
 
-        if behind:
+    def _row_sort(r):
+        return (ORDER[r["kind"]], -r["behind"])
+
+
+    def render(charts, cbroken, images, ibroken, untracked):
+        c_behind = sorted((r for r in charts
+                           if r["stale"] and r["chart"] not in HOLDS), key=_row_sort)
+        c_held = [r for r in charts if r["stale"] and r["chart"] in HOLDS]
+        c_ok = sorted({r["chart"] for r in charts if not r["stale"]})
+
+        i_behind = sorted((r for r in images
+                           if r["stale"] and r["repo"] not in HOLDS_C), key=_row_sort)
+        i_held = [r for r in images if r["stale"] and r["repo"] in HOLDS_C]
+        i_ok = sorted(r["name"] for r in images if not r["stale"])
+
+        out = [f":package: *Updates* — {len(charts) + len(cbroken)} charts ·"
+               f" {len(images) + len(ibroken)} images · {NOW.strftime('%Y-%m-%d')}"]
+
+        if c_behind:
             out.append("")
-            out.append(f"*Behind* ({len(behind)})")
-            for r in behind:
+            out.append(f"*Charts behind* ({len(c_behind)})")
+            for r in c_behind:
                 link = f" · <{r['home']}|changelog>" if r["home"].startswith("http") else ""
                 plus = f" · {r['behind']} releases" if r["behind"] > 1 else ""
                 out.append(f"{ICON[r['kind']]} `{r['chart']}` {r['cur']} → *{r['new']}*"
                            f"  _{r['kind']}_{plus} · released {r['released']}"
                            f"{link}\n      {r['ns']}/{r['name']}")
-        else:
-            out.append("\n:white_check_mark: every chart is on the newest stable release")
 
-        if held:
+        if i_behind:
             out.append("")
-            out.append(f"*Held* ({len(held)})")
-            for r in held:
+            out.append(f"*Images behind* ({len(i_behind)})")
+            for r in i_behind:
+                link = f" · <{r['link']}|changelog>" if r["link"].startswith("http") else ""
+                plus = f" · {r['behind']} releases" if r["behind"] > 1 else ""
+                # Namespaces only when the image spans more than one — otherwise
+                # the app name already says where it lives.
+                ns = sorted({w.split("/")[0] for w in r["where"]})
+                place = f" · {', '.join(ns)}" if len(ns) > 1 else ""
+                out.append(f"{ICON[r['kind']]} `{r['name']}` {r['cur']} → *{r['new']}*"
+                           f"  _{r['kind']}_{plus} · released {r['released']}"
+                           f"{place}{link}")
+
+        if not c_behind and not i_behind:
+            out.append("\n:white_check_mark: every chart and tracked image is on"
+                       " the newest stable release")
+
+        if c_held or i_held:
+            out.append("")
+            out.append(f"*Held* ({len(c_held) + len(i_held)})")
+            for r in c_held:
                 out.append(f":double_vertical_bar: `{r['chart']}` {r['cur']} →"
                            f" {r['new']} — {HOLDS[r['chart']]}")
+            for r in i_held:
+                out.append(f":double_vertical_bar: `{r['name']}` {r['cur']} →"
+                           f" {r['new']} — {HOLDS_C[r['repo']]}")
 
-        if current:
+        if c_ok or i_ok:
             out.append("")
-            out.append(f"*Current* ({len(current)}): " + ", ".join(current))
+            if c_ok:
+                out.append(f"*Current charts* ({len(c_ok)}): " + ", ".join(c_ok))
+            if i_ok:
+                out.append(f"*Current images* ({len(i_ok)}): " + ", ".join(i_ok))
 
-        if broken:
+        if cbroken or ibroken:
             out.append("")
             out.append("*Not checked*")
-            out.extend(f":grey_question: {b}" for b in broken)
+            out.extend(f":grey_question: {b}" for b in cbroken + ibroken)
 
-        if any(r["src"] == "cache" for r in rows):
+        # The point of the map being explicit: anything newly deployed and not
+        # yet classified shows up here instead of going quietly unwatched.
+        if untracked:
+            out.append("")
+            out.append(f"*Untracked images* ({len(untracked)}) — add to IMAGES or"
+                       " IGNORE in `chart-updates-report.yaml`")
+            out.extend(f":grey_question: `{repo}:{tag}`" for repo, tag in untracked)
+
+        if any(r["src"] == "cache" for r in charts):
             # Only worth a line if it happens — upstream is the normal path.
             out.append("\n_:information_source: some indexes came from"
                        " source-controller's cache_")
-        out.append("\n_bump `version:` in `infrastructure/.../controllers/<chart>.yaml`"
+        out.append("\n_charts: bump `version:` in `infrastructure/.../controllers/"
+                   "<chart>.yaml` · images: bump the tag in `apps/.../<app>/`"
                    " · `/cluster flux` for reconcile state_")
         return "\n".join(out)
 
@@ -364,7 +750,8 @@ data:
         print("report posted")
 
 
-    post(render(*collect()))
+    _canonicalise()
+    post(render(*collect_charts(), *collect_images()))
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -407,6 +794,16 @@ spec:
                     secretKeyRef:
                       name: alertmanager-slack-webhook
                       key: webhook-url
+                # Optional. Anonymous GitHub is 60 requests/hour and this
+                # job makes ~13, so a token is only needed if `/cluster
+                # updates` gets hammered by hand. Add the key to the
+                # SealedSecret to switch it on; absent = anonymous.
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: cluster-slack-bot-tokens
+                      key: github-token
+                      optional: true
               volumeMounts:
                 - name: script
                   mountPath: /scripts
