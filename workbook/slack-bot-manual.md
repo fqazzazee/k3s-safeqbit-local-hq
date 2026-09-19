@@ -132,19 +132,28 @@ that node rebooted → think offload before anything else.
 The FluxSuspended info-alert nags daily; `/cluster flux` shows the ⏸
 rows it means.
 
-### 7b. "Are we behind on anything?" (chart upgrades)
+### 7b. "Are we behind on anything?" (chart and image upgrades)
 
 | Step | Bot | Terminal |
 |---|---|---|
-| What's behind | `/cluster updates` — every HelmRelease's pinned chart vs newest stable, major→minor→patch, changelog links | `helm repo update && helm search repo <chart> --versions \| head` |
-| Read the changes | the changelog link in the row | the chart repo's releases page |
-| Apply | — | bump `version:` in `infrastructure/.../controllers/<chart>.yaml`, PR, let Flux reconcile, `/cluster flux` to watch |
+| What's behind | `/cluster updates` — pinned chart versions AND Git-pinned image tags vs newest stable, major→minor→patch, changelog links | `helm search repo <chart> --versions`; per-image, the repo's releases page |
+| Read the changes | the changelog link in the row | same links |
+| Apply a chart | — | bump `version:` in `infrastructure/.../controllers/<chart>.yaml` |
+| Apply an image | — | bump the tag in `apps/.../<app>/` (the printed version is always a real, pastable tag) |
+| Watch it land | `/cluster flux` | `kubectl get kustomizations,helmreleases -A` |
 
-Also posts itself Mondays 08:30 ET. A chart you have deliberately decided
-**not** to upgrade belongs in the script's `HOLDS` map with the reason
-(`configs/chart-updates-report.yaml`) — otherwise the digest re-argues the
-decision every week. Application images pinned in Git (home-assistant,
-vaultwarden, …) are **not** covered; those are still a manual check.
+Also posts itself Mondays 08:30 ET. Two things to keep honest:
+
+- Anything you deliberately decide **not** to upgrade belongs in `HOLDS`
+  (charts) or `IMAGE_HOLDS` (images) with the reason, in
+  `configs/chart-updates-report.yaml` — otherwise the digest re-argues a
+  settled decision every week. cert-manager and Home Assistant are there now.
+- A new app appears under **Untracked images** until you add it to `IMAGES`
+  (with a source and tag pattern) or to `IGNORE` (with a reason). That line
+  is the feature, not a nag — it is how an image avoids going unwatched.
+
+Chart-managed sidecars and floating tags (`affine:stable`, `redis:7-alpine`,
+the alpine/python/node bases) are not version-tracked; see the workbook.
 
 ### 8. Certificate expiry
 
@@ -235,7 +244,7 @@ container-fs I/O and doesn't always attribute PVC block writes.
 | `/cluster top [ns]` / `ps` | `kubectl top pods -A` / htop-ish, no equivalent |
 | `/cluster restarts [ns]` | `kubectl get pods -A \| grep -v " 0 "` (roughly) |
 | `/cluster flux` | `kubectl get kustomizations,helmreleases -A` |
-| `/cluster updates` | `helm repo update && helm search repo <chart> --versions` per chart |
+| `/cluster updates` | `helm search repo <chart> --versions` per chart; per-image, each project's releases page |
 | `/cluster velero [n\|name]` | `kubectl -n velero get/describe backups.velero.io` |
 | `/cluster certs` | `kubectl get certificates -A` |
 | `/cluster cnpg` | `kubectl get clusters.postgresql.cnpg.io -A` |

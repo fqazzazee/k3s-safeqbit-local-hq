@@ -19,9 +19,10 @@ pane defaults to a **how-to view** — every call each command makes is
 shown as the kubectl/grep (or Grafana → Explore) step a human would type
 to get the same answer, F7 flips to the raw `kubectl get --raw` calls.
 
-**2026-09-19:** `updates` — weekly Helm chart version drift digest
+**2026-09-19:** `updates` — weekly version-drift digest
 (`chart-updates-report.yaml`), on demand from the bot or Mondays 08:30
-from its own CronJob (see "Chart updates" below).
+from its own CronJob. Landed as Helm charts, extended the same day to
+Git-pinned container images (see "Updates" below).
 
 > **Usage playbooks** — which commands to run for which real incident,
 > and where the bot hands off to a terminal — live in the companion
@@ -82,9 +83,10 @@ If double answers ever DO appear, that assumption broke: drop back to
 /cluster top [ns]                        top-10 CPU / memory pods (Prometheus)
 /cluster restarts [ns]                   pods restarted in the last 24h (Prometheus)
 /cluster flux                            Kustomizations + HelmReleases ready/suspended + revision
-/cluster updates                         chart version drift: every HelmRelease's pinned version vs
-                                         the newest stable upstream, sorted major→minor→patch,
-                                         with changelog links (~5s; aliases upgrades/versions/charts)
+/cluster updates                         version drift, two halves: every HelmRelease's pinned chart
+                                         version and every Git-pinned image's running tag vs the
+                                         newest stable upstream, sorted major→minor→patch, with
+                                         changelog links (~3s; aliases upgrades/versions/charts)
 /cluster velero [n | name]               last n backups (default 12); with a name (prefix ok):
                                          errors, failureReason, expiry, per-volume PVB detail
 /cluster certs                           cert-manager expiries, soonest first (red <7d, amber <21d)
@@ -194,12 +196,20 @@ the invoker**, in whatever channel the command was typed. `summary`,
 overridden to the `response_url` — the CronJobs and the bot share one copy
 of the report code.
 
-## Chart updates (`updates`)
+## Updates (`updates`)
 
-Answers one question: **which Helm charts are we behind on, and how far.**
-Manifest `configs/chart-updates-report.yaml` — ConfigMap script + its own
+Answers one question: **what are we behind on, and how far.** Two halves —
+Helm charts and Git-pinned container images. Manifest
+`configs/chart-updates-report.yaml` — ConfigMap script + its own
 ServiceAccount/ClusterRole + a CronJob (Mondays 08:30 ET, 30 min after the
 backup digest). The bot execs the same script for `/cluster updates`.
+A full run is ~3s and ~4 KB of Slack message.
+
+The file and its resources are still named `chart-updates-*` from when it
+only did charts. That is deliberate: every layer below `flux-system` is
+`prune: false`, so renaming them would leave the OLD CronJob and ConfigMap
+running and you would get **two digests every Monday** until they were
+deleted by hand — not a trade worth making for a filename.
 
 **Version data comes from the upstream chart repos** — 10 `index.yaml`
 files, ~7.6 MB, once a week over HTTPS. No credentials, and the public chart
@@ -257,16 +267,48 @@ refusals are expected; don't "fix" them.
   Slack's `message_limit_exceeded` and broke both report CronJobs). Type
   `/cluster updates` when you want it sooner.
 
-**Scope — charts only.** The ~40 sidecar images the charts themselves
+### The image half
+
+`IMAGES` in the script is an explicit map (image repo → source, repo, tag
+pattern) and `IGNORE` an explicit prefix list of what not to track, each
+with its reason. Anything **running** that matches neither is reported
+under *Untracked images* — so a newly deployed app gets noticed instead of
+quietly going unwatched. That is the whole reason the map is a list rather
+than a guess. 17 images are tracked today.
+
+- **The running version comes from the workloads, not from Git.** A tag
+  bumped in a manifest but not yet reconciled should still read as pending.
+- **Sources are per image, because the tag you paste into a manifest is not
+  always the tag upstream names its release.** `github` (the releases API,
+  which is also the changelog) is preferred *where the release tag and the
+  image tag are the same string* — verified per image. `hub` (Docker Hub's
+  tag list) covers the ones where they differ: pwpush releases `v2.13.0`
+  but ships `2.13.0`; photoprism releases `260728-bbde8f452` but ships
+  `260728`; netbox compounds two versions into `v4.7.1-5.1.1`; pangolin
+  ships an `ee-postgresql-` variant. Those link to the releases *page*
+  rather than a tagged release.
+- **The `pat` regex matches the running tag AND the candidate tags.** That
+  does two jobs: it filters pre-releases with no keyword blocklist (betas,
+  rcs, `latest` and external-snapshotter's `client/v8.6.0` simply do not
+  match), and it guarantees the version the report prints is a **real tag
+  you can paste straight into the manifest**.
+- **Flux is tracked as flux2**, the thing you actually upgrade, rather than
+  as four controller images — reading the running version from
+  source-controller's `app.kubernetes.io/version` label.
+- **GitHub anonymous is 60 requests/hour** and a run makes ~13, so no token
+  is needed. The optional `github-token` key in the bot's SealedSecret
+  switches it on if `/cluster updates` is ever run by hand often enough to
+  matter.
+
+**Not tracked, on purpose.** The ~40 sidecar images the charts themselves
 manage (Longhorn's CSI sidecars, cert-manager's three, the
-prometheus-stack's six) are deliberately not reported: you cannot move one
-without bumping its chart, which the report already tells you, so listing
-them is pure noise. Git-pinned *application* images (home-assistant,
-vaultwarden, uptime-kuma, pulse, …) are not covered either — those need a
-per-image registry map plus per-registry API handling (Docker Hub's tag
-API is usable, but GHCR's `tags/list` is unordered and paginates at 1000,
-so GitHub-hosted images have to go through the GitHub Releases API
-instead). That is a bigger, separate job.
+prometheus-stack's six): you cannot move one without bumping its chart,
+which the chart half already tells you. And floating tags —
+`affine:stable`, `redis:7-alpine`, `postgres:16-alpine`, the
+alpine/python/node bases — where "newer" means the tag moved to a new
+digest, not a new tag, so semver tracking would be a lie. Both sit in
+`IGNORE` with their reason. Digest drift on floating tags is the next
+piece of work.
 
 ## Security posture
 
