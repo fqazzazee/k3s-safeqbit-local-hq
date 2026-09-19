@@ -153,6 +153,10 @@ Also posts itself Mondays 08:30 ET. Two things to keep honest:
   (with a source and tag pattern) or to `IGNORE` (with a reason). That line
   is the feature, not a nag — it is how an image avoids going unwatched.
 
+The digest sorts by semver bump, which is upgrade *risk* — not urgency, and
+not a CVE severity. See [vulnerability-scanning.md](vulnerability-scanning.md)
+for why, and for what scanning would cost if that is ever wanted.
+
 Chart-managed sidecars are not tracked at all — they move with their chart.
 Floating tags (`affine:stable`, `redis:7-alpine`, the alpine/python/node
 bases) have no version to compare, so they get their own section: it reports

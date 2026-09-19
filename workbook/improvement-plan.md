@@ -329,6 +329,8 @@ Items reviewed and consciously **deferred** - recommended approach is captured s
 
 **Reviewed:** 2026-05-29 - deferred. No controller installed; recommendation below.
 
+> **Related, 2026-09-19:** *knowing what is behind* is now solved separately by the weekly updates digest (`/cluster updates`, see [slack-bot.md](slack-bot.md)) - chart versions, Git-pinned image tags, and digest drift on floating tags. It reports semver risk, not CVE severity; the sibling question "is being behind dangerous?" is evaluated with real numbers in [vulnerability-scanning.md](vulnerability-scanning.md) and also deferred. Note the digest partly covers this item's `disallow-latest-tag` motivation from the reporting side: floating and untracked tags are surfaced every week, though nothing *enforces* them.
+
 **Original intent:** GitOps repo enforces no `:latest`, no untagged, optionally signed images (cosign). Future-proof against supply-chain compromise and accidental floating-tag drift. Candidate tools: Kyverno or OPA Gatekeeper.
 
 **Current state (2026-05-29):** No admission/policy engine is installed. P2.4 already removed the last `:latest` tags (passzilla → `2.7.0`, photoprism → `260523`), so the cluster is *currently* compliant with a "no `:latest`" rule - which makes this a good time to add a guardrail that prevents regression, not a cleanup.

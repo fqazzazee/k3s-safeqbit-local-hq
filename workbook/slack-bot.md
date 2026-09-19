@@ -249,9 +249,12 @@ refusals are expected; don't "fix" them.
   lands in memory.
 - **Severity is the semver bump, not a CVE score.** major → :red_circle:,
   minor → :warning:, patch → :arrow_up:, sorted in that order, then by how
-  many stable releases you are behind. Nothing in a chart index knows
-  about vulnerabilities; real CVE severity would need a scanner
-  (trivy-operator) and is a separate project.
+  many stable releases you are behind. That measures how risky the *upgrade*
+  is, which is not the same as how urgent it is — a patch can be the security
+  fix and a major can be pure refactoring. Nothing in a chart index or a
+  registry knows about vulnerabilities. Real CVE severity needs a scanner;
+  evaluated and deferred, with the numbers and the trigger conditions in
+  **[vulnerability-scanning.md](vulnerability-scanning.md)**.
 - **Changelog links** come from the index entry's own `home:` field, so
   they cost nothing and cannot drift out of date.
 - **Pre-releases never count as available** — `rc`/`alpha`/`beta`/`dev`/
