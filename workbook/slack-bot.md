@@ -201,12 +201,28 @@ Manifest `configs/chart-updates-report.yaml` — ConfigMap script + its own
 ServiceAccount/ClusterRole + a CronJob (Mondays 08:30 ET, 30 min after the
 backup digest). The bot execs the same script for `/cluster updates`.
 
-**No external calls on the normal path.** source-controller already fetches
-and caches every `HelmRepository`'s `index.yaml` and serves it in-cluster at
-`http://source-controller.flux-system.svc.cluster.local./helmrepository/<ns>/<name>/index-<hash>.yaml`
-(it is on `.status.artifact.url`). The report reads that — no credentials,
-no egress, no registry rate limit. Only if the artifact is missing does it
-fall back to the upstream index URL, and it says so in the message footer.
+**Version data comes from the upstream chart repos** — 10 `index.yaml`
+files, ~7.6 MB, once a week over HTTPS. No credentials, and the public chart
+repos do not rate-limit this. A repo that fails degrades to one "not
+checked" line and costs the other nine nothing.
+
+**Why not source-controller's cache** (it was the original design, and the
+answer is worth keeping): Flux downloads all ten of those files anyway and
+serves each at `.status.artifact.url`
+(`http://source-controller.flux-system.svc.cluster.local./helmrepository/<ns>/<name>/index-<hash>.yaml`),
+so reading that would mean zero egress. It is **unreachable from
+`monitoring`, permanently.** Flux ships its own NetworkPolicies into
+`flux-system`: `allow-egress` admits ingress only from pods already inside
+`flux-system`, and `allow-scraping` opens port 8080 alone. The artifact
+server listens on **9090**, so the request gets a TCP reset — `Connection
+refused` on all ten repos, k3s's policy controller rejecting rather than
+dropping. Opening it would mean a NetworkPolicy allowing
+`monitoring → app=source-controller:9090`; **deliberately not done
+(2026-09-19)** — poking a hole in Flux's own firewall is not worth saving
+ten weekly requests for public files. The script still tries the cache
+first, because a refused connection costs nothing and the report would
+start using it with no code change if that policy were ever added. The
+refusals are expected; don't "fix" them.
 
 - **The index parser is hand-rolled**, because the report images are
   stdlib-only (no PyYAML, same rule as the sibling digests). A chart index
