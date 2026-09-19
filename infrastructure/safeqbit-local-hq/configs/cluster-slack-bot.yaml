@@ -45,9 +45,11 @@
 #                 script / chart-updates-report-script, mounted under
 #                 /reports) as subprocesses with SLACK_WEBHOOK_URL=
 #                 response_url — one copy of the report code, shared with
-#                 the CronJobs. `updates` additionally reads source-
-#                 controller's cached chart index.yaml over plain in-cluster
-#                 HTTP (no egress, no registry rate limits).
+#                 the CronJobs. `updates` additionally fetches each chart
+#                 repo's index.yaml from UPSTREAM over HTTPS (the only
+#                 command that leaves the cluster) — source-controller's
+#                 in-cluster cache is blocked by Flux's own NetworkPolicies;
+#                 see chart-updates-report.yaml's header.
 #   dns           socket.getaddrinfo from THIS pod. NB: the pod runs
 #                 ndots=1 (dnsConfig below), so it does NOT reproduce the
 #                 app-pod ndots:5 search-domain flapping.

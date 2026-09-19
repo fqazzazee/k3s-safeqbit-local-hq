@@ -16,13 +16,27 @@
 # both report CronJobs). Type `/cluster updates` when you want it sooner.
 #
 # ── Where the version data comes from ─────────────────────────────────────
-# source-controller ALREADY fetches and caches every HelmRepository's
-# index.yaml and serves it in-cluster at
-#   http://source-controller.flux-system.svc.cluster.local./helmrepository/...
-# so the normal path makes NO external calls, needs no credentials, and
-# cannot hit a registry rate limit. If that artifact is missing (repo not yet
-# reconciled) the job falls back to the upstream index URL over the internet
-# and says so in the footer.
+# Each repo's index.yaml, fetched from the UPSTREAM chart repo over HTTPS —
+# 10 files, ~7.6 MB, once a week. No credentials; the public chart repos do
+# not rate-limit this. A repo that fails is reported as "not checked" and
+# costs the other nine nothing.
+#
+# The job asks source-controller for its CACHED copy first (every
+# HelmRepository carries one on .status.artifact.url — Flux downloads these
+# anyway to resolve chart versions), but that request is REFUSED and always
+# will be: Flux ships its own NetworkPolicies into flux-system, and
+# `allow-egress` admits ingress only from pods already inside flux-system
+# while `allow-scraping` opens port 8080 alone. The artifact server listens
+# on 9090, so anything in `monitoring` gets a TCP reset (k3s's policy
+# controller rejects rather than drops).
+#
+# Reaching the cache would mean adding a NetworkPolicy to flux-system
+# allowing monitoring → app=source-controller:9090. Deliberately NOT done
+# (2026-09-19): poking a hole in Flux's own firewall is not worth saving ten
+# HTTP requests a week against public files. The cache-first attempt is kept
+# because it costs one instantly-refused connection per repo and means this
+# report starts using the cache with NO code change if that policy is ever
+# added. Do not "fix" the refusals — they are expected.
 #
 # SCOPE — charts only. The ~40 sidecar images the charts themselves manage
 # (Longhorn's CSI sidecars, cert-manager's three, the prometheus-stack's six)
@@ -206,8 +220,10 @@ data:
 
 
     def fetch_index(repo, chart):
-        """Prefer source-controller's cached artifact (no egress, no rate limit);
-        fall back to the upstream index only if that is unavailable."""
+        """Try source-controller's cached artifact, then the upstream index.
+        The cache is expected to refuse (Flux's NetworkPolicies block 9090
+        from outside flux-system) — upstream is the normal path. See the
+        header comment before changing this order."""
         art = (repo.get("status") or {}).get("artifact", {}).get("url")
         urls = [(art, "cache")] if art else []
         urls.append((repo["spec"]["url"].rstrip("/") + "/index.yaml", "upstream"))
@@ -325,9 +341,10 @@ data:
             out.append("*Not checked*")
             out.extend(f":grey_question: {b}" for b in broken)
 
-        if any(r["src"] == "upstream" for r in rows):
-            out.append("\n_:information_source: some indexes came from upstream —"
-                       " source-controller's cache was unavailable_")
+        if any(r["src"] == "cache" for r in rows):
+            # Only worth a line if it happens — upstream is the normal path.
+            out.append("\n_:information_source: some indexes came from"
+                       " source-controller's cache_")
         out.append("\n_bump `version:` in `infrastructure/.../controllers/<chart>.yaml`"
                    " · `/cluster flux` for reconcile state_")
         return "\n".join(out)
