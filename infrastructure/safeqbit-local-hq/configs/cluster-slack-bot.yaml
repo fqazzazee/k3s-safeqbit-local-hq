@@ -7,7 +7,8 @@
 #   /cluster summary|backups|pods|deploys|nodes [name]|logs|describe|why|
 #            events|top|ps|restarts|flux|velero [n|name]|certs|cnpg|pvcs|
 #            storage|longhorn [pvc|snapshots|jobs]|jobs|silences|etcd|dns|
-#            ingresses|alerts|wiki [section|topic|search <term>]|man <cmd>|help
+#            ingresses|alerts|updates|wiki [section|topic|search <term>]|
+#            man <cmd>|help
 #
 # ── How it works ──────────────────────────────────────────────────────────
 # TRANSPORT — Slack SOCKET MODE: the pod opens an OUTBOUND WebSocket to
@@ -39,11 +40,14 @@
 #                 namespace_workload_pod:kube_pod_owner:relabel for its
 #                 pod→workload grouping.
 #   Alertmanager  silences: GET /api/v2/silences (ALERTMANAGER_BASE).
-#   Reports       summary/backups exec the EXISTING report ConfigMaps
+#   Reports       summary/backups/updates exec the EXISTING report ConfigMaps
 #                 (cluster-summary-report-script / backup-summary-report-
-#                 script, mounted under /reports) as subprocesses with
-#                 SLACK_WEBHOOK_URL=response_url — one copy of the report
-#                 code, shared with the CronJobs.
+#                 script / chart-updates-report-script, mounted under
+#                 /reports) as subprocesses with SLACK_WEBHOOK_URL=
+#                 response_url — one copy of the report code, shared with
+#                 the CronJobs. `updates` additionally reads source-
+#                 controller's cached chart index.yaml over plain in-cluster
+#                 HTTP (no egress, no registry rate limits).
 #   dns           socket.getaddrinfo from THIS pod. NB: the pod runs
 #                 ndots=1 (dnsConfig below), so it does NOT reproduce the
 #                 app-pod ndots:5 search-domain flapping.
@@ -151,6 +155,11 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["helm.toolkit.fluxcd.io"]
     resources: ["helmreleases"]
+    verbs: ["get", "list"]
+  # `updates`: the pinned chart version lives on the HelmRelease, the cached
+  # index.yaml URL on the HelmRepository's status.artifact.
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["helmrepositories"]
     verbs: ["get", "list"]
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
@@ -288,6 +297,7 @@ data:
         "",
         "*Platform*",
         ":arrows_counterclockwise: `/cluster flux` — GitOps sync status · `flux get all -A`",
+        ":package: `/cluster updates` — Helm chart version drift, newest stable + changelog links",
         ":clock3: `/cluster jobs [ns]` — cronjob last runs, failed/active jobs",
         ":lock: `/cluster certs` — TLS certificate expiries",
         ":globe_with_meridians: `/cluster ingresses` — hostname → service map",
@@ -1795,6 +1805,7 @@ data:
     HANDLERS = {
         "summary": run_report("/reports/cluster/report.py", "cluster summary"),
         "backups": run_report("/reports/backup/report.py", "backup digest"),
+        "updates": run_report("/reports/charts/report.py", "chart updates"),
         "pods": pods,
         "deploys": deploys,
         "nodes": nodes,
@@ -1824,6 +1835,8 @@ data:
     ALIASES = {"deploy": "deploys", "deployments": "deploys", "log": "logs",
                "event": "events", "pvc": "pvcs", "ingress": "ingresses",
                "backup": "backups", "pod": "pods", "node": "nodes",
+               "upgrades": "updates", "versions": "updates",
+               "charts": "updates", "drift": "updates",
                "alert": "alerts", "desc": "describe", "restart": "restarts",
                "gitops": "flux", "cert": "certs", "certificates": "certs",
                "db": "cnpg", "databases": "cnpg",
@@ -2006,6 +2019,8 @@ spec:
               mountPath: /reports/cluster
             - name: backup-report
               mountPath: /reports/backup
+            - name: chart-updates-report
+              mountPath: /reports/charts
           resources:
             requests:
               cpu: 10m
@@ -2029,3 +2044,6 @@ spec:
         - name: backup-report
           configMap:
             name: backup-summary-report-script
+        - name: chart-updates-report
+          configMap:
+            name: chart-updates-report-script

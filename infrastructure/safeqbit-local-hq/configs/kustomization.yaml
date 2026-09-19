@@ -39,6 +39,7 @@ resources:
   - cnpg-backup-retention.yaml
   - backup-summary-report.yaml
   - cluster-summary-report.yaml
+  - chart-updates-report.yaml
   - monitoring-servicemonitors.yaml
   - monitoring-alert-rules.yaml
   - monitoring-flux-rules.yaml

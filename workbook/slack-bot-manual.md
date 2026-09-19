@@ -132,6 +132,20 @@ that node rebooted → think offload before anything else.
 The FluxSuspended info-alert nags daily; `/cluster flux` shows the ⏸
 rows it means.
 
+### 7b. "Are we behind on anything?" (chart upgrades)
+
+| Step | Bot | Terminal |
+|---|---|---|
+| What's behind | `/cluster updates` — every HelmRelease's pinned chart vs newest stable, major→minor→patch, changelog links | `helm repo update && helm search repo <chart> --versions \| head` |
+| Read the changes | the changelog link in the row | the chart repo's releases page |
+| Apply | — | bump `version:` in `infrastructure/.../controllers/<chart>.yaml`, PR, let Flux reconcile, `/cluster flux` to watch |
+
+Also posts itself Mondays 08:30 ET. A chart you have deliberately decided
+**not** to upgrade belongs in the script's `HOLDS` map with the reason
+(`configs/chart-updates-report.yaml`) — otherwise the digest re-argues the
+decision every week. Application images pinned in Git (home-assistant,
+vaultwarden, …) are **not** covered; those are still a manual check.
+
 ### 8. Certificate expiry
 
 | Step | Bot | Terminal |
@@ -221,6 +235,7 @@ container-fs I/O and doesn't always attribute PVC block writes.
 | `/cluster top [ns]` / `ps` | `kubectl top pods -A` / htop-ish, no equivalent |
 | `/cluster restarts [ns]` | `kubectl get pods -A \| grep -v " 0 "` (roughly) |
 | `/cluster flux` | `kubectl get kustomizations,helmreleases -A` |
+| `/cluster updates` | `helm repo update && helm search repo <chart> --versions` per chart |
 | `/cluster velero [n\|name]` | `kubectl -n velero get/describe backups.velero.io` |
 | `/cluster certs` | `kubectl get certificates -A` |
 | `/cluster cnpg` | `kubectl get clusters.postgresql.cnpg.io -A` |
