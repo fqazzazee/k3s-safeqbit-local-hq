@@ -140,6 +140,7 @@ rows it means.
 | Read the changes | the changelog link in the row | same links |
 | Apply a chart | — | bump `version:` in `infrastructure/.../controllers/<chart>.yaml` |
 | Apply an image | — | bump the tag in `apps/.../<app>/` (the printed version is always a real, pastable tag) |
+| Pick up a moved floating tag | — | `kubectl -n <ns> delete pod <pod>` — NOT `rollout restart` (Flux SSA double-rolls) |
 | Watch it land | `/cluster flux` | `kubectl get kustomizations,helmreleases -A` |
 
 Also posts itself Mondays 08:30 ET. Two things to keep honest:
@@ -152,8 +153,12 @@ Also posts itself Mondays 08:30 ET. Two things to keep honest:
   (with a source and tag pattern) or to `IGNORE` (with a reason). That line
   is the feature, not a nag — it is how an image avoids going unwatched.
 
-Chart-managed sidecars and floating tags (`affine:stable`, `redis:7-alpine`,
-the alpine/python/node bases) are not version-tracked; see the workbook.
+Chart-managed sidecars are not tracked at all — they move with their chart.
+Floating tags (`affine:stable`, `redis:7-alpine`, the alpine/python/node
+bases) have no version to compare, so they get their own section: it reports
+whether the digest a pod actually pulled still matches what the tag resolves
+to now. Moves inside 30 days collapse to one line (python/redis/postgres are
+rebuilt weekly); older drift, and `affine:stable`, are listed.
 
 ### 8. Certificate expiry
 

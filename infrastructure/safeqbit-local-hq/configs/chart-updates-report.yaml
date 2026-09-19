@@ -69,7 +69,10 @@
 # going unwatched. That is the whole point of listing rather than guessing.
 #
 # The running version comes from the workloads, not from Git: a tag bumped in
-# a manifest but not yet reconciled should still read as pending.
+# a manifest but not yet reconciled should still read as pending. The
+# floating half goes further and reads POD status, the only place the digest
+# actually pulled is recorded (~1.5 MB of JSON for 167 pods, ~33 MB peak RSS
+# — well inside the 128Mi limit below).
 #
 # Sources are per image, because the tag you must paste into the manifest is
 # not always the tag upstream names its release:
@@ -129,6 +132,11 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["get", "list"]
+  # Floating-tag drift compares the digest a pod actually PULLED against the
+  # one its tag resolves to now; only pod status carries that.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -181,6 +189,23 @@ data:
     UA = "cluster-chart-updates-report (k3s-safeqbit-local-hq)"
 
     ICON = {"major": ":red_circle:", "minor": ":warning:", "patch": ":arrow_up:"}
+
+    # A floating tag that moved a day or two ago is a routine base-image
+    # rebuild, not news — python/redis/postgres are rebuilt weekly. Only drift
+    # older than this is listed; the rest is collapsed into one line, or the
+    # section becomes the wallpaper this report exists to avoid.
+    FLOAT_STALE_DAYS = 30
+
+    ACCEPT = ("application/vnd.oci.image.index.v1+json,"
+              "application/vnd.docker.distribution.manifest.list.v2+json,"
+              "application/vnd.oci.image.manifest.v1+json,"
+              "application/vnd.docker.distribution.manifest.v2+json")
+    TOKEN_URL = {
+        "registry-1.docker.io":
+            "https://auth.docker.io/token?service=registry.docker.io"
+            "&scope=repository:{repo}:pull",
+        "ghcr.io": "https://ghcr.io/token?service=ghcr.io&scope=repository:{repo}:pull",
+    }
 
 
     def api(path):
@@ -588,6 +613,105 @@ data:
             return f"{type(e).__name__}: {str(e)[:90]}", None
 
 
+    # ---------- floating tags: digest drift ----------
+    #
+    # For a tag that carries no version (affine:stable, redis:7-alpine, the
+    # alpine/python/node bases) "newer" means the tag was rebuilt and now points
+    # at a different digest — semver has nothing to say. What CAN be said is
+    # whether the digest these pods are running is still the one the tag
+    # resolves to. If not, a restart would silently change what runs.
+    #
+    # The digest has to come from POD status: a workload spec only carries the
+    # tag, which is precisely the problem. Both sides are the multi-arch INDEX
+    # digest, so the comparison is apples-to-apples — verified against
+    # alpine:3.20, which matched its registry digest exactly.
+    #
+    # The set of images checked is derived from IGNORE, so there is one list to
+    # keep: an entry whose reason starts with "floating" is checked here.
+
+
+    def running_digests():
+        """(repo, tag) → {'digests': {…}, 'ns': {…}} for every floating image."""
+        prefixes = [p for p, r in IGNORE_C if r.startswith("floating")]
+        out = {}
+        for p in api("/api/v1/pods")["items"]:
+            ns = p["metadata"]["namespace"]
+            st = p["status"]
+            for cs in ((st.get("containerStatuses") or [])
+                       + (st.get("initContainerStatuses") or [])):
+                img, iid = cs.get("image", ""), cs.get("imageID", "")
+                if "@sha256:" in img:                     # already digest-pinned
+                    continue
+                if ":" in img and "/" not in img.rsplit(":", 1)[1]:
+                    repo, tag = img.rsplit(":", 1)
+                else:
+                    continue                              # no tag ⇒ nothing to float
+                repo = canon(repo)
+                if not any(repo.startswith(x) for x in prefixes):
+                    continue
+                if "@sha256:" in iid:
+                    dig = "sha256:" + iid.split("@sha256:", 1)[1]
+                elif iid.startswith("sha256:"):
+                    dig = iid
+                else:
+                    continue                              # not pulled yet
+                e = out.setdefault((repo, tag), {"digests": set(), "ns": set()})
+                e["digests"].add(dig)
+                e["ns"].add(ns)
+        return out
+
+
+    def hub_digest(repo, tag):
+        """Docker Hub also reports when the tag last moved, which is the age we
+        want — so prefer it over a bare OCI HEAD for docker.io images."""
+        hub = repo if "/" in repo else "library/" + repo
+        d = get_json(f"https://hub.docker.com/v2/repositories/{hub}/tags/{tag}")
+        return d.get("digest"), d.get("last_updated") or ""
+
+
+    def oci_digest(repo, tag):
+        """Any OCI registry. No move timestamp is available this way."""
+        if "." in repo.split("/")[0]:                     # already has a host
+            host, path = repo.split("/", 1)
+        else:
+            host, path = "registry-1.docker.io", (
+                repo if "/" in repo else "library/" + repo)
+        h = {"User-Agent": UA, "Accept": ACCEPT}
+        url = TOKEN_URL.get(host)
+        if url:
+            t = get_json(url.format(repo=path))
+            h["Authorization"] = f"Bearer {t.get('token') or t.get('access_token')}"
+        req = urllib.request.Request(f"https://{host}/v2/{path}/manifests/{tag}",
+                                     headers=h, method="HEAD")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.headers.get("Docker-Content-Digest"), ""
+
+
+    def upstream_digest(repo, tag):
+        if "." not in repo.split("/")[0]:                 # bare name ⇒ Docker Hub
+            try:
+                return hub_digest(repo, tag)
+            except Exception:                             # noqa: BLE001
+                pass                                      # fall through to OCI
+        return oci_digest(repo, tag)
+
+
+    def collect_floating():
+        def one(kv):
+            (repo, tag), info = kv
+            try:
+                up, moved = upstream_digest(repo, tag)
+            except Exception as e:                        # noqa: BLE001
+                return dict(repo=repo, tag=tag, up="", moved=None,
+                            drift=False, err=f"{type(e).__name__}", **info)
+            return dict(repo=repo, tag=tag, up=up, moved=days(moved), err="",
+                        drift=bool(up) and up not in info["digests"], **info)
+
+        items = sorted(running_digests().items())
+        with futures.ThreadPoolExecutor(8) as ex:
+            return list(ex.map(one, items))
+
+
     # ---------- report ----------
 
     def newest(versions):
@@ -595,10 +719,16 @@ data:
         return max(stable, key=lambda e: vtuple(e["version"])) if stable else None
 
 
-    def age(ts):
+    def days(ts):
         try:
-            d = (NOW - datetime.fromisoformat(ts.replace("Z", "+00:00"))).days
+            return (NOW - datetime.fromisoformat(ts.replace("Z", "+00:00"))).days
         except Exception:                                     # noqa: BLE001
+            return None
+
+
+    def age(ts):
+        d = days(ts)
+        if d is None:
             return ""
         return f"{d}d ago" if d < 90 else f"{d // 30}mo ago"
 
@@ -654,7 +784,7 @@ data:
         return (ORDER[r["kind"]], -r["behind"])
 
 
-    def render(charts, cbroken, images, ibroken, untracked):
+    def render(charts, cbroken, images, ibroken, untracked, floating):
         c_behind = sorted((r for r in charts
                            if r["stale"] and r["chart"] not in HOLDS), key=_row_sort)
         c_held = [r for r in charts if r["stale"] and r["chart"] in HOLDS]
@@ -713,10 +843,36 @@ data:
             if i_ok:
                 out.append(f"*Current images* ({len(i_ok)}): " + ", ".join(i_ok))
 
-        if cbroken or ibroken:
+        if floating:
+            moved = [r for r in floating if r["drift"]]
+            # Unknown move date ⇒ always listed: the only such image is an app
+            # (affine:stable), where a move IS a new release worth acting on.
+            stale = [r for r in moved
+                     if r["moved"] is None or r["moved"] >= FLOAT_STALE_DAYS]
+            fresh = [r for r in moved if r not in stale]
+            out.append("")
+            out.append(f"*Floating tags* ({len(floating)} tracked ·"
+                       f" {len(moved)} moved) — a restart would change what these run")
+            for r in sorted(stale, key=lambda r: -(r["moved"] or 10**6)):
+                when = (f"tag moved {r['moved']}d ago" if r["moved"] is not None
+                        else "tag moved, date unknown")
+                out.append(f":arrows_counterclockwise: `{r['repo']}:{r['tag']}` —"
+                           f" {when} · running `{sorted(r['digests'])[0][7:19]}`,"
+                           f" upstream `{r['up'][7:19]}` · {', '.join(sorted(r['ns']))}")
+            if fresh:
+                out.append(f"_{len(fresh)} more moved within {FLOAT_STALE_DAYS}d"
+                           " (routine base-image rebuilds): "
+                           + ", ".join(sorted(f"{r['repo']}:{r['tag']}" for r in fresh))
+                           + "_")
+            if not moved:
+                out.append(":white_check_mark: every floating tag still resolves to"
+                           " the digest these pods are running")
+
+        fbroken = [f"{r['repo']}:{r['tag']}: {r['err']}" for r in floating if r["err"]]
+        if cbroken or ibroken or fbroken:
             out.append("")
             out.append("*Not checked*")
-            out.extend(f":grey_question: {b}" for b in cbroken + ibroken)
+            out.extend(f":grey_question: {b}" for b in cbroken + ibroken + fbroken)
 
         # The point of the map being explicit: anything newly deployed and not
         # yet classified shows up here instead of going quietly unwatched.
@@ -732,7 +888,9 @@ data:
                        " source-controller's cache_")
         out.append("\n_charts: bump `version:` in `infrastructure/.../controllers/"
                    "<chart>.yaml` · images: bump the tag in `apps/.../<app>/`"
-                   " · `/cluster flux` for reconcile state_")
+                   " · floating: delete the pod to re-pull (never `rollout"
+                   " restart` — Flux SSA double-rolls) · `/cluster flux` for"
+                   " reconcile state_")
         return "\n".join(out)
 
 
@@ -751,7 +909,7 @@ data:
 
 
     _canonicalise()
-    post(render(*collect_charts(), *collect_images()))
+    post(render(*collect_charts(), *collect_images(), collect_floating()))
 ---
 apiVersion: batch/v1
 kind: CronJob
