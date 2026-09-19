@@ -1,0 +1,82 @@
+# The reporting CronJobs and the Slack bot are ~3,000 lines of Python living
+# inside ConfigMap data keys. Nothing else looks at that code before it runs,
+# and a syntax error there surfaces as a CrashLoopBackOff on the cluster.
+
+name: Embedded Python
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ruff + py_compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the python:3.13-alpine image the scripts actually run on.
+          python-version: '3.13'
+
+      - run: pip install --quiet ruff pyyaml
+
+      - name: extract every *.py ConfigMap key
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys, yaml
+
+          out = pathlib.Path("extracted")
+          out.mkdir(exist_ok=True)
+
+          found = 0
+          for src in sorted(pathlib.Path(".").rglob("*.yaml")):
+              if ".git" in src.parts or src.parts[0] == ".github":
+                  continue
+              try:
+                  docs = list(yaml.safe_load_all(src.read_text()))
+              except yaml.YAMLError as e:
+                  print(f"::error file={src}::not parseable as YAML: {e}")
+                  sys.exit(1)
+              for doc in docs:
+                  if not isinstance(doc, dict) or doc.get("kind") != "ConfigMap":
+                      continue
+                  name = doc.get("metadata", {}).get("name", "unnamed")
+                  for key, body in (doc.get("data") or {}).items():
+                      if not key.endswith(".py"):
+                          continue
+                      (out / f"{name}__{key}").write_text(body)
+                      print(f"{src} -> {name}__{key} ({len(body.splitlines())} lines)")
+                      found += 1
+
+          if not found:
+              print("::error::no embedded scripts found — has the extraction broken?")
+              sys.exit(1)
+          print(f"extracted {found} scripts")
+          PY
+
+      - name: ruff
+        # Deliberately narrow: E9 (syntax), F (pyflakes — undefined names,
+        # redefinitions, unused imports) and B (bugbear — real bug patterns).
+        # The full baseline ruleset reports 120+ style findings on this code,
+        # most of them things the scripts do on purpose. Widen only alongside
+        # the cleanup that makes it pass.
+        run: ruff check --no-cache --select E9,F,B --target-version py313 extracted/
+
+      - name: py_compile
+        run: |
+          set -euo pipefail
+          for f in extracted/*.py; do
+            echo "compiling $f"
+            python -m py_compile "$f"
+          done
