@@ -479,17 +479,6 @@ data:
             return json.load(r)
 
 
-    def canon(repo):
-        """Normalise a repo to one spelling. The API reports the registry's own
-        form (docker.io/library/busybox) while manifests use the short one
-        (busybox), and both must land on the same key."""
-        if repo.startswith("docker.io/"):
-            repo = repo[len("docker.io/"):]
-        if repo.startswith("library/"):
-            repo = repo[len("library/"):]
-        return repo
-
-
 
     # ---------- where images are running ----------
 
@@ -574,7 +563,8 @@ data:
         todo = [(repo, spec) for repo, spec in TRACKED.items() if repo in running]
         with futures.ThreadPoolExecutor(8) as ex:
             results = dict(zip([r for r, _ in todo],
-                               ex.map(lambda rs: _safe(rs[0], rs[1]), todo)))
+                               ex.map(lambda rs: _safe(rs[0], rs[1]), todo),
+                               strict=True))
 
         for repo, spec in todo:
             tags = running[repo]

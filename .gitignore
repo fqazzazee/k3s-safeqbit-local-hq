@@ -1,1 +1,9 @@
 local-only/
+
+# Credentials — nothing here is ever legitimately committed. Every secret in
+# this repo is a SealedSecret; kubeconfigs and keys live on the nodes.
+kubeconfig
+*.kubeconfig
+*.pem
+*.key
+.env

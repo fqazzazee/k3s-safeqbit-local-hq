@@ -1,0 +1,93 @@
+# Renders every path Flux reconciles and validates the result against the
+# schemas for the cluster's Kubernetes version. Catches the class of mistake
+# that would otherwise be found by kustomize-controller, on the cluster,
+# after merge.
+
+name: Manifests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  KUSTOMIZE_VERSION: v5.8.1
+  KUBECONFORM_VERSION: v0.6.7
+  # k3s v1.35.x — see workbook/node-bootstrap.md
+  K8S_VERSION: 1.35.0
+
+jobs:
+  validate:
+    name: kustomize build + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: install kustomize and kubeconform
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          sudo tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          sudo tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+
+      - name: render and validate every Flux path
+        run: |
+          set -euo pipefail
+
+          # One entry per spec.path in clusters/safeqbit-local-hq/. Adding a
+          # Flux Kustomization means adding its path here.
+          paths=(
+            clusters/safeqbit-local-hq
+            infrastructure/safeqbit-local-hq/controllers
+            infrastructure/safeqbit-local-hq
+            infrastructure/safeqbit-local-hq/configs
+            apps/safeqbit-local-hq
+          )
+
+          crds='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main'
+          crds="$crds/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+          fail=0
+          for p in "${paths[@]}"; do
+            echo "::group::$p"
+
+            # Build in a throwaway copy: two of these paths have no
+            # kustomization.yaml, and kustomize-controller generates one for
+            # them at reconcile time. Reproducing that here would otherwise
+            # leave generated files behind for the next path in the loop.
+            work="$(mktemp -d)"
+            cp -r ./. "$work/"
+            if [ ! -f "$work/$p/kustomization.yaml" ]; then
+              ( cd "$work/$p" && kustomize create --autodetect --recursive >/dev/null )
+            fi
+
+            if kustomize build "$work/$p" > "$work/render.yaml"; then
+              # -ignore-missing-schemas: CRDs the catalog does not carry are
+              # reported as skipped rather than failing the run. Check the
+              # summary if a kind you expect to be covered stops being counted.
+              kubeconform -strict -summary \
+                -kubernetes-version "$K8S_VERSION" \
+                -ignore-missing-schemas \
+                -schema-location default \
+                -schema-location "$crds" \
+                "$work/render.yaml" || fail=1
+            else
+              echo "::error::kustomize build failed for $p"
+              fail=1
+            fi
+
+            rm -rf "$work"
+            echo "::endgroup::"
+          done
+          exit $fail
