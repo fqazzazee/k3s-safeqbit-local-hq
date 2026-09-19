@@ -1,0 +1,94 @@
+# Exceptions to the `trivy config` gate in .github/workflows/manifests.yaml,
+# which fails on CRITICAL/HIGH Kubernetes misconfigurations in the rendered
+# manifests. Every entry below is a finding that is real, understood and
+# deliberate — never one that is merely inconvenient.
+#
+# The format's one limitation shapes everything here: an entry matches by check
+# ID and, optionally, by the RENDERED FILE the finding appears in. There is no
+# way to scope it to a single resource. So `paths` is the narrowest fence
+# available, and the render filenames are the Flux path with `/` → `-`:
+#
+#   clusters-safeqbit-local-hq.yaml
+#   infrastructure-safeqbit-local-hq.yaml              (renders the two below too)
+#   infrastructure-safeqbit-local-hq-controllers.yaml
+#   infrastructure-safeqbit-local-hq-configs.yaml
+#   apps-safeqbit-local-hq.yaml
+#
+# `infrastructure/safeqbit-local-hq` has no kustomization.yaml, so CI renders it
+# with `--autodetect --recursive` and it swallows controllers/ and configs/. A
+# finding there appears in two files and needs both names listed.
+#
+# Check detail: https://avd.aquasec.com/misconfig/<id-lowercased>, e.g.
+# https://avd.aquasec.com/misconfig/ksv-0017
+
+misconfigurations:
+  # ── Cluster-wide hardening, not regressions ───────────────────────────────
+  # These two fire on almost every workload in the cluster. Neither describes a
+  # specific mistake someone made, which is exactly what a merge gate should be
+  # for — the guardrail for this class is the Kyverno Audit rollout in
+  # workbook/improvement-plan.md (P3.3).
+
+  - id: KSV-0118
+    statement: >-
+      "Default security context configured" — fires on every workload that does
+      not set a full restricted securityContext, currently 56 containers. Its
+      component parts are already reported individually at LOW/MEDIUM
+      (KSV-0003, KSV-0004, KSV-0012, KSV-0030, KSV-0104), so this is a summary
+      of those, not new information. Clearing it means editing every Deployment
+      in the repo.
+
+  - id: KSV-0014
+    statement: >-
+      readOnlyRootFilesystem, on 38 containers across apps/ and the monitoring
+      CronJobs. Every image here is third-party and most of them write inside
+      their own root filesystem; proving which ones do not is a
+      per-image exercise with a real chance of breaking a working app for the
+      sake of a lint. Same disposition as KSV-0118.
+
+  # ── Flux's own bootstrap RBAC ─────────────────────────────────────────────
+  # Both of these are in gotk-components.yaml, written by `flux bootstrap` and
+  # not hand-authored. Scoped to the clusters render so that a wildcard
+  # ClusterRole authored anywhere else in the tree still fails the build.
+
+  - id: KSV-0041
+    paths: ["clusters-safeqbit-local-hq.yaml"]
+    statement: >-
+      ClusterRole crd-controller-flux-system can manage secrets — how
+      source-controller and helm-controller read the credentials their sources
+      and HelmReleases reference.
+
+  - id: KSV-0046
+    paths: ["clusters-safeqbit-local-hq.yaml"]
+    statement: >-
+      The flux-system ClusterRoles carry wildcard rules because a GitOps
+      controller has to be able to apply arbitrary kinds, including CRDs that
+      do not exist yet when the role is created.
+
+  # ── Pangolin's edge pod: privileged by design ─────────────────────────────
+  # Both grants are explained where they live, and the pangolin namespace
+  # carries `pod-security.kubernetes.io/enforce: privileged` for the same
+  # reason (apps/safeqbit-local-hq/pangolin/01-namespace.yaml).
+  #
+  # KNOWN GAP: because `paths` cannot name a resource, these two entries also
+  # excuse a NEW privileged container or SYS_MODULE grant anywhere else under
+  # apps/ — which is where one is most likely to appear. The rest of the tree
+  # (clusters, controllers, configs) still fails on both. Closing the gap would
+  # mean rendering each app to its own file; not worth it while pangolin is the
+  # only workload in this class, but that is the assumption to re-check.
+
+  - id: KSV-0017
+    paths: ["apps-safeqbit-local-hq.yaml"]
+    statement: >-
+      The enable-ip-forward init container in pangolin-edge writes
+      net.ipv4.ip_forward in the pod netns, which needs privileged: true. A
+      fresh netns starts with it at 0 and traffic to a Site is forwarded, not
+      locally originated, so without it the tunnel looks healthy and silently
+      blackholes.
+
+  - id: KSV-0120
+    paths: ["apps-safeqbit-local-hq.yaml"]
+    statement: >-
+      Gerbil adds SYS_MODULE (with NET_ADMIN) to load the wireguard kernel
+      module if the node has not already. It is kernel WireGuard by design —
+      the in-cluster Newt runs userspace netstack precisely so that it needs
+      neither.

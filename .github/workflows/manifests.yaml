@@ -1,7 +1,8 @@
-# Renders every path Flux reconciles and validates the result against the
-# schemas for the cluster's Kubernetes version. Catches the class of mistake
-# that would otherwise be found by kustomize-controller, on the cluster,
-# after merge.
+# Renders every path Flux reconciles and puts the result through two guards:
+# kubeconform for schema validity against the cluster's Kubernetes version, and
+# `trivy config` for CRITICAL/HIGH Kubernetes misconfigurations. Between them
+# they catch the class of mistake that would otherwise be found by
+# kustomize-controller, on the cluster, after merge.
 
 name: Manifests
 
@@ -21,17 +22,20 @@ permissions:
 env:
   KUSTOMIZE_VERSION: v5.8.1
   KUBECONFORM_VERSION: v0.6.7
+  # Upstream tags this v0.74.0 but the tarball spells it without the `v` — both
+  # forms below are load-bearing.
+  TRIVY_VERSION: 0.74.0
   # k3s v1.35.x — see workbook/node-bootstrap.md
   K8S_VERSION: 1.35.0
 
 jobs:
   validate:
-    name: kustomize build + kubeconform
+    name: kustomize build + kubeconform + trivy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      - name: install kustomize and kubeconform
+      - name: install kustomize, kubeconform and trivy
         run: |
           set -euo pipefail
           curl -sSLo /tmp/kustomize.tar.gz \
@@ -40,8 +44,11 @@ jobs:
           curl -sSLo /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           sudo tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+          curl -sSLo /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          sudo tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
 
-      - name: render and validate every Flux path
+      - name: render, validate and scan every Flux path
         run: |
           set -euo pipefail
 
@@ -72,7 +79,13 @@ jobs:
               ( cd "$work/$p" && kustomize create --autodetect --recursive >/dev/null )
             fi
 
-            if kustomize build "$work/$p" > "$work/render.yaml"; then
+            # The render is named after the Flux path, because trivy reports a
+            # finding against this file's BASENAME and .trivyignore.yaml scopes
+            # its exceptions by that name. Rename it here and you rename it
+            # there.
+            render="$work/$(printf '%s' "$p" | tr '/' '-').yaml"
+
+            if kustomize build "$work/$p" > "$render"; then
               # -ignore-missing-schemas: CRDs the catalog does not carry are
               # reported as skipped rather than failing the run. Check the
               # summary if a kind you expect to be covered stops being counted.
@@ -81,7 +94,23 @@ jobs:
                 -ignore-missing-schemas \
                 -schema-location default \
                 -schema-location "$crds" \
-                "$work/render.yaml" || fail=1
+                "$render" || fail=1
+
+              # Both guards run on every path even when one of them fails, so a
+              # red build reports everything wrong with the tree at once rather
+              # than the first thing it hit.
+              #
+              # --skip-check-update pins the checks to the set compiled into
+              # TRIVY_VERSION: runs are reproducible, and nothing depends on an
+              # anonymous GHCR pull of the trivy-checks bundle. Bumping trivy is
+              # therefore also a checks bump — expect new findings when you do.
+              trivy config \
+                --quiet \
+                --skip-check-update \
+                --severity CRITICAL,HIGH \
+                --ignorefile "$GITHUB_WORKSPACE/.trivyignore.yaml" \
+                --exit-code 1 \
+                "$render" || fail=1
             else
               echo "::error::kustomize build failed for $p"
               fail=1
@@ -91,3 +120,17 @@ jobs:
             echo "::endgroup::"
           done
           exit $fail
+
+# A kubeconform failure is a broken manifest — fix the manifest.
+#
+# A trivy failure is a privilege grant, deliberate or not. Read the RESOURCE
+# name in the finding rather than the line numbers, which drift in a
+# multi-document render. If the grant is not wanted, drop it; if it is genuinely
+# required, add it to .trivyignore.yaml with the reason, scoped by `paths` to
+# the one render it belongs in — never as a bare global ID.
+#
+# The floor is CRITICAL/HIGH on purpose. Everything below it here is
+# whole-cluster hardening (no seccomp profile, runs as root, writable root
+# filesystem) which fires on nearly every workload and cannot be usefully
+# enforced at merge time; that is the Kyverno Audit item, P3.3 in
+# workbook/improvement-plan.md.
