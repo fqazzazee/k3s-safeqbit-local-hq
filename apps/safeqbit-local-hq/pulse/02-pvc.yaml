@@ -13,10 +13,12 @@
 # the pod dies, Longhorn re-attaches the replicated volume on a surviving node
 # and the rescheduled pod resumes with zero data loss.
 #
-# Sized 2Gi -> 4Gi (2026-09-21). metrics.db alone reached 361MB and the whole
-# volume 1.6Gi of the old 2Gi, climbing ~60Mi/day since the target list changed
-# on 2026-09-01 — roughly a week from full. Longhorn expands online, so growth
-# is a Git change here, not a live patch.
+# Sized 2Gi -> 4Gi (2026-09-21), at 1.6Gi of the old 2Gi and climbing ~60Mi/day
+# — roughly a week from full. Two stores dominate: alerts/events.db (548MiB at
+# the time, unbounded because alert retention was set to never age out) and
+# metrics.db (361MB). Clearing the first is what ended that day's OOM loop; see
+# workbook/pulse.md. Longhorn expands online, so growth is a Git change here,
+# not a live patch.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

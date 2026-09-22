@@ -205,7 +205,7 @@ Two v6 behaviours to expect and not panic about:
   `pulse_agent_destination_delivery_up` *after* a full interval, not at t+30s.
 - **`kubectl top` shows the server at ~87Mi** right after boot; it climbs as
   SQLite warms. The limit is sized for the warm figure, not this — and since
-  2026-09-21 that limit is 2Gi, see [Sizing](#sizing--the-2026-09-21-oom-loop).
+  2026-09-21 that limit is 2Gi, see [the OOM loop](#the-2026-09-21-oom-loop--unbounded-alert-event-store).
 
 Restore points kept: `pulse-pre-v6-20260725` (rollback) and
 `pulse-post-v6-20260725` (current), both as Velero/B2 backups *and* Longhorn
@@ -326,41 +326,131 @@ small and it's the only version-portable copy of the target credentials.
 
 ---
 
-## Sizing — the 2026-09-21 OOM loop
+## The 2026-09-21 OOM loop — unbounded alert event store
 
-Pulse's working set is **Go heap plus the page cache behind `metrics.db`**, and
-a cgroup memory limit caps the two together. That makes the limit a *caching*
-decision, not just a heap ceiling — the same trap Prometheus hit at 2Gi.
+**Root cause: `/data/alerts/events.db` grew to 548MiB of live rows and the
+alert engine could not process it without allocating unboundedly.** Recovered
+by renaming the event store aside; Pulse recreates an empty one at startup.
 
-What happened: the target list changed on **2026-09-01** (`nodes.enc`, 3 PVE +
-2 PBS). From there `metrics.db` grew to **361MB**, `/data` to **1.6Gi of the
-2Gi PVC** (~60Mi/day), and the baseline working set went ~350Mi → ~650Mi. All
-day on 09-21 the server sawtoothed **450↔590Mi** — that sawtooth *is* the
-symptom: it was evicting DB pages and immediately re-reading them.
+### Why it grew
 
-An alert/notification save in the UI at **20:34 UTC** tipped it over. Four
-minutes later the working set pinned **1024Mi** and stayed there: readiness
-timing out, **3–4 CPU cores** spinning on cache misses, OOMKill every ~4min,
-**37 restarts**. The `pulse-agent` made it self-sustaining — it buffers up to
-**60 reports** while the server is down and re-floods all 60 at next startup.
+`alerts.json` carries **`maxAlertAgeDays: 0`, `maxAcknowledgedAgeDays: 0`,
+`autoAcknowledgeAfterHours: 0`** — all three mean *never age out*. Alert events
+had accumulated since the store was introduced. The SQLite header said 140,370
+pages with a **freelist of 2**, so it was live data, not vacuum-able bloat.
 
-Fixed by giving it room rather than shrinking the data: **limit 1Gi → 2Gi,
-PVC 2Gi → 4Gi**. Scale the agent to 0 first when recovering, so the server
-gets a quiet start before the buffer replays.
+### What tipped it
 
-Signals to watch:
+An alert/notification save in the UI at **2026-09-21 20:34:54 UTC**
+(`alerts.json` + `apprise.enc`, same second) forced the alert engine to re-read
+that history. Four minutes later the pod pinned its memory limit and never
+served again — 37 restarts before it was caught.
+
+### The signature, and how to recognise it again
+
+- Memory climbs at a **constant ~9Mi/s from a cold start** and never plateaus.
+- **Time-to-OOM scales linearly with the limit** — 3m46s at 1Gi, 7-9min at 2Gi.
+  That ratio is the tell: a cache-pressure problem does not behave that way, a
+  runaway allocation does.
+- CPU sits ~2.5 cores while climbing, then **explodes to 6-9.5 cores** once
+  memory pins the ceiling. That spike is the **Go GC death spiral**, not work —
+  the runtime collecting against a heap it cannot shrink. It also starves the
+  HTTP server, which is why readiness times out while the process is alive.
+- The event store is **not being written** during the climb (`events.db` and
+  its WAL are byte-identical) — it is being read. No SSH or process leak either.
+- It is **node-independent**. Tested on server-01 and server-03: identical curve.
+
+### Recovery
 
 ```sh
-# working set should sit ~650Mi and NOT sawtooth against the cap
-kubectl top pod -n pulse -l app.kubernetes.io/name=pulse
-# the number that drives the sizing
-kubectl exec -n pulse deploy/pulse -- sh -c 'ls -l /data/metrics.db; du -sh /data'
+# 1. stop Flux reverting the scale-down (apps reconciles every 10m)
+kubectl patch kustomization -n flux-system apps --type=merge -p '{"spec":{"suspend":true}}'
+kubectl scale deploy -n pulse pulse --replicas=0
+
+# 2. mount the PVC on its own (RWO — the server must be down first)
+#    busybox pod with claimName: pulse-data at /data, then:
+cd /data/alerts && for f in events.db events.db-wal events.db-shm; do
+  mv "$f" "$f.incident-$(date +%Y%m%d).bak"; done
+
+# 3. back up, and let Flux take over again
+kubectl scale deploy -n pulse pulse --replicas=1
+kubectl patch kustomization -n flux-system apps --type=merge -p '{"spec":{"suspend":false}}'
 ```
 
-Relapse = sustained CPU above ~1 core with the working set parked at the limit.
-If `metrics.db` passes ~1GB, cut `metricsRetentionDailyDays` (currently **90**,
-Settings → System) before raising the limit again — that setting lives in the
-PVC, not in Git.
+Everything else on the volume survives — targets, encrypted credentials,
+`metrics.db`, and the alert *config*. Only alert event **history** is lost, and
+the `.bak` files keep it on the PVC for forensics. Delete them once satisfied;
+they are ~548MiB and Velero will otherwise keep backing them up.
+
+**Set a non-zero `maxAlertAgeDays` afterwards** (Alerts → retention, in the UI —
+it lives in the PVC, not Git) or the new store rebuilds toward the same cliff.
+
+### What this was NOT
+
+Worth recording, because the first diagnosis was wrong and cost a merge:
+
+- **Not page-cache starvation.** The 1Gi → 2Gi bump in PR #118 did not fix it;
+  it only bought ~4 more minutes per cycle. `metrics.db` at 361MB had plenty of
+  room under 2Gi. The 450↔590Mi sawtooth on the day looked like cache eviction
+  but was ordinary behaviour.
+- **Not the SSH temperature collection** that floods the log at `logLevel: warn`.
+  `temperatureMonitoringEnabled` has been true since 2026-07-25 and connection
+  counts stay at 0 — the sessions are transient, not leaked.
+- **Not the notification queue.** `notification_queue.db` is 23MB and static.
+  (There *is* a real, separate problem there: 569 dead-lettered deliveries since
+  2026-08-29 mean a destination has been failing silently for weeks.)
+- **Not node memory.** See [server-01's stale kubelet capacity](#a-note-on-kubectl-top-nodes).
+- **Not the agent.** `pulse-agent` buffers 60 reports and re-floods them at
+  startup, which adds load to an already-failing server, but it does not cause
+  the runaway. Scaling it to 0 still gives a quieter recovery.
+
+### A note on `kubectl top nodes`
+
+While chasing this, `kubectl top nodes` showed **k3s-server-01 at 100% memory**.
+That is an artifact: kubelet caches machine info at startup and server-01 still
+advertises `15210032Ki` (14.5GiB) while `/proc/meminfo` on the box reads 22.4GiB
+with ~12GiB available, `MemoryPressure=False`. server-02 correctly reports
+`23497324Ki`. It needs a k3s restart to clear, and strands ~8GiB from the
+scheduler until then. There is no SSH from the workstation to the nodes — read
+host state through the node-exporter pod:
+
+```sh
+kubectl exec -n monitoring <node-exporter-pod> -- head -5 /host/proc/meminfo
+```
+
+### Sizing, as it now stands
+
+The limit is **2Gi** and the PVC **4Gi** (PR #118). Keep both: the PVC genuinely
+was about a week from full at ~60Mi/day, and 2Gi is fair headroom over the
+~650Mi warm baseline. Just do not mistake either for the fix.
+
+```sh
+# should settle a few hundred Mi and stay flat, not climb steadily
+kubectl top pod -n pulse -l app.kubernetes.io/name=pulse
+# the two stores that matter
+kubectl exec -n pulse deploy/pulse -- sh -c 'ls -l /data/metrics.db /data/alerts/events.db; du -sh /data'
+```
+
+**Known-good baselines**, measured from Prometheus over the 20 days before the
+incident — use these, not impressions:
+
+| | healthy | during the loop |
+|---|---|---|
+| CPU | **~1.1 cores**, flat to ±0.1 for 20 days | 2.5 climbing, 6-9.5 pinned |
+| memory | ~650Mi warm, oscillating | constant climb to the limit |
+| restarts | 0 | every 4-9min |
+
+Relapse = memory climbing steadily from a cold start, or CPU parked well above
+~1.1 cores once warm. Check `events.db` size first, `metrics.db` second.
+
+```promql
+sum(rate(container_cpu_usage_seconds_total{namespace="pulse",container="pulse"}[10m]))
+max(container_memory_working_set_bytes{namespace="pulse",container="pulse"})
+```
+
+Note that CPU stays elevated for some minutes after any restart — the startup
+retention DELETE, an `incremental_vacuum`, and the agent replaying its 60
+buffered reports all land at once. Judge it warm, not at t+2min.
 
 ## Troubleshooting
 
@@ -399,9 +489,12 @@ PVC, not in Git.
   (`delayBeforeChecks`); usually issues in 2–5 min. `kubectl -n pulse get
   challenge`.
 - **Server OOMKilled in a loop, readiness timing out, CPU pegged at 3+ cores**
-  — not a crash, a cache thrash: the page cache for `metrics.db` no longer fits
-  under the memory limit. See [Sizing](#sizing--the-2026-09-21-oom-loop). Don't
-  just bounce the pod; it comes straight back.
+  — the alert event store has outgrown what the alert engine can process.
+  Confirm with the two signatures: memory climbs at a constant rate from a cold
+  start, and time-to-OOM scales linearly with the memory limit. Then check
+  `ls -l /data/alerts/events.db`. See
+  [the OOM loop](#the-2026-09-21-oom-loop--unbounded-alert-event-store).
+  Raising the limit and bouncing the pod both only buy minutes.
 - **Server CrashLoop after image bump** — a new tag may have migrated `/data`.
   Roll the image back in `04-deployment.yaml`; restore the PVC from Velero
   `pulse-weekly` if `/data` was corrupted.
