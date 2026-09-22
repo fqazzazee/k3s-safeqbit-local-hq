@@ -19,7 +19,7 @@ spec:
   chart:
     spec:
       chart: velero
-      version: 12.1.0                      # check `helm list -n velero`
+      version: 12.2.0                      # check `helm list -n velero`
       sourceRef:
         kind: HelmRepository
         name: vmware-tanzu
