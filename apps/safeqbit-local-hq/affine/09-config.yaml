@@ -19,13 +19,26 @@
 # Ours is authentik at authentik01.local.safeqbit.com -> 10.10.13.50, so on
 # 0.27.4 the provider failed validation and unregistered itself: serverConfig
 # went from features ["Comment","OAuth"] to ["Comment"] with oauthProviders [],
-# which locked both users out of SSO (both have oidc connected accounts). The
-# guard is right in general and wrong for a LAN-only issuer, and this is the
-# opt-out upstream names in the error itself.
+# which locks both users out of SSO (both have oidc connected accounts).
+#
+# READ THIS BEFORE ASSUMING THE KEY BELOW IS WHAT FIXES IT. It is not, on its
+# own. The key and path are correct — 0.27.4's schema defines
+# oauth.providers.oidc.allowPrivateNetwork as a boolean, "Allow the OIDC issuer
+# origin to resolve to private network addresses" — but RUNTIME CONFIG WINS.
+# The admin UI stores the whole oauth.providers.oidc object as a row in the
+# app_configs table, and that row shadows this file at the same path. Verified
+# the hard way on 2026-09-22: this file was applied, the pod restarted, the new
+# config.json was confirmed present inside the container, and the provider
+# still unregistered with the same SSRF error.
+#
+# The effective fix is to set it as runtime config, in the admin UI alongside
+# the issuer and client credentials. This stays as the base-layer default so
+# the setting is right if that runtime row is ever cleared or restored from a
+# backup taken before it was added — but it is not load-bearing today.
 #
 # The rest of the OIDC provider config — issuer, clientId, clientSecret — is
-# deliberately NOT here. It is admin-UI state in the app_configs table, which
-# is where it belongs given it holds a client secret.
+# deliberately NOT here. It is admin-UI state in app_configs, which is where it
+# belongs given it holds a client secret.
 #
 # Mounted with subPath so it lands as a single file INSIDE the config PVC's
 # mount point rather than replacing it. That directory also holds private.key,
