@@ -19,3 +19,7 @@ resources:
   - longhorn.yaml
   - velero.yaml
   - cnpg.yaml
+  # A directory, not a file — 160K of upstream CRDs. Adopted into Git
+  # 2026-09-22; it had been hand-installed at cluster bootstrap and was the
+  # only controller here that a rebuild from this repo would not recreate.
+  - snapshot-controller
