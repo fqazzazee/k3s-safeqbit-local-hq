@@ -26,6 +26,11 @@ spec:
         namespace: flux-system
       interval: 1h
   releaseName: metallb
+  # The speaker DaemonSet rolls one node at a time and Flux's default wait is
+  # 5m, which the failed frr-removal attempt above proved is not generous
+  # enough to absorb a stalled roll. A longer wait costs nothing when the
+  # upgrade is healthy and avoids a rollback that lands worse than the failure.
+  timeout: 15m
   install:
     remediation:
       retries: 3
@@ -36,29 +41,42 @@ spec:
     crds: CreateReplace
   values:
     # This cluster is pure L2 — one L2Advertisement, zero BGPPeers and zero
-    # BGPAdvertisements — so it needs no BGP backend at all. Both of these are
-    # pinned rather than left to the chart, because 0.16.0 moved the default
-    # from one unused BGP backend to a different unused BGP backend:
+    # BGPAdvertisements — so it needs no BGP backend at all.
     #
-    #                        0.15.3   0.16.1 default   here
-    #   speaker.frr.enabled   true        false        false
-    #   frrk8s.enabled        false       true         false
-    #
-    # Left at 0.16.1's defaults this upgrade would have dropped the three idle
-    # FRR sidecars (frr, reloader, frr-metrics) off every speaker pod and then
-    # deployed a whole frr-k8s DaemonSet, controller and webhook in their
-    # place. Same amount of unused machinery, differently spelled. Turning both
-    # off instead leaves the speaker as a single container.
-    #
-    # Set frrk8s.enabled back to true ONLY if this cluster ever speaks BGP;
-    # FRR mode is deprecated upstream as of 0.16.0, so frr-k8s is the way
-    # forward if that day comes. The subchart is vendored inside the metallb
-    # tarball, so enabling it needs no extra HelmRepository.
-    speaker:
-      frr:
-        enabled: false
+    # frrk8s stays OFF. 0.16.0 made it the default (it was false in 0.15.3),
+    # which would deploy an frr-k8s DaemonSet, controller and webhook on all
+    # three nodes for a protocol this cluster does not speak.
     frrk8s:
       enabled: false
+
+    # speaker.frr stays ON, and this is a deliberate step backwards from the
+    # first attempt at this upgrade.
+    #
+    # 0.16.0 flips this default from true to false, which is the end state we
+    # want — it drops three idle sidecars (frr, reloader, frr-metrics) from
+    # every speaker pod. But taking it in the SAME release as the version bump
+    # failed, repeatedly, and the failure is worth recording because it is not
+    # obvious:
+    #
+    # Turning frr off stops the chart rendering the metallb-frr-startup
+    # ConfigMap. The speaker DaemonSet rolls node by node with
+    # maxUnavailable: 1, so for the length of that roll there are still
+    # old-spec pods that mount that ConfigMap. Any one of them created in that
+    # window wedges in Init with `configmap "metallb-frr-startup" not found`,
+    # which consumes the rollout budget, which stalls the roll, which
+    # outruns Helm's 5m wait. Flux then rolls back to 0.15.3 — restoring a
+    # DaemonSet that needs the ConfigMap, before the ConfigMap comes back —
+    # and the next retry starts from a worse position. Three retries, no
+    # progress, speakers churning the whole time.
+    #
+    # So: bump the version here with the pod shape unchanged, and remove the
+    # sidecars in a separate change once this is settled. Pinning it to true
+    # rather than leaving it out is what keeps 0.16.0's new default from
+    # applying the shape change silently as part of the version bump.
+    speaker:
+      frr:
+        enabled: true
+
     controller:
       affinity:
         podAntiAffinity:
