@@ -174,10 +174,23 @@ spec:
                   storage: 40Gi
     grafana:
       enabled: true
-      # kube-prometheus-stack 84.5.0 pins grafana 13.0.1; 13.1.0 is a minor
-      # on the same major. Drop this override on the next stack chart bump.
-      image:
-        tag: "13.1.0"
+      # No image override. This carried tag "13.1.0" from when the stack was on
+      # 84.5.0, which pinned grafana 13.0.1 — the override existed to move us
+      # forward a minor. Chart 91.4.1 ships grafana appVersion 13.2.2, so the
+      # pin had inverted and was holding us back; its own comment said to drop
+      # it on the next stack bump, and #130 was that bump.
+      #
+      # Inheriting the chart default also changes the image VARIANT, not just
+      # the version: the subchart default is `{{ .Chart.AppVersion }}-distroless`,
+      # so grafana now runs 13.2.2-distroless. Checked before accepting that —
+      # nothing here needs a shell in the grafana container. No plugins, no
+      # downloadDashboards, no custom command, lifecycle or env; the probes are
+      # httpGet rather than exec; and the one init container, init-chown-data,
+      # runs from busybox rather than the grafana image.
+      #
+      # Practical consequence, same as Prometheus since chart 85: `kubectl exec`
+      # into the grafana container for a shell will no longer work. Use the
+      # k8s-sidecar containers in the same pod if you need one.
       persistence:
         enabled: true
         storageClassName: nfs-truenas
