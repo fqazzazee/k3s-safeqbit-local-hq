@@ -19,7 +19,7 @@ spec:
   chart:
     spec:
       chart: metallb
-      version: 0.15.3                     # check `helm list -n metallb-system`
+      version: 0.16.1                     # check `helm list -n metallb-system`
       sourceRef:
         kind: HelmRepository
         name: metallb
@@ -35,6 +35,30 @@ spec:
       retries: 3
     crds: CreateReplace
   values:
+    # This cluster is pure L2 — one L2Advertisement, zero BGPPeers and zero
+    # BGPAdvertisements — so it needs no BGP backend at all. Both of these are
+    # pinned rather than left to the chart, because 0.16.0 moved the default
+    # from one unused BGP backend to a different unused BGP backend:
+    #
+    #                        0.15.3   0.16.1 default   here
+    #   speaker.frr.enabled   true        false        false
+    #   frrk8s.enabled        false       true         false
+    #
+    # Left at 0.16.1's defaults this upgrade would have dropped the three idle
+    # FRR sidecars (frr, reloader, frr-metrics) off every speaker pod and then
+    # deployed a whole frr-k8s DaemonSet, controller and webhook in their
+    # place. Same amount of unused machinery, differently spelled. Turning both
+    # off instead leaves the speaker as a single container.
+    #
+    # Set frrk8s.enabled back to true ONLY if this cluster ever speaks BGP;
+    # FRR mode is deprecated upstream as of 0.16.0, so frr-k8s is the way
+    # forward if that day comes. The subchart is vendored inside the metallb
+    # tarball, so enabling it needs no extra HelmRepository.
+    speaker:
+      frr:
+        enabled: false
+    frrk8s:
+      enabled: false
     controller:
       affinity:
         podAntiAffinity:
