@@ -1,0 +1,46 @@
+# apps/safeqbit-local-hq/netbox/03-cnpg-database.yaml
+# Declares the `ltree` extension on the netbox database.
+#
+# WHY THIS EXISTS: NetBox v4.7 migrates every hierarchical model off
+# django-mptt and onto PostgreSQL's ltree type (Region, SiteGroup, Location,
+# DeviceRole, Platform, TenantGroup, ContactGroup, WirelessLANGroup, ModuleBay,
+# InventoryItem, InventoryItemTemplate). Without the extension the v4.7
+# migration cannot run.
+#
+# WHY IT COULD NOT JUST HAPPEN: `ltree` is available in the CNPG image
+# (pg_available_extensions reports 1.3) but it is NOT a trusted extension, so
+# `CREATE EXTENSION ltree` needs superuser. The `netbox` role that NetBox
+# connects as is not a superuser — only `postgres` is — so the Django migration
+# would fail no matter how the app was configured. The extension has to be
+# created out of band, before the upgrade.
+#
+# WHY DECLARATIVELY AND NOT `kubectl exec ... psql`: a hand-run CREATE
+# EXTENSION is invisible to Git and would not survive a rebuild of this cluster
+# from the repo. CNPG 1.30 manages extensions through this CRD, so the
+# requirement lives with the manifests that need it.
+#
+# ADOPTION IS SAFE: the netbox database already exists. CNPG issues CREATE
+# DATABASE only for databases it does not find and ALTER DATABASE for ones it
+# does, so this adopts rather than recreates. Every field below was read back
+# off the live database first (owner netbox, UTF8, C/C) and matches the
+# Cluster's own bootstrap.initdb stanza, so there is nothing for the ALTER to
+# change.
+#
+# databaseReclaimPolicy: retain — deleting this resource must never drop the
+# NetBox database. `delete` is the other option and it means exactly what it
+# says. Do not change it.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: netbox
+  namespace: netbox
+spec:
+  cluster:
+    name: netbox-cnpg
+  name: netbox
+  owner: netbox
+  ensure: present
+  databaseReclaimPolicy: retain
+  extensions:
+    - name: ltree
+      ensure: present
