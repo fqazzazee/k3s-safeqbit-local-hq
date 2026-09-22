@@ -19,7 +19,29 @@ spec:
   chart:
     spec:
       chart: kube-prometheus-stack
-      version: 84.5.0                     # check `helm list -n monitoring`
+      # 91.4.1 = prometheus-operator v0.94.0. Seven majors in one jump; every
+      # documented break was checked against this deployment before taking it,
+      # and the notes live in the PR rather than here because none of them
+      # needed a values change:
+      #
+      #   84->85  distroless image variants became the default. The known trap
+      #           is listenLocal: true, whose probes shell out to sh/curl that
+      #           distroless does not ship — we leave listenLocal at the chart
+      #           default of false, so it does not apply.
+      #   85->88  CRD updates only (operator v0.91 -> v0.93).
+      #   88->89  Grafana subchart v13. We pin grafana.image.tag and already
+      #           run Grafana 13.1.0, so the subchart caught up to us.
+      #   89->90  control-plane ServiceMonitor auth refactor. kubeProxy,
+      #           kubeScheduler and kubeControllerManager are all disabled
+      #           here, and prometheus.serviceAccount.createTokenSecret
+      #           defaults to true, so the new token Secret appears on its own.
+      #   90->91  operator v0.94.0, wildcard verbs dropped from its ClusterRole.
+      #
+      # CRDs are handled by `crds: CreateReplace` below, which is proven in
+      # this cluster rather than assumed: the live CRDs carry
+      # operator.prometheus.io/version 0.90.1, exactly matching the 84.5.0
+      # appVersion, so Flux has been keeping them in step already.
+      version: 91.4.1                     # check `helm list -n monitoring`
       sourceRef:
         kind: HelmRepository
         name: prometheus-community
