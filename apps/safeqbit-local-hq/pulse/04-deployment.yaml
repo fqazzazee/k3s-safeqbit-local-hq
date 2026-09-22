@@ -89,16 +89,23 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 5
-          # v5.1.36 sat at ~392Mi against the old 512Mi cap — a ~120Mi margin
-          # for a process that keeps SQLite (metrics.db, notification_queue.db)
-          # hot. v6 adds Patrol, the action lifecycle, and audit stores on top,
-          # so the old ceiling was one feature away from an OOMKill.
+          # The working set is Go heap PLUS the page cache behind a 361MB
+          # metrics.db, and the cgroup limit caps both together. At 1Gi that
+          # left no room to cache the DB: Pulse sawtoothed 450<->590Mi
+          # reclaiming pages it immediately re-read, then pinned the ceiling
+          # and OOMKilled every ~4min (2026-09-21, 37 restarts). Same failure
+          # as Prometheus at 2Gi — starve the cache and it thrashes the disk.
+          # 2Gi keeps the whole DB cacheable with headroom above the ~650Mi
+          # baseline. Watch for a relapse if metrics.db passes ~1GB.
+          #
+          # No CPU limit on purpose: when this thrashes it wants 3+ cores, and
+          # throttling it there only makes the recovery slower.
           resources:
             requests:
               cpu: 50m
               memory: 256Mi
             limits:
-              memory: 1Gi
+              memory: 2Gi
       volumes:
         - name: data
           persistentVolumeClaim:

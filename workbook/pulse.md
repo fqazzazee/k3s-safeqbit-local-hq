@@ -11,7 +11,7 @@ Server added 2026-06-29. k3s agent added 2026-06-30.
 - **Manifests:** `apps/safeqbit-local-hq/pulse/`
 - **Image:** `rcourtman/pulse:v6.4.1` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
 - **Server port:** `7655` (ClusterIP `pulse`, in-cluster DNS `pulse.pulse.svc.cluster.local:7655`)
-- **Storage:** `pulse-data` 2Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
+- **Storage:** `pulse-data` 4Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
 - **Web-UI auth:** built-in, `PULSE_AUTH_USER` / `PULSE_AUTH_PASS` from SealedSecret `pulse-auth` (`03-sealed-secret.yaml`). Plaintext pass auto-hashed on startup → auth enforced from first boot, no open window. Admin password stored in Vaultwarden.
 - **Backup:** `infrastructure/.../velero-schedule-pulse.yaml` — weekly to B2, Sundays 05:00 UTC, 60d retention (tuned down from 180d, 2026-07-03).
 
@@ -204,7 +204,8 @@ Two v6 behaviours to expect and not panic about:
   together — it buffers and recovers on the next 30s cycle. Read
   `pulse_agent_destination_delivery_up` *after* a full interval, not at t+30s.
 - **`kubectl top` shows the server at ~87Mi** right after boot; it climbs as
-  SQLite warms. The 1Gi limit is sized for the warm figure (~400Mi+), not this.
+  SQLite warms. The limit is sized for the warm figure, not this — and since
+  2026-09-21 that limit is 2Gi, see [Sizing](#sizing--the-2026-09-21-oom-loop).
 
 Restore points kept: `pulse-pre-v6-20260725` (rollback) and
 `pulse-post-v6-20260725` (current), both as Velero/B2 backups *and* Longhorn
@@ -325,6 +326,42 @@ small and it's the only version-portable copy of the target credentials.
 
 ---
 
+## Sizing — the 2026-09-21 OOM loop
+
+Pulse's working set is **Go heap plus the page cache behind `metrics.db`**, and
+a cgroup memory limit caps the two together. That makes the limit a *caching*
+decision, not just a heap ceiling — the same trap Prometheus hit at 2Gi.
+
+What happened: the target list changed on **2026-09-01** (`nodes.enc`, 3 PVE +
+2 PBS). From there `metrics.db` grew to **361MB**, `/data` to **1.6Gi of the
+2Gi PVC** (~60Mi/day), and the baseline working set went ~350Mi → ~650Mi. All
+day on 09-21 the server sawtoothed **450↔590Mi** — that sawtooth *is* the
+symptom: it was evicting DB pages and immediately re-reading them.
+
+An alert/notification save in the UI at **20:34 UTC** tipped it over. Four
+minutes later the working set pinned **1024Mi** and stayed there: readiness
+timing out, **3–4 CPU cores** spinning on cache misses, OOMKill every ~4min,
+**37 restarts**. The `pulse-agent` made it self-sustaining — it buffers up to
+**60 reports** while the server is down and re-floods all 60 at next startup.
+
+Fixed by giving it room rather than shrinking the data: **limit 1Gi → 2Gi,
+PVC 2Gi → 4Gi**. Scale the agent to 0 first when recovering, so the server
+gets a quiet start before the buffer replays.
+
+Signals to watch:
+
+```sh
+# working set should sit ~650Mi and NOT sawtooth against the cap
+kubectl top pod -n pulse -l app.kubernetes.io/name=pulse
+# the number that drives the sizing
+kubectl exec -n pulse deploy/pulse -- sh -c 'ls -l /data/metrics.db; du -sh /data'
+```
+
+Relapse = sustained CPU above ~1 core with the working set parked at the limit.
+If `metrics.db` passes ~1GB, cut `metricsRetentionDailyDays` (currently **90**,
+Settings → System) before raising the limit again — that setting lives in the
+PVC, not in Git.
+
 ## Troubleshooting
 
 - **Agent flaps online/offline on the dashboard** — more than one pod is
@@ -361,6 +398,10 @@ small and it's the only version-portable copy of the target credentials.
 - **Cert `pulse-tls` stuck `READY=False`** — DNS-01 challenge in progress
   (`delayBeforeChecks`); usually issues in 2–5 min. `kubectl -n pulse get
   challenge`.
+- **Server OOMKilled in a loop, readiness timing out, CPU pegged at 3+ cores**
+  — not a crash, a cache thrash: the page cache for `metrics.db` no longer fits
+  under the memory limit. See [Sizing](#sizing--the-2026-09-21-oom-loop). Don't
+  just bounce the pod; it comes straight back.
 - **Server CrashLoop after image bump** — a new tag may have migrated `/data`.
   Roll the image back in `04-deployment.yaml`; restore the PVC from Velero
   `pulse-weekly` if `/data` was corrupted.

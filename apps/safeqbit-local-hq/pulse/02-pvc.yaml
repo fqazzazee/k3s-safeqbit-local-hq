@@ -1,5 +1,5 @@
 # 02-pvc.yaml
-# pulse-data (2Gi RWO) → /data
+# pulse-data (4Gi RWO) → /data
 #
 # This single volume holds EVERYTHING that defines this monitoring stack:
 # Pulse's config, the *encrypted* target credentials (Proxmox API tokens, Docker
@@ -13,8 +13,10 @@
 # the pod dies, Longhorn re-attaches the replicated volume on a surviving node
 # and the rescheduled pod resumes with zero data loss.
 #
-# Expandable: kubectl patch pvc pulse-data -n pulse \
-#   -p '{"spec":{"resources":{"requests":{"storage":"4Gi"}}}}'
+# Sized 2Gi -> 4Gi (2026-09-21). metrics.db alone reached 361MB and the whole
+# volume 1.6Gi of the old 2Gi, climbing ~60Mi/day since the target list changed
+# on 2026-09-01 — roughly a week from full. Longhorn expands online, so growth
+# is a Git change here, not a live patch.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -29,4 +31,4 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 2Gi
+      storage: 4Gi
