@@ -72,8 +72,26 @@ data:
           caServer: "https://acme-v02.api.letsencrypt.org/directory"
 
     entryPoints:
+      # aliasHeadersStrategy — set on BOTH entrypoints. Traefik v3.7.13 added
+      # this option alongside that release's header advisories, but defaults it
+      # to `keep` for backwards compatibility: the upgrade alone does not close
+      # the hole, and Traefik warns about the unset value once per entrypoint
+      # at every startup.
+      #
+      # A header whose name aliases another (X_Auth_User or X.Auth.User for
+      # X-Auth-User) is read AS the header it aliases by any backend that
+      # derives variable names from header names — CGI, WSGI, PHP, nginx. On
+      # this path that means a client could forge the headers badger sets to
+      # carry identity, against published resources that can be any backend.
+      #
+      # `delete` rather than `reject`: delete strips the aliasing header and
+      # serves the request, reject answers 400. nginx has dropped underscore
+      # headers by default for years, so delete is what clients already expect
+      # and it cannot turn a working resource into a hard failure.
       web:
         address: ":80"
+        http:
+          aliasHeadersStrategy: delete
       websecure:
         address: ":443"
         transport:
@@ -82,6 +100,7 @@ data:
         http3:
           advertisedPort: 443
         http:
+          aliasHeadersStrategy: delete
           tls:
             certResolver: "letsencrypt"
             # THE certificate. Traefik requests this at startup — one DNS-01
