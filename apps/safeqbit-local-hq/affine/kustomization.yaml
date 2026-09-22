@@ -10,3 +10,4 @@ resources:
   - 06-redis.yaml
   - 07-affine.yaml
   - 08-ingress.yaml
+  - 09-config.yaml

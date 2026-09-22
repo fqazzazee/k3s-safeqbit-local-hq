@@ -1,0 +1,32 @@
+# apps/safeqbit-local-hq/affine/09-config.yaml
+# AFFiNE's config.json, which 0.27 made the preferred configuration source.
+#
+# Only ONE setting had to move here. Upstream's own 0.27.4 compose still sets
+# DATABASE_URL, REDIS_SERVER_HOST and AFFINE_INDEXER_ENABLED as environment
+# variables, and the config schema still annotates server.https with
+# `@environment AFFINE_SERVER_HTTPS`, so those all stay in the Deployment.
+# server.externalUrl is the exception: it has no @environment annotation, so
+# AFFINE_SERVER_EXTERNAL_URL is genuinely no longer read and this is the only
+# place the value can now live.
+#
+# It matters more than it looks. externalUrl is what AFFiNE generates outbound
+# links against — invite emails, OAuth callbacks, share links. Wrong or empty,
+# the app still starts and mostly works, and the breakage shows up later and
+# somewhere else.
+#
+# Mounted with subPath so it lands as a single file INSIDE the config PVC's
+# mount point rather than replacing it. That directory also holds private.key,
+# the server's generated identity, which must survive — mounting the ConfigMap
+# at the directory would hide it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: affine-config
+  namespace: affine
+data:
+  config.json: |
+    {
+      "server": {
+        "externalUrl": "https://affine.local.safeqbit.com"
+      }
+    }
