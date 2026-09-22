@@ -89,17 +89,23 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 5
-          # The working set is Go heap PLUS the page cache behind a 361MB
-          # metrics.db, and the cgroup limit caps both together. At 1Gi that
-          # left no room to cache the DB: Pulse sawtoothed 450<->590Mi
-          # reclaiming pages it immediately re-read, then pinned the ceiling
-          # and OOMKilled every ~4min (2026-09-21, 37 restarts). Same failure
-          # as Prometheus at 2Gi — starve the cache and it thrashes the disk.
-          # 2Gi keeps the whole DB cacheable with headroom above the ~650Mi
-          # baseline. Watch for a relapse if metrics.db passes ~1GB.
+          # 2Gi is headroom over the ~650Mi warm baseline, nothing cleverer.
           #
-          # No CPU limit on purpose: when this thrashes it wants 3+ cores, and
-          # throttling it there only makes the recovery slower.
+          # It is NOT what fixed the 2026-09-21 OOM loop, despite what this
+          # comment said when the bump landed. That was an unbounded alert
+          # event store (/data/alerts/events.db, 548MiB of live rows, never
+          # aged out) which the alert engine could not process without
+          # allocating without limit. Raising the limit only stretched each
+          # crash cycle from ~4min to ~9min; the fix was moving events.db
+          # aside. Full write-up in workbook/pulse.md.
+          #
+          # So: if Pulse OOMs again, do not reach for this number first. Memory
+          # climbing at a constant rate from a cold start, with time-to-OOM
+          # scaling linearly against the limit, means a runaway — check
+          # /data/alerts/events.db and metrics.db before touching this.
+          #
+          # No CPU limit on purpose: a healthy Pulse still wants >1 core to
+          # poll, and throttling a sick one only slows the recovery.
           resources:
             requests:
               cpu: 50m
