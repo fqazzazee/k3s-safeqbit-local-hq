@@ -10,7 +10,7 @@ spec:
       chart: authentik
       # Upgrades MUST step through each authentik release sequentially
       # (e.g. 2025.10 -> 2026.2 -> 2026.5); never skip a release when bumping.
-      version: 2026.5.5
+      version: 2026.5.6
       sourceRef:
         kind: HelmRepository
         name: authentik
