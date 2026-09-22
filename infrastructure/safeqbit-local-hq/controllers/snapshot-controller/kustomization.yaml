@@ -1,0 +1,22 @@
+# infrastructure/safeqbit-local-hq/controllers/snapshot-controller/kustomization.yaml
+# A directory rather than a single flat file like the other controllers,
+# because this one is 160K of upstream CRDs that must stay byte-for-byte
+# re-fetchable. Splitting them out keeps the diff of a version bump readable.
+#
+# PROVENANCE — everything here comes from
+# https://github.com/kubernetes-csi/external-snapshotter at tag v8.6.0:
+#   00/01  client/config/crd/*.yaml
+#   02     deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml
+#   03     deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
+#          (image pinned and resources added — see its header)
+#
+# To upgrade: re-fetch all four at the new tag, re-apply the two deviations in
+# 03, and read the release notes for CRD API version changes before merging.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-crds-snapshot.yaml
+  - 01-crds-groupsnapshot.yaml
+  - 02-rbac.yaml
+  - 03-deployment.yaml
