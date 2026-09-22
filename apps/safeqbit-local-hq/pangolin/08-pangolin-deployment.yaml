@@ -47,7 +47,7 @@ spec:
             value: "1"
       containers:
         - name: pangolin
-          image: docker.io/fosrl/pangolin:ee-postgresql-1.21.1
+          image: docker.io/fosrl/pangolin:ee-postgresql-1.23.0
           env:
             # CNPG generates this Secret when the Cluster is bootstrapped; `uri`
             # is a ready-made postgresql:// DSN pointing at pangolin-cnpg-rw.
