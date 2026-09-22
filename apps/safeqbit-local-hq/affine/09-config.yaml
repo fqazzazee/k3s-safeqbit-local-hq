@@ -14,6 +14,19 @@
 # the app still starts and mostly works, and the breakage shows up later and
 # somewhere else.
 #
+# oauth.providers.oidc.allowPrivateNetwork exists because 0.27 added an SSRF
+# guard that refuses to fetch an OIDC issuer resolving to a private address.
+# Ours is authentik at authentik01.local.safeqbit.com -> 10.10.13.50, so on
+# 0.27.4 the provider failed validation and unregistered itself: serverConfig
+# went from features ["Comment","OAuth"] to ["Comment"] with oauthProviders [],
+# which locked both users out of SSO (both have oidc connected accounts). The
+# guard is right in general and wrong for a LAN-only issuer, and this is the
+# opt-out upstream names in the error itself.
+#
+# The rest of the OIDC provider config — issuer, clientId, clientSecret — is
+# deliberately NOT here. It is admin-UI state in the app_configs table, which
+# is where it belongs given it holds a client secret.
+#
 # Mounted with subPath so it lands as a single file INSIDE the config PVC's
 # mount point rather than replacing it. That directory also holds private.key,
 # the server's generated identity, which must survive — mounting the ConfigMap
@@ -28,5 +41,12 @@ data:
     {
       "server": {
         "externalUrl": "https://affine.local.safeqbit.com"
+      },
+      "oauth": {
+        "providers": {
+          "oidc": {
+            "allowPrivateNetwork": true
+          }
+        }
       }
     }
