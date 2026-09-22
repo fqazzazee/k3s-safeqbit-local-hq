@@ -70,7 +70,7 @@ spec:
             - pg.local.safeqbit.com           # WireGuard endpoint
       containers:
         - name: newt
-          image: docker.io/fosrl/newt:1.15.0
+          image: docker.io/fosrl/newt:1.17.0
           env:
             # Resolves via hostAliases to the edge ClusterIP, where Traefik
             # serves the wildcard certificate — which covers this name, so TLS

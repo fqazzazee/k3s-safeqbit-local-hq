@@ -13,7 +13,18 @@
 # every router, the pp-transport serversTransports — is upstream verbatim.
 #
 # Badger version tracks Pangolin's installer, which always builds against the
-# LATEST badger tag. Bump it when you bump Pangolin.
+# LATEST badger tag. Bump it when you bump Pangolin. Confirmed 2026-09-22 in
+# install/Makefile, which literally resolves each pin at build time with
+# `curl .../repos/fosrl/<component>/tags | jq -r '.[0].name'` — so "what the
+# installer would have given you" is the newest tag on the day you look, not a
+# version pinned in a compatibility table. There is no such table upstream.
+#
+# This is why badger jumps to v1.7.0 rather than the v1.6.0 the 1.22.0 release
+# notes mention: v1.6.0 is the MINIMUM for the AI gateway feature, not the
+# version Pangolin 1.23.0 ships against.
+#
+# Traefik is not in that set — the installer pins the floating `traefik:v3.7`,
+# so our exact v3.7.x patch is ours to choose and does not move with Pangolin.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -39,7 +50,7 @@ data:
       plugins:
         badger:
           moduleName: "github.com/fosrl/badger"
-          version: "v1.5.0"
+          version: "v1.7.0"
 
     log:
       level: "INFO"

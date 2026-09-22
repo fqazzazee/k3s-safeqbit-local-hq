@@ -72,7 +72,7 @@ spec:
       containers:
         # ---------------------------------------------------------------- gerbil
         - name: gerbil
-          image: docker.io/fosrl/gerbil:1.4.3
+          image: docker.io/fosrl/gerbil:1.5.2
           args:
             # What Gerbil tells Pangolin its own API is reachable at. Pangolin
             # calls this URL to push peer config, so it must be the ClusterIP
