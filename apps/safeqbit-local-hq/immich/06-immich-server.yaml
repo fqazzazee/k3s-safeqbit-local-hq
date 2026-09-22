@@ -46,7 +46,7 @@ spec:
         - name: immich-server
           # Pinned deliberately — never use the floating :release tag (it jumps
           # majors on pod reschedule). Bump server + ML together.
-          image: ghcr.io/immich-app/immich-server:v3.0.3
+          image: ghcr.io/immich-app/immich-server:v3.2.2
           ports:
             - containerPort: 2283
           env:
