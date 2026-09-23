@@ -104,13 +104,16 @@ kubectl -n pulse logs deploy/pulse-agent --tail=20
 Target config lives only in the `pulse-data` PVC → it's covered by the weekly
 Velero backup. Nothing about targets is in Git.
 
-Two UI-only settings are **load-bearing** and must survive any reconfigure or
+Three UI-only settings are **load-bearing** and must survive any reconfigure or
 restore. See [the 2026-09-23 CPU burn](#the-2026-09-23-cpu-burn--rolling-cpu-evaluation-window):
 
 - **Alerts → CPU evaluation window = "Current value"** (`alerts.json`:
   `metricEvaluationWindows: {all: {cpu: 0}}`). The 5-minute rolling window costs
   ~3 cores on v6.4.1. Set it to `0` explicitly; if the key is missing, Pulse
   falls back to the 300s default.
+- **Alert retention `maxAlertAgeDays: 30`**. At `0`, alert events never age
+  out, which is what grew `events.db` into the
+  [09-21 OOM loop](#the-2026-09-21-oom-loop--unbounded-alert-event-store).
 - **The Discord webhook's custom template escapes every value**:
   `{{.Message | jsonString}}`, and the same for `.ResourceName`, `.Node` and
   `.Level`. Without the escape, any alert text containing a `"` renders invalid
@@ -397,6 +400,10 @@ incident's `.bak` files were deleted on 2026-09-23.)
 
 **Set a non-zero `maxAlertAgeDays` afterwards** (Alerts → retention, in the UI —
 it lives in the PVC, not Git) or the new store rebuilds toward the same cliff.
+**Done 2026-09-23: `maxAlertAgeDays: 30`**, set via `PUT /api/alerts/config`
+with no restart. `maxAcknowledgedAgeDays` and `autoAcknowledgeAfterHours` are
+still `0`, a deliberate choice for now. Treat 30 like the CPU window: a
+load-bearing UI setting that must survive any restore or reconfigure.
 
 ### What this was NOT
 
