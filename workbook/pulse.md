@@ -104,6 +104,18 @@ kubectl -n pulse logs deploy/pulse-agent --tail=20
 Target config lives only in the `pulse-data` PVC → it's covered by the weekly
 Velero backup. Nothing about targets is in Git.
 
+Two UI-only settings are **load-bearing** and must survive any reconfigure or
+restore. See [the 2026-09-23 CPU burn](#the-2026-09-23-cpu-burn--rolling-cpu-evaluation-window):
+
+- **Alerts → CPU evaluation window = "Current value"** (`alerts.json`:
+  `metricEvaluationWindows: {all: {cpu: 0}}`). The 5-minute rolling window costs
+  ~3 cores on v6.4.1. Set it to `0` explicitly; if the key is missing, Pulse
+  falls back to the 300s default.
+- **The Discord webhook's custom template escapes every value**:
+  `{{.Message | jsonString}}`, and the same for `.ResourceName`, `.Node` and
+  `.Level`. Without the escape, any alert text containing a `"` renders invalid
+  JSON and dead-letters.
+
 ---
 
 ## Version history
@@ -380,7 +392,8 @@ kubectl patch kustomization -n flux-system apps --type=merge -p '{"spec":{"suspe
 Everything else on the volume survives — targets, encrypted credentials,
 `metrics.db`, and the alert *config*. Only alert event **history** is lost, and
 the `.bak` files keep it on the PVC for forensics. Delete them once satisfied;
-they are ~548MiB and Velero will otherwise keep backing them up.
+they are ~548MiB and Velero will otherwise keep backing them up. (This
+incident's `.bak` files were deleted on 2026-09-23.)
 
 **Set a non-zero `maxAlertAgeDays` afterwards** (Alerts → retention, in the UI —
 it lives in the PVC, not Git) or the new store rebuilds toward the same cliff.
@@ -397,8 +410,9 @@ Worth recording, because the first diagnosis was wrong and cost a merge:
   `temperatureMonitoringEnabled` has been true since 2026-07-25 and connection
   counts stay at 0 — the sessions are transient, not leaked.
 - **Not the notification queue.** `notification_queue.db` is 23MB and static.
-  (There *is* a real, separate problem there: 569 dead-lettered deliveries since
-  2026-08-29 mean a destination has been failing silently for weeks.)
+  (There *was* a real, separate problem there: dead-lettered Discord deliveries
+  since 2026-08-29. Fixed 2026-09-23, see
+  [below](#notification-dead-letters--the-discord-template).)
 - **Not node memory.** See [server-01's stale kubelet capacity](#a-note-on-kubectl-top-nodes).
 - **Not the agent.** `pulse-agent` buffers 60 reports and re-floods them at
   startup, which adds load to an already-failing server, but it does not cause
@@ -421,8 +435,8 @@ kubectl exec -n monitoring <node-exporter-pod> -- head -5 /host/proc/meminfo
 ### Sizing, as it now stands
 
 The limit is **2Gi** and the PVC **4Gi** (PR #118). Keep both: the PVC genuinely
-was about a week from full at ~60Mi/day, and 2Gi is fair headroom over the
-~650Mi warm baseline. Just do not mistake either for the fix.
+was about a week from full at ~60Mi/day, and 2Gi leaves plenty of headroom over
+the warm baseline. Just do not mistake either for the fix.
 
 ```sh
 # should settle a few hundred Mi and stay flat, not climb steadily
@@ -431,17 +445,25 @@ kubectl top pod -n pulse -l app.kubernetes.io/name=pulse
 kubectl exec -n pulse deploy/pulse -- sh -c 'ls -l /data/metrics.db /data/alerts/events.db; du -sh /data'
 ```
 
-**Known-good baselines**, measured from Prometheus over the 20 days before the
-incident — use these, not impressions:
+**Known-good baselines**, measured from Prometheus. Use these, not impressions:
 
-| | healthy | during the loop |
-|---|---|---|
-| CPU | **~1.1 cores**, flat to ±0.1 for 20 days | 2.5 climbing, 6-9.5 pinned |
-| memory | ~650Mi warm, oscillating | constant climb to the limit |
-| restarts | 0 | every 4-9min |
+| | healthy (since 2026-09-23) | Aug 29 – Sep 21 | during the 09-21 loop | 09-23 CPU burn |
+|---|---|---|---|---|
+| CPU | **~0.25 cores** | ~1.1 cores, flat ±0.1 | 2.5 climbing, 6-9.5 pinned | ~3.1 cores, flat |
+| memory | **~300Mi** warm | ~650Mi warm | constant climb to the limit | ~400Mi, flat |
+| restarts | 0 | 0 | every 4-9min | rare OOM |
+
+The 0.25-core figure was measured with the CPU evaluation window off, a fresh
+`audit.db` and a 20MB `events.db`. Nobody knows what the window was set to
+during the ~1.1-core weeks, so don't treat that number as the target.
 
 Relapse = memory climbing steadily from a cold start, or CPU parked well above
-~1.1 cores once warm. Check `events.db` size first, `metrics.db` second.
+~0.3 cores once warm. Check in this order:
+1. The CPU evaluation window is still `0`.
+2. `events.db` size.
+3. `metrics.db` size.
+
+For anything else, take a CPU profile ([how](#profiling-pulse)) before guessing.
 
 ```promql
 sum(rate(container_cpu_usage_seconds_total{namespace="pulse",container="pulse"}[10m]))
@@ -452,7 +474,102 @@ Note that CPU stays elevated for some minutes after any restart — the startup
 retention DELETE, an `incremental_vacuum`, and the agent replaying its 60
 buffered reports all land at once. Judge it warm, not at t+2min.
 
+---
+
+## The 2026-09-23 CPU burn — rolling-CPU evaluation window
+
+**Root cause: the v6.4 rolling-CPU alert window.** With
+`metricEvaluationWindows: {all: {cpu: 300}}`, every agent report re-evaluates
+every resource. Each evaluation calls
+`ResourceRegistry.List`, which deep-clones and sorts **all** resources, so the
+cost grows with the square of the resource count. Here that is ~755 resources,
+519 of them Kubernetes objects (231 ReplicaSets alone). Fixed by setting the
+window to `0` ("Current value") via the Alerts settings, with no restart. CPU
+fell from **~3.1 to ~0.25 cores** within two minutes.
+
+- **When it started:** 2026-09-21 20:34 UTC, the same UI alert save that tipped
+  the [OOM loop](#the-2026-09-21-oom-loop--unbounded-alert-event-store). It then
+  outlived that fix. Memory stayed fine (~400Mi of 2Gi), so the only symptoms were
+  CPU flat at ~3.1 cores and a rare OOM. Whether that save switched the window
+  on or only persisted the 300s default is unknown: Pulse does not audit
+  alert-setting changes.
+- **Profile (30s):** 68% of CPU in `ResourceRegistry.List`, reached via
+  `UnifiedAgentHandlers.HandleReport → … → alerts.evaluateMetricWindow →
+  Monitor.metricWindowPoints → MetricsTargetForResource`. After the change,
+  `evaluateMetricWindow` is gone from the profile entirely.
+- **Cost of the fix:** CPU alerts fire on the current value instead of a
+  5-minute average, so expect a little more flapping on bursty VMs.
+- **Upstream:** not reported as of 2026-09-23. #2146 looks similar (CPU pegged,
+  slow metrics writes) but its profile is a different path (an `events.db`
+  walk). No stable release after `v6.4.1` yet, only `v6.4.5` release candidates.
+  **Re-test the window after any bump** by setting it back to 300 and
+  profiling. Don't assume a new version fixed it.
+
+**What this was NOT: the notification dead letters.** That was the obvious
+suspect because the UI was showing a "Notification delivery needs attention"
+warning. Clearing all 603 dead letters, the audit log and the incident `.bak`
+files, then restarting, brought CPU straight back to ~3 cores. Those were real
+problems, just not this one.
+
+### Notification dead letters — the Discord template
+
+The only webhook, "Discord - Saturn Notifier", is `service: generic` with a
+custom template that pasted values in raw: `"description": "{{.Message}}"`.
+TrueNAS replication alerts read `Replication "30mins replication task"
+succeeded.`, and the embedded quotes produced invalid JSON (`invalid character
+'3' after object key:value pair`) every 30 minutes. Alerts grouped into the
+same message died with it. The result was 602 dead letters since 2026-08-29
+(the v6.4.1 upgrade), at a flat ~72 failed attempts a day.
+
+Fixed by adding `| jsonString` to `.Message`, `.ResourceName`, `.Node` and
+`.Level`, the same way Pulse's built-in Discord template does
+(`GET /api/notifications/webhook-templates` shows it). **Any future custom
+template must escape every interpolated string the same way.**
+
+Clearing the backlog uses the UI's own Dismiss action, which touches history
+only: `POST /api/notifications/terminal-failures/dismiss`, no body. Dismissed
+entries show up afterwards as `cancelled` in `/api/notifications/queue/stats`.
+
+### The audit log is mostly noise
+
+`/data/audit/audit.db` had reached **272MB, 99.98% of it `agent_config_fetch`
+rows**: each agent fetching its config once a minute, ~7,200 rows a day. It
+was deleted on 2026-09-23 (move the three files aside, delete the pod, then
+remove them; Pulse recreates it empty). No retention setting for it has been
+found, so expect it to regrow at ~4.5MB/day and repeat the cleanup if `/data`
+gets tight.
+
+### Profiling Pulse
+
+`/debug/pprof/` is compiled in and admin-gated; a 401 means auth, not absence.
+The pod's own `PULSE_AUTH_USER`/`PULSE_AUTH_PASS` work as Basic auth:
+
+```sh
+kubectl -n pulse exec deploy/pulse -- sh -c \
+  'A=$(printf "%s:%s" "$PULSE_AUTH_USER" "$PULSE_AUTH_PASS" | base64 | tr -d "\n");
+   wget -qO- -T60 --header "Authorization: Basic $A" \
+     "http://localhost:7655/debug/pprof/profile?seconds=30"' > cpu.pprof
+go tool pprof -top -cum cpu.pprof      # no binary needed; symbols are in the profile
+```
+
+The same Basic-auth header works for the JSON API (`/api/alerts/config`,
+`/api/notifications/*`). BusyBox `wget` can't send PUT, so writes go through
+`kubectl port-forward` and `curl -u`. The webhook GET returns the real URL,
+unmasked, so a read-modify-write PUT is safe. Keep a copy of the object before
+writing anyway.
+
 ## Troubleshooting
+
+- **CPU flat at ~3 cores, memory fine, no restarts** — the rolling-CPU
+  evaluation window is back on. Check
+  `grep -o '"metricEvaluationWindows":[^]]*}}' /data/alerts.json` in the pod; it
+  must read `{"all":{"cpu":0}}`. A missing key means the 300s default. See
+  [the 2026-09-23 CPU burn](#the-2026-09-23-cpu-burn--rolling-cpu-evaluation-window).
+- **"Notification delivery needs attention" / dead-lettered deliveries** —
+  read the terminal error first: `GET /api/notifications/dlq` shows
+  `lastError`. `template produced invalid JSON` means a custom webhook
+  template is interpolating a value without `| jsonString`. Fix the template,
+  *then* dismiss the backlog, or it simply refills.
 
 - **Agent flaps online/offline on the dashboard** — more than one pod is
   reporting the same cluster under one `PULSE_AGENT_ID`. The Kubernetes agent is a
