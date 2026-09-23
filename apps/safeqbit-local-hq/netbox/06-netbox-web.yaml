@@ -107,6 +107,14 @@ spec:
             - name: TIME_ZONE
               value: "America/New_York"
 
+            # --- Web server ---
+            # The image's launch script defaults to 4 Granian workers at
+            # ~270Mi each once warm: ~1.1Gi, over the 1Gi limit, so the
+            # container OOM-cycled every ~11h (2026-09-22/23). Two workers
+            # (~570Mi) is plenty for a single-user homelab.
+            - name: GRANIAN_WORKERS
+              value: "2"
+
             # --- Superuser (idempotent — skipped if user already exists) ---
             - name: SKIP_SUPERUSER
               value: "false"

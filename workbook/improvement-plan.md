@@ -170,6 +170,33 @@ Make this consistent with how the maintenance workbook documents node shutdown -
 
 ---
 
+### ☐ P1.5 Get every node back onto a supported OS and current k3s patch
+
+**Opened:** 2026-09-23 (health sweep)
+
+**Why:** k3s-server-01 runs **Ubuntu 25.10**, which reached end of life on
+**2026-07-01**. It is a control-plane + etcd member that no longer gets
+security updates. k3s-server-02 is on 26.04 LTS but has been up 118 days on
+kernel `7.0.0-15` while server-03 is on `7.0.0-31`, so it is sitting on
+pending kernel updates. All three run k3s **v1.35.4+k3s1**; the v1.35 line is
+at **v1.35.8+k3s1** (2026-08-27), four patch releases behind.
+
+**Fix:** one node at a time, never two (etcd quorum is 2 of 3):
+1. `kubectl drain` the node (respect PDBs), then on the host:
+   server-01 `do-release-upgrade` to 26.04 LTS; server-02 `apt full-upgrade`.
+2. Upgrade k3s on the same visit (same install script, pinned
+   `INSTALL_K3S_VERSION=v1.35.8+k3s1`), reboot, `kubectl uncordon`.
+3. Before moving on: node Ready, etcd members healthy, Longhorn volumes back
+   to `healthy`, and the flannel offload fix + multipath blacklist still in
+   place — the checklist in [node-bootstrap.md](node-bootstrap.md).
+
+The server-01 reboot also clears its stale kubelet memory capacity (the bogus
+100% in `kubectl top nodes`), which was already waiting on a k3s restart.
+
+**Effort:** ~1 hr per node, mostly waiting on Longhorn rebuilds.
+
+---
+
 ## P2 - Operational hygiene
 
 ### ☑ P2.2 Move Velero off Backblaze B2 (or reduce frequency)
@@ -287,6 +314,30 @@ Then run one of these per quarter, log results, refine docs.
 - Resource allocatable differs (server-03 has less memory: 14.4 GiB vs 18.9/22.4) which is also why scheduler appropriately keeps load off it.
 
 No taints, no excluding affinity, no zone enforcement. The "imbalance" is just Longhorn attachment stickiness + resource-aware scheduling doing what they should. Finding captured here only - no repo PR required. If load on server-03 ever becomes a concern, the lever is `topologySpreadConstraints` on the higher-traffic apps; currently not worth the churn.
+
+---
+
+### ☐ P2.7 Plan the replacement for ingress-nginx (upstream is archived)
+
+**Opened:** 2026-09-23 (health sweep)
+
+**Why:** `kubernetes/ingress-nginx` was retired: the repo was archived on
+**2026-03-23**, and our controller **v1.15.1** (chart 4.15.1, 2026-03-19)
+is the final release. It gets no more CVE fixes, and nginx-based ingress
+controllers have had serious ones before. The weekly updates digest reports
+it as "current", which is technically true and misleading.
+
+**Fix:** not urgent while everything behind it is LAN-only, but pick a
+successor before the next nginx CVE forces the choice. Candidates:
+- **Traefik** — already run and understood here (Pangolin's edge); has an
+  ingress-nginx annotation compatibility layer.
+- **A Gateway API implementation** (Envoy Gateway, NGINX Gateway Fabric) —
+  the direction upstream Kubernetes points to, but it means rewriting every
+  Ingress as HTTPRoutes.
+Watch for the Authentik forward-auth annotations — they are the part most
+tied to ingress-nginx.
+
+**Effort:** ~1 day including the forward-auth rework.
 
 ---
 

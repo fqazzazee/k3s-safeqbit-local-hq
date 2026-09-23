@@ -59,7 +59,8 @@
 # HOLDS / IMAGE_HOLDS (in the script) are the pin lists: an entry there is
 # reported under "Held" with the reason instead of nagging. Add to them
 # whenever an upgrade is deliberately declined, or the report will argue with
-# a decision you already made. Today: cert-manager and Home Assistant.
+# a decision you already made. Today: cert-manager, Longhorn and Home
+# Assistant.
 #
 # ── The image half ────────────────────────────────────────────────────────
 # IMAGES in the script is an explicit map, image repo → where to look and a
@@ -181,6 +182,8 @@ data:
     HOLDS = {
         "cert-manager": "held at 1.16.1 by choice (July 2026 wave): no issues,"
                         " 1.21.x has known crash-loop bugs — target 1.20.x if ever",
+        "longhorn": "held at 1.11.3 (2026-09-22): 1.12's internal NetworkPolicies"
+                    " block Prometheus:9500 — see workbook/longhorn-1.12-upgrade.md",
     }
 
     # Pre-release tags never count as "available"; nobody runs an rc in prod here.

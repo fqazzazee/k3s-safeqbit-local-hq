@@ -56,8 +56,8 @@ Docker host: 10.10.12.34 (macvlan IP)
 │  │  │  Longhorn PVC 5Gi  │  │   └───────────────────────────┘   │
 │  │  └────────────────────┘  │                                   │
 │  │                          │   ┌───────────────────────────┐   │
-│  │  Services (auto):        │   │  CronJob: housekeeping    │   │
-│  │  • netbox-cnpg-rw        │   │  (daily 00:30 UTC)        │   │
+│  │  Services (auto):        │   │  CronJob: netbox-manage   │   │
+│  │  • netbox-cnpg-rw        │   │  (suspended template)     │   │
 │  │  • netbox-cnpg-ro        │   └───────────────────────────┘   │
 │  │  • netbox-cnpg-r         │                                   │
 │  │                          │   ┌───────────────────────────┐   │
@@ -114,7 +114,7 @@ The web pod and the worker pod are separate Kubernetes Deployments - separate po
 
 ### SKIP_SUPERUSER behavior
 
-The `netboxcommunity/netbox` image runs `create_superuser.py` at startup when `SKIP_SUPERUSER=false`. This script checks if the superuser already exists - if it does, it skips creation and does not overwrite the existing password. Setting `SKIP_SUPERUSER=false` on the web pod is safe even after restoring an existing database. The worker and housekeeping containers set `SKIP_SUPERUSER=true` because they have no business creating admin users.
+The `netboxcommunity/netbox` image runs `create_superuser.py` at startup when `SKIP_SUPERUSER=false`. This script checks if the superuser already exists - if it does, it skips creation and does not overwrite the existing password. Setting `SKIP_SUPERUSER=false` on the web pod is safe even after restoring an existing database. The worker and `netbox-manage` containers set `SKIP_SUPERUSER=true` because they have no business creating admin users.
 
 ---
 
@@ -330,7 +330,7 @@ apps/safeqbit-local-hq/netbox/
 ├── 05-pvcs.yaml             media/reports/scripts on nfs-truenas (ReadWriteMany)
 ├── 06-netbox-web.yaml       Web Deployment + ClusterIP Service
 ├── 07-worker.yaml           rqworker Deployment (same image, different command)
-├── 08-housekeeping.yaml     CronJob, daily 00:30 UTC, housekeeping.sh
+├── 08-manage.yaml          Suspended CronJob: template for one-off manage.py Jobs
 └── 09-ingress.yaml          netbox.local.safeqbit.com, letsencrypt-prod
 
 infrastructure/safeqbit-local-hq/configs/
@@ -361,8 +361,14 @@ kubectl get cluster -n netbox netbox-cnpg
 kubectl exec -n netbox deploy/netbox -- \
   redis-cli -h netbox-redis-tasks -a '<password>' ping
 
-# Trigger a manual housekeeping run
-kubectl create job --from=cronjob/netbox-housekeeping netbox-housekeeping-manual -n netbox
+# Run a manage.py command in its own pod (NEVER exec it in deploy/netbox —
+# it OOM-kills the web container). Full recipe in 08-manage.yaml's header.
+kubectl create job --from=cronjob/netbox-manage netbox-manage-once -n netbox
+
+# Housekeeping is a built-in daily system job since NetBox v4.4 (run by the
+# worker); confirm it is completing:
+kubectl exec -n netbox netbox-cnpg-1 -c postgres -- psql -U postgres -d netbox -Atc \
+  "select status, created, completed from core_job where name = 'System Housekeeping' order by created desc limit 3;"
 
 # Check Velero schedule
 kubectl get schedule netbox-biweekly -n velero

@@ -13,7 +13,7 @@ The three servers (all control-plane + etcd):
 
 | Node | IP | Notes |
 |---|---|---|
-| k3s-server-01 | 10.10.13.11 | Ubuntu 25.10 |
+| k3s-server-01 | 10.10.13.11 | Ubuntu 25.10 — **EOL 2026-07-01**, upgrade pending (improvement-plan P1.5) |
 | k3s-server-02 | 10.10.13.12 | Ubuntu 26.04 LTS |
 | k3s-server-03 | 10.10.13.13 | Ubuntu 26.04 LTS |
 
