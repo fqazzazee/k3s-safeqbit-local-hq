@@ -170,9 +170,24 @@ Make this consistent with how the maintenance workbook documents node shutdown -
 
 ---
 
-### ☐ P1.5 Get every node back onto a supported OS and current k3s patch
+### ◐ P1.5 Get every node back onto a supported OS and current k3s patch
 
-**Opened:** 2026-09-23 (health sweep)
+**Opened:** 2026-09-23 (health sweep) · **Started:** 2026-09-23
+
+**Progress:**
+- ☑ **server-01** upgraded 25.10 → **26.04.1 LTS** (kernel 7.0.0-34) on
+  2026-09-23. Its kubelet memory capacity now reads the real 22.4GiB, and it
+  got graceful node shutdown (see below).
+- ☐ **server-02**: `apt full-upgrade` + reboot (kernel 7.0.0-15) + graceful shutdown.
+- ☐ **server-03**: graceful shutdown (kernel is current; take updates anyway).
+- ☐ **k3s v1.35.4 → v1.35.8** on all three, as a separate visit after the OS work.
+- Found on the way: **graceful node shutdown had never been active on any
+  node**. The kubelets all reported `shutdownGracePeriod: 0s`, because
+  `kubelet-arg` in `config.yaml` is overridden by the service's command line,
+  and 26.04's logind drop-in overrode our `10-…` one. The fixed procedure is in
+  [maintenance.md → Graceful Node Shutdown](maintenance.md#graceful-node-shutdown-kubelet).
+  Servers 02 and 03 pick it up during their upgrade visits:
+  [maintenance.md → Ubuntu upgrades](maintenance.md#ubuntu-upgrades--one-node-at-a-time).
 
 **Why:** k3s-server-01 runs **Ubuntu 25.10**, which reached end of life on
 **2026-07-01**. It is a control-plane + etcd member that no longer gets

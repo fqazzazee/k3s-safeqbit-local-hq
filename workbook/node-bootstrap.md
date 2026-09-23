@@ -13,9 +13,11 @@ The three servers (all control-plane + etcd):
 
 | Node | IP | Notes |
 |---|---|---|
-| k3s-server-01 | 10.10.13.11 | Ubuntu 25.10 — **EOL 2026-07-01**, upgrade pending (improvement-plan P1.5) |
-| k3s-server-02 | 10.10.13.12 | Ubuntu 26.04 LTS |
-| k3s-server-03 | 10.10.13.13 | Ubuntu 26.04 LTS |
+| k3s-server-01 | 10.10.13.11 | Ubuntu 26.04.1 LTS, kernel 7.0.0-34 (upgraded from EOL 25.10 on 2026-09-23) |
+| k3s-server-02 | 10.10.13.12 | Ubuntu 26.04 LTS, kernel 7.0.0-15 (updates + reboot pending, improvement-plan P1.5) |
+| k3s-server-03 | 10.10.13.13 | Ubuntu 26.04.1 LTS, kernel 7.0.0-31 |
+
+Upgrades: [maintenance.md → Ubuntu upgrades](maintenance.md#ubuntu-upgrades--one-node-at-a-time).
 
 All run on Proxmox with `virtio_net` NICs and a second disk (`sdb`, 250 GiB)
 for Longhorn at `/var/lib/longhorn`.
@@ -73,11 +75,10 @@ changes over time; a rebuilt node needs all of them:
 tls-san:
   - 10.10.13.11        # this node's IP + any names used to reach the API
 
-# --- Graceful node shutdown (2026-05; see maintenance.md for the why,
-#     including the mandatory logind companion setting) ---
-kubelet-arg:
-  - shutdown-grace-period=120s
-  - shutdown-grace-period-critical-pods=30s
+# NOTE: graceful node shutdown is deliberately NOT here as kubelet-arg.
+# The k3s.service command line already passes --kubelet-arg, and a key set on
+# the command line replaces the config.yaml value, so it was silently dropped
+# on all three nodes. It lives in a kubelet drop-in instead (section 4a).
 
 # --- etcd snapshots -> B2 (P1.2, 2026-07-03) ---
 # Key is scoped to the k3s-safeqbit-etcd bucket ONLY (blast-radius
@@ -94,17 +95,43 @@ etcd-snapshot-retention: 8
 etcd-snapshot-schedule-cron: "0 0 * * 0"   # weekly, Sunday 00:00 UTC
 ```
 
-Companion drop-in `/etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf`:
-```ini
-[Login]
-InhibitDelayMaxSec=130
-```
-(Without it, logind preempts kubelet's shutdown inhibitor after 5s and the
-grace period silently does nothing.)
+**Not everything is in this file.** On the existing nodes, `--server`,
+`--node-ip`, `--advertise-address`, most `--tls-san`s, the node labels,
+`--disable traefik/servicelb/local-storage` and the `--kubelet-arg`
+`system-reserved`/`kube-reserved` pair come from the `k3s.service` command
+line. Anything set there wins over this file. To see what k3s actually
+started with:
+`kubectl get node $NODE -o jsonpath='{.metadata.annotations.k3s\.io/node-args}'`.
 
 Apply config changes with `sudo systemctl restart k3s` — **one node at a
 time**, waiting for `kubectl get nodes` Ready + `kubectl get --raw /readyz`
 between nodes (etcd quorum: never restart two servers at once).
+
+## 4a. Graceful node shutdown — two drop-ins
+
+Both files are required; either one alone does nothing useful. The why, and
+the apply/verify runbook, are in
+[maintenance.md → Graceful Node Shutdown](maintenance.md#graceful-node-shutdown-kubelet).
+
+`/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-graceful-shutdown.conf`
+(k3s-supported kubelet drop-in; kubelet reads it at k3s start):
+```yaml
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+shutdownGracePeriod: 120s
+shutdownGracePeriodCriticalPods: 30s
+```
+
+`/etc/systemd/logind.conf.d/zz-k3s-graceful-shutdown.conf`:
+```ini
+[Login]
+InhibitDelayMaxSec=130
+```
+The `zz-` prefix matters. Ubuntu 26.04 ships
+`/usr/lib/systemd/logind.conf.d/unattended-upgrades-logind-maxdelay.conf`
+(`InhibitDelayMaxSec=30`), and the last drop-in by filename wins. `10-…` and
+`99-…` both sort before it and are silently overridden. Without the cap
+raised, logind cuts kubelet's 120s shutdown off after 30s.
 
 ## 5. flannel checksum-offload fix — REQUIRED on Proxmox virtio_net
 
@@ -139,6 +166,10 @@ kubectl -n kube-system get deploy coredns           # 3/3 within ~1 min
 systemctl status flannel-fix-offload.service        # active (exited)
 ethtool -k flannel.1 | grep tx-checksum-ip-generic  # off
 grep -c blacklist /etc/multipath.conf               # >= 1
+busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+  org.freedesktop.login1.Manager InhibitDelayMaxUSec   # t 130000000
+kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" | grep -o '"shutdownGracePeriod[^,]*'
+                                                    # 2m0s and 30s
 sudo k3s etcd-snapshot save                         # then:
 kubectl get etcdsnapshotfiles | grep s3://          # upload visible
 ```
