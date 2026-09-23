@@ -111,9 +111,11 @@ restore. See [the 2026-09-23 CPU burn](#the-2026-09-23-cpu-burn--rolling-cpu-eva
   `metricEvaluationWindows: {all: {cpu: 0}}`). The 5-minute rolling window costs
   ~3 cores on v6.4.1. Set it to `0` explicitly; if the key is missing, Pulse
   falls back to the 300s default.
-- **Alert retention `maxAlertAgeDays: 30`**. At `0`, alert events never age
-  out, which is what grew `events.db` into the
-  [09-21 OOM loop](#the-2026-09-21-oom-loop--unbounded-alert-event-store).
+- **Auto-acknowledge after 24h** (`autoAcknowledgeAfterHours: 24`). Escalation
+  is off, so the only thing acknowledgement changes is re-notification: an
+  unacknowledged alert re-pings Discord on every 5-minute cooldown, up to the
+  10/hour cap, for as long as it fires. This stops that after a day. The alert
+  stays visible, and "resolved" still notifies.
 - **The Discord webhook's custom template escapes every value**:
   `{{.Message | jsonString}}`, and the same for `.ResourceName`, `.Node` and
   `.Level`. Without the escape, any alert text containing a `"` renders invalid
@@ -349,10 +351,37 @@ by renaming the event store aside; Pulse recreates an empty one at startup.
 
 ### Why it grew
 
-`alerts.json` carries **`maxAlertAgeDays: 0`, `maxAcknowledgedAgeDays: 0`,
-`autoAcknowledgeAfterHours: 0`** — all three mean *never age out*. Alert events
-had accumulated since the store was introduced. The SQLite header said 140,370
-pages with a **freelist of 2**, so it was live data, not vacuum-able bloat.
+> **Corrected 2026-09-23.** This section originally blamed `maxAlertAgeDays`,
+> `maxAcknowledgedAgeDays` and `autoAcknowledgeAfterHours` all being `0`. Reading
+> the v6.4.1 source showed that is wrong: those three only prune the in-memory
+> list of **active** alerts (`internal/alerts/active_cleanup.go`). None of them
+> touches `events.db`.
+
+**`events.db` has a hard-coded 90-day retention** (`internal/alerts/eventlog/eventlog.go`,
+`defaultRetention`, pruned hourly). No setting or env var changes it. The store
+arrived with v6.4 on 2026-08-29, so at 23 days old nothing in it had reached the
+90-day cutoff yet.
+
+**What fills it is a flapping metric alert.** While a metric-threshold alert is
+active, Pulse re-creates it every ~5-8 seconds through its create path
+(`canonical_metric.go` / `metric_runtime.go`). Each re-create writes a `fired`
+event carrying a ~2.7KB resource snapshot, whether or not the alert is
+acknowledged. That comes to **~450 events/hour, ~29MB/day, per active alert**.
+Measured on the fresh store on 2026-09-22: 3,948 of its 4,395 events were one
+alert, **`k3s-server-01` memory**, which hovers around its threshold because of
+server-01's [stale kubelet capacity](#a-note-on-kubectl-top-nodes).
+
+548MiB over 23 days is ~24MB/day, the same rate. So the old store was almost
+certainly the same alert firing for most of those three weeks. That's strongly
+supported, not proven: the old store was deleted before anyone broke it down.
+The SQLite header said 140,370 pages with a **freelist of 2**, so it was live
+data, not vacuum-able bloat.
+
+At ~29MB/day, 90 days of retention reaches **~2.6GB**, far past the 548MiB that
+broke the alert engine. **The retention settings do not close this cliff.**
+Stopping the flapping alert does: restart k3s on server-01 (improvement-plan
+P1.5) so the kubelet reports the real memory. Until then, watch the growth rate
+([below](#sizing-as-it-now-stands)).
 
 ### What tipped it
 
@@ -398,12 +427,14 @@ the `.bak` files keep it on the PVC for forensics. Delete them once satisfied;
 they are ~548MiB and Velero will otherwise keep backing them up. (This
 incident's `.bak` files were deleted on 2026-09-23.)
 
-**Set a non-zero `maxAlertAgeDays` afterwards** (Alerts → retention, in the UI —
-it lives in the PVC, not Git) or the new store rebuilds toward the same cliff.
-**Done 2026-09-23: `maxAlertAgeDays: 30`**, set via `PUT /api/alerts/config`
-with no restart. `maxAcknowledgedAgeDays` and `autoAcknowledgeAfterHours` are
-still `0`, a deliberate choice for now. Treat 30 like the CPU window: a
-load-bearing UI setting that must survive any restore or reconfigure.
+The alert-cleanup settings, as of 2026-09-23 (all via `PUT /api/alerts/config`,
+no restart). **None of them bounds `events.db`**; see [Why it grew](#why-it-grew).
+
+| setting | value | what it actually does |
+|---|---|---|
+| `autoAcknowledgeAfterHours` | **24** (upstream default) | stops re-notification of a still-firing alert after a day; load-bearing, see First-run |
+| `maxAcknowledgedAgeDays` | **1** (upstream default) | drops acknowledged alerts from the active list; effectively a no-op, since a hard-coded `Cleanup(24h)` (`escalation.go`) already does this every 10 minutes |
+| `maxAlertAgeDays` | **30** | drops unacknowledged alerts from the active list after 30 days; moot while auto-ack is 24h |
 
 ### What this was NOT
 
@@ -450,6 +481,17 @@ the warm baseline. Just do not mistake either for the fix.
 kubectl top pod -n pulse -l app.kubernetes.io/name=pulse
 # the two stores that matter
 kubectl exec -n pulse deploy/pulse -- sh -c 'ls -l /data/metrics.db /data/alerts/events.db; du -sh /data'
+```
+
+**`events.db` growth is the early warning** for the OOM loop. A quiet store
+grows by a few MB a day; **~25-30MB/day means a metric alert is flapping.**
+The pod has no `sqlite3`, so copy the store out and ask which alert is writing:
+
+```sh
+kubectl -n pulse exec deploy/pulse -- sh -c \
+  'cd /data/alerts && tar cf - events.db events.db-wal events.db-shm' | tar xf - -C /tmp
+python3 -c 'import sqlite3; c=sqlite3.connect("/tmp/events.db")
+for r in c.execute("select substr(occurred_at,1,10), resource_name, alert_type, count(*) from alert_events group by 1,2,3 order by 4 desc limit 10"): print(r)'
 ```
 
 **Known-good baselines**, measured from Prometheus. Use these, not impressions:
@@ -618,7 +660,9 @@ writing anyway.
   start, and time-to-OOM scales linearly with the memory limit. Then check
   `ls -l /data/alerts/events.db`. See
   [the OOM loop](#the-2026-09-21-oom-loop--unbounded-alert-event-store).
-  Raising the limit and bouncing the pod both only buy minutes.
+  Raising the limit and bouncing the pod both only buy minutes. Once recovered,
+  find the alert that filled it (a flapping metric alert) and fix *that*;
+  otherwise the store refills.
 - **Server CrashLoop after image bump** — a new tag may have migrated `/data`.
   Roll the image back in `04-deployment.yaml`; restore the PVC from Velero
   `pulse-weekly` if `/data` was corrupted.

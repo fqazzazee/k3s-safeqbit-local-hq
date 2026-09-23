@@ -191,7 +191,11 @@ at **v1.35.8+k3s1** (2026-08-27), four patch releases behind.
    place — the checklist in [node-bootstrap.md](node-bootstrap.md).
 
 The server-01 reboot also clears its stale kubelet memory capacity (the bogus
-100% in `kubectl top nodes`), which was already waiting on a k3s restart.
+100% in `kubectl top nodes`), which was already waiting on a k3s restart. That
+bogus reading keeps Pulse's `k3s-server-01` memory alert flapping, which writes
+~29MB/day into Pulse's `events.db`. That's the growth that caused the 09-21 OOM
+loop (see [pulse.md → Why it grew](pulse.md#why-it-grew)), so server-01 goes
+first.
 
 **Effort:** ~1 hr per node, mostly waiting on Longhorn rebuilds.
 
