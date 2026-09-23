@@ -11,7 +11,7 @@ resources:
   - 05-pvcs.yaml
   - 06-netbox-web.yaml
   - 07-worker.yaml
-  - 08-housekeeping.yaml
+  - 08-manage.yaml
   - 09-ingress.yaml
 
 commonLabels:

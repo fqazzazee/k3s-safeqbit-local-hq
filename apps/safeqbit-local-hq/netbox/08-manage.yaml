@@ -1,54 +1,67 @@
-# 08-housekeeping.yaml
-# Netbox housekeeping CronJob.
+# 08-manage.yaml
+# Suspended CronJob — never scheduled. It exists as the TEMPLATE for one-off
+# `manage.py` runs, because it already carries the full DB/Redis/secret env
+# and needs no volumes:
 #
-# Runs `manage.py housekeeping` daily at 00:30 UTC:
-#   - Purges expired change log records (past changelogRetention days)
-#   - Removes stale sessions
-#   - Syncs object counts
+#   kubectl -n netbox create job --from=cronjob/netbox-manage netbox-manage-once
+#       (runs the default `manage.py check`), or with a real command:
+#   kubectl -n netbox get cronjob netbox-manage -o json \
+#     | jq '.spec.jobTemplate.spec.template.spec.containers[0].command[2:] = ["<cmd>", "<args>"]
+#           | {apiVersion: "batch/v1", kind: "Job",
+#              metadata: {name: "netbox-manage-once", namespace: "netbox"},
+#              spec: .spec.jobTemplate.spec}' \
+#     | kubectl apply -f -
+#   (delete the Job afterwards)
 #
-# Do NOT use the image's /opt/netbox/housekeeping.sh here: it is a
-# `while true; do ...; sleep 86400; done` loop meant for a long-lived
-# sidecar. As a CronJob payload it never exits, the Job stays Active
-# forever, and concurrencyPolicy: Forbid then blocks every future run
-# (2026-05..07 incident: schedule wedged 48 days behind one zombie pod).
-# We invoke the manage.py command directly so the container exits, and
-# activeDeadlineSeconds backstops any future hang.
+# NEVER `kubectl exec deploy/netbox -- manage.py ...` instead: it starts a
+# second Django process inside the web container's 1Gi cgroup, next to the
+# Granian workers, and OOM-kills NetBox (2026-09-22).
+#
+# HISTORY: this was a daily `manage.py housekeeping` CronJob. NetBox v4.4
+# moved housekeeping into a built-in daily system job ("System Housekeeping",
+# run by netbox-worker — check core_job), and v4.7 removed the command, so the
+# 2026-09-23 00:30 run failed with "Unknown command: 'housekeeping'". The
+# CronJob was renamed and suspended rather than deleted so this template
+# survives. Every layer is prune:false, so the old netbox-housekeeping object
+# had to be deleted by hand after the rename merged.
 #
 # SKIP_SUPERUSER: true because this pod never needs to create a superuser.
 
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: netbox-housekeeping
+  name: netbox-manage
   namespace: netbox
   labels:
     app.kubernetes.io/name: netbox
-    app.kubernetes.io/component: housekeeping
+    app.kubernetes.io/component: manage
 spec:
-  schedule: "30 0 * * *"
+  suspend: true
+  # Required by the API even while suspended; never fires.
+  schedule: "0 0 1 1 *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
-      # Hard stop: housekeeping takes seconds; 15 minutes means "hung".
-      # Without this, one stuck pod + Forbid silences the schedule forever.
+      # Hard stop so a hung command cannot sit Active forever.
       activeDeadlineSeconds: 900
-      backoffLimit: 2
+      # One-off admin commands must not be silently retried.
+      backoffLimit: 0
       template:
         metadata:
           labels:
             app.kubernetes.io/name: netbox
-            app.kubernetes.io/component: housekeeping
+            app.kubernetes.io/component: manage
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
           containers:
-            - name: housekeeping
+            - name: manage
               image: netboxcommunity/netbox:v4.7.1-5.1.1
               command:
                 - /opt/netbox/venv/bin/python
                 - /opt/netbox/netbox/manage.py
-                - housekeeping
+                - check
               env:
                 - name: DB_HOST
                   value: netbox-cnpg-rw
@@ -109,4 +122,5 @@ spec:
                   cpu: 25m
                   memory: 128Mi
                 limits:
-                  memory: 256Mi
+                  # A NetBox 4.7 Django process is ~270Mi resident.
+                  memory: 512Mi

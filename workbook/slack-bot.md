@@ -263,9 +263,10 @@ refusals are expected; don't "fix" them.
 - **`HOLDS` in the script is the pin list.** A chart listed there reports
   under *Held* with the reason instead of nagging. Today: `cert-manager`,
   held at v1.16.1 (July 2026 wave — 1.21.x has known crash-loop bugs,
-  target 1.20.x if ever). **Add to `HOLDS` whenever an upgrade is
-  deliberately declined**, or the digest will argue every week with a
-  decision already made.
+  target 1.20.x if ever), and `longhorn`, held at 1.11.3 (1.12's internal
+  NetworkPolicies block Prometheus — `longhorn-1.12-upgrade.md`). **Add to
+  `HOLDS` whenever an upgrade is deliberately declined**, or the digest will
+  argue every week with a decision already made.
 - **Weekly, not daily**, on purpose: upgrades land in batches weeks apart,
   so a daily copy of the same six lines becomes wallpaper — and a noisy
   channel already cost this cluster once (the orphaned-kopia storm hit
