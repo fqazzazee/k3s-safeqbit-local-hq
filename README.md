@@ -730,3 +730,9 @@ something that looks off, it's on me, so please open an issue.
 A lot of the patterns here were shaped by [Techno Tim](https://technotim.com), whose
 homelab and Kubernetes content got me started and kept me unstuck more than once. Highly
 recommended if you're building something like this yourself.
+
+---
+
+## ☕ Support
+
+If this repo helped you build your own cluster, you can [buy me a coffee ☕](https://buymeacoffee.com/fqazzazee).
