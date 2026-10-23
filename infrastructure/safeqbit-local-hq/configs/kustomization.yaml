@@ -43,6 +43,7 @@ resources:
   - monitoring-servicemonitors.yaml
   - monitoring-alert-rules.yaml
   - monitoring-flux-rules.yaml
+  - monitoring-cert-manager-rules.yaml
   - monitoring-forward-auth.yaml
   - cluster-slack-bot.yaml
   - cluster-slack-bot-tokens.yaml

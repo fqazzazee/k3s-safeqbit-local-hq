@@ -105,3 +105,9 @@ spec:
       enabled: true
       servicemonitor:
         enabled: true
+        # The Prometheus CR only selects ServiceMonitors carrying
+        # release=monitoring; the chart's own `prometheus: default` label is
+        # not enough, and without this cert-manager is silently never scraped.
+        # Expiry alerts: configs/monitoring-cert-manager-rules.yaml.
+        labels:
+          release: monitoring
