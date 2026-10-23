@@ -1,0 +1,86 @@
+# monitoring-cert-manager-rules.yaml
+# Certificate renewal / expiry alerts for the 15 ingress-shim certificates
+# (all letsencrypt-prod over Cloudflare DNS-01). kube-prometheus-stack ships no
+# cert-manager rules, and until 2026-10-23 cert-manager was not scraped at all
+# (its ServiceMonitor lacked release=monitoring — see controllers/
+# cert-manager.yaml), so a broken renewal would only surface as an expired cert.
+#
+# Metric names verified against cert-manager v1.21.2 on 2026-10-23:
+# - certmanager_certificate_renewal_timestamp_seconds — when cert-manager
+#   STARTS renewing (2/3 into a Let's Encrypt cert's life). A successful
+#   renewal moves it into the future within minutes, so "now is well past it"
+#   means renewal is failing. Keyed off this, not a fixed days-left threshold,
+#   so the rule keeps working if certificate lifetimes shrink.
+# - certmanager_certificate_expiration_timestamp_seconds — notAfter.
+# - certmanager_certificate_ready_status{condition="True|False|Unknown"} — 1 on
+#   the current condition. Stays True during a normal renewal.
+# Only the leader controller exports certificate series; max by() collapses
+# any brief overlap during a leader handover. The certificate's own namespace
+# arrives as exported_namespace (the target's namespace label wins).
+#
+# Prometheus picks this up via `release: monitoring` (ruleSelector). Routing:
+# warning → slack-default (12h repeat), critical → slack-default (1h repeat).
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: safeqbit-cert-manager
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: cert-manager
+      interval: 5m
+      rules:
+        - alert: CertificateRenewalOverdue
+          # 2 days past the renewal time still leaves ~4 weeks on a 90-day
+          # cert, and absorbs cert-manager's own retry backoff on transient
+          # ACME/DNS failures.
+          expr: |
+            time() - max by (exported_namespace, name) (
+              certmanager_certificate_renewal_timestamp_seconds
+            ) > 2 * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} renewal overdue"
+            description: "cert-manager should have renewed {{ $labels.exported_namespace }}/{{ $labels.name }} {{ $value | humanizeDuration }} ago and has not. Check `kubectl -n {{ $labels.exported_namespace }} describe certificate {{ $labels.name }}`, its CertificateRequest/Order/Challenge, and the cert-manager controller logs (Cloudflare token, DNS-01 propagation)."
+
+        - alert: CertificateExpiringSoon
+          expr: |
+            max by (exported_namespace, name) (
+              certmanager_certificate_expiration_timestamp_seconds
+            ) - time() < 7 * 86400
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} expires in {{ $value | humanizeDuration }}"
+            description: "{{ $labels.exported_namespace }}/{{ $labels.name }} expires in under 7 days — renewal has been failing for weeks. Browsers will reject the site once it lapses. See CertificateRenewalOverdue for where to look."
+
+        - alert: CertificateNotReady
+          expr: |
+            max by (exported_namespace, name) (
+              certmanager_certificate_ready_status{condition!="True"}
+            ) == 1
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} not Ready"
+            description: "{{ $labels.exported_namespace }}/{{ $labels.name }} has been Ready!=True for over an hour. Run `kubectl -n {{ $labels.exported_namespace }} describe certificate {{ $labels.name }}`."
+
+        - alert: CertManagerMetricsMissing
+          # Guards the failure mode this file exists because of: if
+          # cert-manager stops being scraped (selector drift, controller down,
+          # no leader), the rules above go silent instead of firing.
+          expr: absent(certmanager_certificate_expiration_timestamp_seconds)
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No cert-manager certificate metrics"
+            description: "Prometheus has no certmanager_certificate_* series, so certificate expiry is unmonitored. Check the cert-manager pods, the ServiceMonitor's release=monitoring label, and the target on the Prometheus Targets page."
