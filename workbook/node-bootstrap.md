@@ -164,6 +164,7 @@ kubectl get nodes                                   # Ready
 kubectl get --raw /readyz                           # ok
 kubectl -n kube-system get deploy coredns           # 3/3 within ~1 min
 systemctl status flannel-fix-offload.service        # active (exited)
+systemctl show k3s -p Wants --value | grep -o flannel-fix-offload.service  # wired to k3s
 ethtool -k flannel.1 | grep tx-checksum-ip-generic  # off
 grep -c blacklist /etc/multipath.conf               # >= 1
 busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
