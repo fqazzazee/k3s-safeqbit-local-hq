@@ -22,6 +22,11 @@ spec:
   # "seconds to failover". Cost: a second 5Gi PVC.
   instances: 2
 
+  # Pinned, not left to the operator default: the CNPG webhook stamps the
+  # default into the live spec at creation and never moves it, so operator
+  # upgrades leave existing clusters on whatever image they were born with.
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+
   postgresql:
     parameters:
       # WAL ring sizing. CNPG's defaults (wal_keep_size=512MB, max_wal_size=1GB)

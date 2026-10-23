@@ -16,6 +16,11 @@ metadata:
 spec:
   instances: 1
 
+  # Pinned, not left to the operator default: the CNPG webhook stamps the
+  # default into the live spec at creation and never moves it, so operator
+  # upgrades leave existing clusters on whatever image they were born with.
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+
   postgresql:
     parameters:
       max_connections: "100"
