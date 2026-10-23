@@ -6,6 +6,11 @@ metadata:
 spec:
   instances: 2
 
+  # Pinned, not left to the operator default: the CNPG webhook stamps the
+  # default into the live spec at creation and never moves it, so operator
+  # upgrades leave existing clusters on whatever image they were born with.
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+
   # Promote the replica before restarting the old primary (default is an
   # in-place primary restart). Authentik's server pods crash on dead DB
   # connections and crash-backoff turns a ~10s primary blip into ~5min of

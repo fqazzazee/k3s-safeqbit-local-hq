@@ -19,7 +19,7 @@ spec:
   chart:
     spec:
       chart: velero
-      version: 12.2.0                      # check `helm list -n velero`
+      version: 12.2.1                      # check `helm list -n velero`
       sourceRef:
         kind: HelmRepository
         name: vmware-tanzu
@@ -37,13 +37,13 @@ spec:
   values:
     image:
       repository: velero/velero
-      # Chart 12.1.0 ships 1.18.1; v1.18.2 is a patch on the same minor,
+      # Chart 12.2.1 still ships 1.18.2; v1.18.4 is a patch on the same minor,
       # released upstream before the chart caught up. Drop this override
-      # once a chart shipping >=1.18.2 exists.
-      tag: v1.18.2
+      # once a chart shipping >=1.18.4 exists.
+      tag: v1.18.4
     initContainers:
       - name: velero-plugin-for-aws
-        image: velero/velero-plugin-for-aws:v1.14.0
+        image: velero/velero-plugin-for-aws:v1.14.4
         volumeMounts:
           - mountPath: /target
             name: plugins

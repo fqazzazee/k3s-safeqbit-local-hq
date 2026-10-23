@@ -56,7 +56,7 @@ spec:
           serviceAccountName: velero-server
           containers:
             - name: velero-repo-maintenance
-              image: velero/velero:v1.18.2   # keep in step with controllers/velero.yaml
+              image: velero/velero:v1.18.4   # keep in step with controllers/velero.yaml
               command:
                 - /velero
               args:
