@@ -16,6 +16,7 @@ A living document. Add entries as new patterns emerge.
 
 - [Node Shutdown (Hardware Maintenance)](#node-shutdown-hardware-maintenance)
 - [Graceful Node Shutdown (kubelet)](#graceful-node-shutdown-kubelet)
+- [Ubuntu upgrades — one node at a time](#ubuntu-upgrades--one-node-at-a-time)
 - [etcd Snapshots (local + B2)](#etcd-snapshots-local--b2)
 - [Flannel VXLAN Checksum Offload (Post-Reboot)](#flannel-vxlan-checksum-offload-post-reboot)
 - [Longhorn Orphan Replica Cleanup](#longhorn-orphan-replica-cleanup)
@@ -58,6 +59,12 @@ kubectl get volumes.longhorn.io -n longhorn-system \
                                            # header only
 
 # 2. Drain (from the workstation or another node)
+#    pangolin-cnpg is single-instance (instances: 1), so its PDB never allows an
+#    eviction and drain retries forever. Its Longhorn instance-manager PDB holds
+#    too, until the volume detaches. If pangolin-cnpg-1 is on $NODE, delete it
+#    first (CNPG recreates it on another node; ~1 min Pangolin DB outage):
+kubectl get pod -n pangolin pangolin-cnpg-1 -o wide
+kubectl delete pod -n pangolin pangolin-cnpg-1   # only if NODE matches; wait for 1/1 Running
 kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data \
   --grace-period=60 --timeout=300s
 
@@ -334,68 +341,208 @@ This cluster runs 3 k3s servers, all `control-plane,etcd` (no agent-only nodes).
 
 **Why we want it:** Without it (the prior state - `shutdownGracePeriod: 0s`), a clean shutdown that *skips* the full drain runbook above (a forgotten step, an ACPI shutdown from Proxmox, a power event) hard-kills every pod the instant kubelet dies with the OS. Stateful pods (CNPG postgres, Longhorn engines) get no chance to flush. This is the **safety floor**: it does **not** cordon, migrate Longhorn replicas, or protect etcd quorum - for planned hardware maintenance you still run the full [Node Shutdown](#node-shutdown-hardware-maintenance) runbook. It just stops the worst-case hard-kill when the runbook isn't used.
 
+### Status — read this first
+
+**Until 2026-09-23 this was documented but applied on NO node.** The kubelets
+on all three servers reported `shutdownGracePeriod: 0s`. Two things had gone
+wrong, and both fail silently:
+
+1. **`kubelet-arg` in `config.yaml` is overridden by the command line.** The
+   `k3s.service` command line already passes `--kubelet-arg` (`system-reserved`,
+   `kube-reserved`). A key set on the command line *replaces* the same key from
+   `config.yaml`, so the shutdown args never reached the kubelet. The
+   `k3s.io/node-args` annotation shows what k3s actually used:
+   `kubectl get node $NODE -o jsonpath='{.metadata.annotations.k3s\.io/node-args}'`.
+2. **Ubuntu 26.04 ships a logind drop-in that beats `10-…`.**
+   `/usr/lib/systemd/logind.conf.d/unattended-upgrades-logind-maxdelay.conf` sets
+   `InhibitDelayMaxSec=30`. Drop-ins apply in filename order across `/etc`,
+   `/run` and `/usr/lib`, last one wins, and letters sort after digits, so no
+   `NN-` prefix can ever come last. Hence the `zz-` name.
+
+| node | graceful shutdown |
+|---|---|
+| k3s-server-01 | applied 2026-09-23 (during its 26.04 upgrade) |
+| k3s-server-02 | applied 2026-10-23 (during its package upgrade) |
+| k3s-server-03 | applied 2026-10-23 (during its package upgrade) |
+
 ### The InhibitDelayMaxSec gotcha (mandatory companion setting)
 
-systemd-logind's default inhibitor cap (`InhibitDelayMaxSec`) is **5 seconds**. kubelet's graceful shutdown holds a logind inhibitor lock; if `shutdownGracePeriod` exceeds `InhibitDelayMaxSec`, logind preempts it after 5s and the grace window is silently useless. So `InhibitDelayMaxSec` **must** be raised to ≥ `shutdownGracePeriod`. This is not optional - it's the difference between the feature working and not.
+systemd-logind caps how long any inhibitor lock may delay a shutdown
+(`InhibitDelayMaxSec`: 5s upstream default, **30s on Ubuntu 26.04** via the
+unattended-upgrades drop-in above). kubelet's graceful shutdown holds such a
+lock. If `shutdownGracePeriod` exceeds the cap, logind cuts kubelet off early
+and most of the grace window is silently lost. So `InhibitDelayMaxSec` **must**
+be at least `shutdownGracePeriod`.
 
 ### Configuration (all 3 nodes)
 
-Chosen values: 120s total, of which the last 30s is reserved for critical pods (so regular pods get 90s). `InhibitDelayMaxSec` set a touch above total so logind never preempts kubelet.
+Chosen values: 120s total, of which the last 30s is reserved for critical pods
+(so regular pods get 90s). `InhibitDelayMaxSec` sits a touch above the total so
+logind never preempts kubelet.
 
 | Setting | Where | Value |
 |---|---|---|
-| `shutdown-grace-period` | `/etc/rancher/k3s/config.yaml` (kubelet-arg) | `120s` |
-| `shutdown-grace-period-critical-pods` | same | `30s` |
-| `InhibitDelayMaxSec` | `/etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf` | `130` |
+| `shutdownGracePeriod` | `/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-graceful-shutdown.conf` | `120s` |
+| `shutdownGracePeriodCriticalPods` | same | `30s` |
+| `InhibitDelayMaxSec` | `/etc/systemd/logind.conf.d/zz-k3s-graceful-shutdown.conf` | `130` |
 
-### Apply runbook - ONE node at a time (preserve etcd quorum)
+The kubelet file is a k3s-supported drop-in (k3s ≥ v1.32; this is the approach
+the k3s docs recommend). kubelet reads it as a `KubeletConfiguration`, so it
+never competes with `--kubelet-arg` on the command line. **Do not put these in
+`config.yaml` as `kubelet-arg`**; see Status above.
 
-Run on each node in turn; do **not** start the next node until the current one is back `Ready` and `/healthz/etcd` returns `ok` (see [etcd quorum rule](#all-three-nodes-are-etcd-members--drain-one-at-a-time)).
+### Apply runbook — ONE node at a time (preserve etcd quorum)
+
+No drain needed: restarting k3s leaves running pods alone (containerd keeps
+them) and costs a brief API blip on that node only. When a node is being
+drained and rebooted anyway (e.g. an OS upgrade), write the files before the
+reboot instead and skip the restart. See
+[Ubuntu upgrades](#ubuntu-upgrades--one-node-at-a-time).
 
 ```bash
-# --- on the target node (ssh in) ---
+# --- on the target node ---
 
-# 1. Add kubelet args. NOTE: if /etc/rancher/k3s/config.yaml already has a
-#    `kubelet-arg:` key (e.g. once P1.2 etcd-s3 lands), MERGE into that list
-#    by hand - do not append a second `kubelet-arg:` block (duplicate YAML key).
-sudo test -f /etc/rancher/k3s/config.yaml && grep -q kubelet-arg /etc/rancher/k3s/config.yaml \
-  && echo "EDIT BY HAND - kubelet-arg already present" \
-  || sudo tee -a /etc/rancher/k3s/config.yaml >/dev/null <<'EOF'
-kubelet-arg:
-  - "shutdown-grace-period=120s"
-  - "shutdown-grace-period-critical-pods=30s"
+# 1. kubelet drop-in
+sudo tee /var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-graceful-shutdown.conf >/dev/null <<'EOF'
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+shutdownGracePeriod: 120s
+shutdownGracePeriodCriticalPods: 30s
 EOF
 
-# 2. Raise the logind inhibitor cap (drop-in, leaves the stock logind.conf untouched)
+# 2. logind cap (zz- so it sorts after unattended-upgrades-logind-maxdelay.conf)
 sudo mkdir -p /etc/systemd/logind.conf.d
-sudo tee /etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf >/dev/null <<'EOF'
-[Login]
-InhibitDelayMaxSec=130
-EOF
-sudo systemctl restart systemd-logind          # safe - does not kill existing sessions
+sudo rm -f /etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf   # old, overridden name
+printf '[Login]\nInhibitDelayMaxSec=130\n' \
+  | sudo tee /etc/systemd/logind.conf.d/zz-k3s-graceful-shutdown.conf
+sudo systemctl restart systemd-logind          # safe - does not end sessions
+busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+  org.freedesktop.login1.Manager InhibitDelayMaxUSec    # expect: t 130000000
+systemd-analyze cat-config systemd/logind.conf | grep -E '^# /.*conf.d|^InhibitDelayMaxSec'
+                                               # zz-k3s-... must be listed LAST
 
-# 3. Apply the kubelet change by restarting k3s (brief apiserver blip on THIS node;
-#    HA covers it. flannel-fix-offload.service re-runs automatically via BindsTo=k3s.service)
+# 3. make sure no stale kubelet-arg shutdown lines linger in config.yaml
+sudo grep -n shutdown-grace /etc/rancher/k3s/config.yaml   # expect nothing
+
+# 4. load the kubelet drop-in
 sudo systemctl restart k3s
 
-# --- from any working kubectl ---
-
-# 4. Verify the node came back and etcd is healthy BEFORE doing the next node
-kubectl get nodes                               # all 3 Ready
-kubectl get --raw='/healthz/etcd' ; echo        # ok
-
-# 5. Confirm the setting actually took on this node
+# --- from the workstation ---
 NODE=k3s-server-0X
+kubectl get nodes                              # all 3 Ready
+kubectl get --raw='/healthz/etcd'; echo       # ok
 kubectl get --raw "/api/v1/nodes/$NODE/proxy/configz" \
   | python3 -c "import sys,json;d=json.load(sys.stdin)['kubeletconfig'];print('grace',d.get('shutdownGracePeriod'),'critical',d.get('shutdownGracePeriodCriticalPods'))"
 # Expect: grace 2m0s critical 30s
 ```
 
-**Verify it actually fires** (optional, low-risk): on a maintenance window, `sudo systemctl reboot` one node and watch - pods should show a `Terminated` / node-shutdown status and the host should pause ~90s before going down, rather than dropping instantly.
+Then update the Status table above.
 
-**Status:** Config documented here; applied per-node via the runbook above. Re-check after any k3s upgrade or if `config.yaml` is regenerated.
+**Verify it actually fires** (optional, low-risk): on a maintenance window,
+`sudo systemctl reboot` one node and watch. Pods should show a node-shutdown
+termination status and the host should pause ~90s before going down, rather
+than dropping instantly.
 
-> This covers Layer 0 of the node-shutdown plan. Layers 1 (orchestrated on-demand safe shutdown) and 2 (power-event / UPS-triggered) are tracked in [improvement-plan.md](improvement-plan.md) as P2.7 and P3.6.
+---
+
+## Ubuntu upgrades — one node at a time
+
+The nodes are Proxmox VMs running Ubuntu. Two kinds of upgrade apply:
+
+- **Release upgrade** (e.g. 25.10 → 26.04 LTS). Done on server-01 on
+  2026-09-23. Servers 02 and 03 were already on 26.04.
+- **Package/kernel updates within a release** (`apt full-upgrade` + reboot).
+  This is what servers 02 and 03 need.
+
+Rules that apply to both:
+- **One node at a time.** Don't start the next until the current one is
+  uncordoned, `/healthz/etcd` is `ok` and every Longhorn volume is `healthy`.
+- **Do it from the Proxmox console**, or over SSH inside `tmux`.
+  `do-release-upgrade` over SSH also opens a fallback sshd on port 1022.
+- **Keep k3s disabled until the OS checks pass.** That also freezes the node's
+  etcd member data, which makes a Proxmox snapshot rollback safe. Once k3s has
+  run on the new OS, don't roll back.
+- **Leave the k3s version bump for a separate visit**, so a problem in one
+  can't be confused with the other.
+
+### Package/kernel updates (servers 02 and 03) — plus graceful shutdown
+
+```bash
+# --- workstation ---
+NODE=k3s-server-02                              # then k3s-server-03
+# pre-flight + drain: the Quick path at the top of this doc, steps 1-3
+
+# --- on the node ---
+sudo systemctl disable --now k3s && sudo /usr/local/bin/k3s-killall.sh
+sudo apt update && sudo apt full-upgrade -y
+#   conffile prompts: keep your installed version (N), especially /etc/multipath.conf
+#   removals: open-iscsi, multipath-tools and nfs-common must stay installed
+
+# graceful shutdown: write the files now (steps 1-3 of the Graceful Node
+# Shutdown apply runbook). The reboot below loads them, so skip its step 4.
+
+sudo reboot
+# after boot: run the "OS checks" block below, then
+sudo systemctl enable --now k3s
+ethtool -k flannel.1 | grep tx-checksum-ip-generic   # off
+
+# --- workstation ---
+kubectl get nodes -w                            # Ready
+kubectl uncordon $NODE
+kubectl get --raw=/healthz/etcd; echo           # ok
+# configz check from the Graceful Node Shutdown runbook -> grace 2m0s critical 30s
+kubectl get volumes.longhorn.io -n longhorn-system \
+  -o custom-columns=NAME:.metadata.name,ROBUST:.status.robustness | grep -v healthy
+                                                # repeat until header only
+```
+
+### Release upgrade from an end-of-life release (as done on server-01)
+
+An interim release's packages move to `old-releases.ubuntu.com` at end of
+life, so `apt update` against the normal mirrors returns 404 until apt is
+pointed there.
+
+```bash
+# --- on the node, after drain + disabling k3s as above ---
+sudo tar czf /root/pre-upgrade-node-config.tgz /etc/multipath.conf \
+  /etc/rancher/k3s/config.yaml /etc/systemd/logind.conf.d/ \
+  /etc/systemd/system/flannel-fix-offload.service /etc/apt/sources.list.d/ /etc/fstab \
+  /var/lib/rancher/k3s/agent/etc/kubelet.conf.d/
+# optional: Proxmox snapshot now (no RAM)
+
+sudo sed -i.bak -E 's#https?://([a-z]{2}\.)?(archive|security)\.ubuntu\.com/ubuntu/?#http://old-releases.ubuntu.com/ubuntu/#g' \
+  /etc/apt/sources.list.d/ubuntu.sources
+sudo apt update && sudo apt full-upgrade -y
+sudo apt install -y update-manager-core
+grep Prompt /etc/update-manager/release-upgrades         # Prompt=normal
+[ -f /var/run/reboot-required ] && sudo reboot           # upgrader refuses while one is pending
+sudo do-release-upgrade
+#   conffiles: keep installed (N) · removals: press d, keep open-iscsi,
+#   multipath-tools, nfs-common · restart at the end: yes
+```
+
+On server-01 the upgrader rewrote the sources back to `archive.ubuntu.com` /
+`security.ubuntu.com` by itself. If they still say `old-releases` afterwards,
+fix them by hand before running `apt update`.
+
+### OS checks after the reboot (before enabling k3s)
+
+```bash
+lsb_release -d; uname -r                        # expected release; kernel 7.0.x on 26.04
+grep -h '^URIs' /etc/apt/sources.list.d/*.sources    # archive/security.ubuntu.com
+grep -A2 blacklist /etc/multipath.conf          # devnode "^sd[a-z]+"
+systemctl is-active iscsid multipathd           # active active
+systemctl is-enabled flannel-fix-offload        # enabled
+busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+  org.freedesktop.login1.Manager InhibitDelayMaxUSec   # t 130000000
+sudo cat /var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-graceful-shutdown.conf
+sudo test -s /etc/rancher/k3s/config.yaml && echo config ok
+findmnt /var/lib/longhorn                       # sdb mounted
+```
+
+A node that ran with a stale kubelet memory capacity (server-01 advertised
+14.5GiB of 22.4GiB until 2026-09-23) comes back with the real figure after
+this. Check `kubectl get node $NODE -o jsonpath='{.status.capacity.memory}'`.
 
 ---
 
