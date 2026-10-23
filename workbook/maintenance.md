@@ -602,14 +602,14 @@ kubectl debug node/<node> --image=nicolaka/netshoot --profile=sysadmin -- \
   sh -c 'nsenter -t 1 -m -n -- ethtool -K flannel.1 tx-checksum-ip-generic off'
 ```
 
-**Persistent fix (already installed on all 3 nodes 2026-05-27):**
+**Persistent fix (installed on all 3 nodes 2026-05-27; dependency wiring corrected 2026-10-23):**
 
 `/etc/systemd/system/flannel-fix-offload.service`:
 ```ini
 [Unit]
 Description=Disable tx-checksum-ip-generic on flannel.1 (Proxmox virtio_net VXLAN bug)
 After=k3s.service
-BindsTo=k3s.service
+PartOf=k3s.service
 
 [Service]
 Type=oneshot
@@ -617,10 +617,24 @@ RemainAfterExit=yes
 ExecStart=/bin/sh -c 'for i in $(seq 1 120); do ip link show flannel.1 >/dev/null 2>&1 && /usr/sbin/ethtool -K flannel.1 tx-checksum-ip-generic off && exit 0; sleep 2; done; exit 1'
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=k3s.service
 ```
 
-`BindsTo=k3s.service` makes the unit re-run whenever k3s restarts (which recreates `flannel.1`). Verify after any node reboot:
+`WantedBy=k3s.service` is what makes it re-run: enabling the unit links it into
+`k3s.service.wants/`, so every k3s start pulls it in, and `PartOf=k3s.service`
+stops/restarts it along with k3s. `BindsTo=` plus `WantedBy=multi-user.target`
+does NOT do this — `BindsTo` only propagates stops, so the unit runs once per
+boot. On 2026-10-23 server-01's k3s went down seconds after boot, `BindsTo`
+stopped the unit mid-run (`Result=signal`), and nothing started it again when
+k3s came back. Check the wiring with
+`systemctl show k3s -p Wants --value | tr ' ' '\n' | grep flannel`.
+
+Changing the `[Install]` section needs `systemctl disable` BEFORE editing (so
+the old `multi-user.target.wants` link is removed), then `daemon-reload`,
+`enable`, `restart`. The pre-change unit is kept at
+`/root/flannel-fix-offload.service.orig-20261023` on each node.
+
+Verify after any node reboot:
 ```bash
 systemctl status flannel-fix-offload.service
 ethtool -k flannel.1 | grep tx-checksum-ip-generic   # should be "off"
