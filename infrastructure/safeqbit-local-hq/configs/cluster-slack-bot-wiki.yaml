@@ -666,6 +666,8 @@ data:
       before ANY node rebuild or k3s config change
     • `velero-partial-failed-cleanup.md` — PartiallyFailed triage →
       clear → prune
+    • `etcd-b2-key-rotation.md` — rotate the etcd B2 key or replace
+      the bucket; what to do if the key leaked
     • `cnpg-strategy.md` — DB inventory, instance rationale,
       post-mortems
     • `slack-bot.md` / `slack-bot-manual.md` — this bot: architecture

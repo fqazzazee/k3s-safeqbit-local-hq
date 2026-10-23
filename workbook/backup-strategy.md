@@ -296,12 +296,18 @@ it every SealedSecret in this repo is undecryptable).
 - **Config:** `/etc/rancher/k3s/config.yaml` on each server node (root-only,
   0600 — contains the B2 key, deliberately NOT in git). Fields: `etcd-s3: true`,
   endpoint/region `s3.us-east-005.backblazeb2.com`/`us-east-005`, bucket,
-  `etcd-s3-folder: snapshots`, `etcd-snapshot-retention: 8` (8 weeks of
-  weekly snapshots per node), `etcd-snapshot-schedule-cron: "0 0 * * 0"`.
+  `etcd-s3-folder: snapshots`, `etcd-snapshot-retention: 8`,
+  `etcd-snapshot-schedule-cron: "0 0 * * 0"`.
+- **Retention is 8 in B2 across all three nodes, not 8 per node.** k3s
+  prunes `snapshots/etcd-snapshot*` as one pool, so B2 holds the newest 8
+  scheduled snapshots, which is under 3 weeks of history (3+3+2 on
+  2026-10-23). Node-local retention is 8 snapshot files per node.
+  On-demand snapshots are a separate pool of 8 in B2.
 - **Bucket lifecycle:** "keep prior versions for 30 days" — k3s pruning
-  deletes ~3 objects/week; the 30-day hidden tail (~1GB) makes any deletion
+  deletes ~3 objects/week; the 30-day hidden tail makes any deletion
   done with the node-side key undoable from the B2 console (account creds,
-  not the stolen key) for a month. Steady state ≈ 2GB live + 1GB tail.
+  not the stolen key) for a month. Snapshots are ~65MB each (2026-10-23), so
+  steady state is ≈ 0.6GB live + ~0.8GB tail.
 - **Verify:** `kubectl get etcdsnapshotfiles | grep s3://` — S3-flavored
   records appear next to the `file://` ones after each scheduled snapshot.
   On-demand test: `sudo k3s etcd-snapshot save` on any server node.
@@ -312,6 +318,8 @@ it every SealedSecret in this repo is undecryptable).
   --etcd-s3 --etcd-s3-endpoint=... --etcd-s3-bucket=k3s-safeqbit-etcd \
   --etcd-s3-folder=snapshots --etcd-s3-access-key=... --etcd-s3-secret-key=...`
   then rejoin the other servers. See k3s docs "Restoring a Snapshot".
+- **Key rotation / bucket replacement:**
+  [etcd-b2-key-rotation.md](etcd-b2-key-rotation.md).
 
 ---
 

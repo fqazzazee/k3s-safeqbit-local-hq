@@ -551,11 +551,13 @@ this. Check `kubectl get node $NODE -o jsonpath='{.status.capacity.memory}'`.
 k3s snapshots etcd **weekly (Sunday 00:00 UTC)** on every server node and
 uploads each snapshot to B2 (`k3s-safeqbit-etcd` bucket, `snapshots/`
 folder) via the `etcd-s3` block in `/etc/rancher/k3s/config.yaml`
-(node-local, contains the bucket-scoped B2 key — never in Git). Retention 8
-per node (~8 weeks); bucket lifecycle keeps deleted versions 30 days as an
-undelete window. Design rationale and restore procedure:
+(node-local, contains the bucket-scoped B2 key — never in Git). Retention:
+B2 keeps 8 scheduled snapshots across all three nodes (under 3 weeks),
+while each node keeps 8 snapshot files locally. The bucket lifecycle keeps
+deleted versions 30 days as an undelete window. Design rationale and restore procedure:
 [backup-strategy.md → Layer 0](backup-strategy.md#layer-0---etcd-snapshots-to-b2-control-plane);
-node config reference: [node-bootstrap.md](node-bootstrap.md).
+node config reference: [node-bootstrap.md](node-bootstrap.md); rotating the
+B2 key or replacing the bucket: [etcd-b2-key-rotation.md](etcd-b2-key-rotation.md).
 
 ```bash
 # Verify uploads are happening (records appear after each scheduled run)
