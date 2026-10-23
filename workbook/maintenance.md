@@ -59,6 +59,12 @@ kubectl get volumes.longhorn.io -n longhorn-system \
                                            # header only
 
 # 2. Drain (from the workstation or another node)
+#    pangolin-cnpg is single-instance (instances: 1), so its PDB never allows an
+#    eviction and drain retries forever. Its Longhorn instance-manager PDB holds
+#    too, until the volume detaches. If pangolin-cnpg-1 is on $NODE, delete it
+#    first (CNPG recreates it on another node; ~1 min Pangolin DB outage):
+kubectl get pod -n pangolin pangolin-cnpg-1 -o wide
+kubectl delete pod -n pangolin pangolin-cnpg-1   # only if NODE matches; wait for 1/1 Running
 kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data \
   --grace-period=60 --timeout=300s
 
@@ -356,8 +362,8 @@ wrong, and both fail silently:
 | node | graceful shutdown |
 |---|---|
 | k3s-server-01 | applied 2026-09-23 (during its 26.04 upgrade) |
-| k3s-server-02 | **pending** |
-| k3s-server-03 | **pending** |
+| k3s-server-02 | applied 2026-10-23 (during its package upgrade) |
+| k3s-server-03 | applied 2026-10-23 (during its package upgrade) |
 
 ### The InhibitDelayMaxSec gotcha (mandatory companion setting)
 

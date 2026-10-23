@@ -13,9 +13,9 @@ The three servers (all control-plane + etcd):
 
 | Node | IP | Notes |
 |---|---|---|
-| k3s-server-01 | 10.10.13.11 | Ubuntu 26.04.1 LTS, kernel 7.0.0-34 (upgraded from EOL 25.10 on 2026-09-23) |
-| k3s-server-02 | 10.10.13.12 | Ubuntu 26.04 LTS, kernel 7.0.0-15 (updates + reboot pending, improvement-plan P1.5) |
-| k3s-server-03 | 10.10.13.13 | Ubuntu 26.04.1 LTS, kernel 7.0.0-31 |
+| k3s-server-01 | 10.10.13.11 | Ubuntu 26.04.1 LTS, kernel 7.0.0-38 (upgraded from EOL 25.10 on 2026-09-23; package updates 2026-10-23) |
+| k3s-server-02 | 10.10.13.12 | Ubuntu 26.04.1 LTS, kernel 7.0.0-38 (package updates 2026-10-23) |
+| k3s-server-03 | 10.10.13.13 | Ubuntu 26.04.1 LTS, kernel 7.0.0-38 (package updates 2026-10-23) |
 
 Upgrades: [maintenance.md → Ubuntu upgrades](maintenance.md#ubuntu-upgrades--one-node-at-a-time).
 
