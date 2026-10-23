@@ -16,7 +16,7 @@ spec:
   chart:
     spec:
       chart: cert-manager
-      version: v1.18.6                    # check `helm list -n cert-manager`
+      version: v1.19.6                    # check `helm list -n cert-manager`
       sourceRef:
         kind: HelmRepository
         name: jetstack
