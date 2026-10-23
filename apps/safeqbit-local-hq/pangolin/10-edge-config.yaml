@@ -19,9 +19,14 @@
 # installer would have given you" is the newest tag on the day you look, not a
 # version pinned in a compatibility table. There is no such table upstream.
 #
-# This is why badger jumps to v1.7.0 rather than the v1.6.0 the 1.22.0 release
-# notes mention: v1.6.0 is the MINIMUM for the AI gateway feature, not the
-# version Pangolin 1.23.0 ships against.
+# Release-note minimums (e.g. v1.6.0 for the AI gateway in 1.22.0) are floors,
+# not the version to run.
+#
+# Exception: badger stays on v1.7.0 with Pangolin 1.25.x. The 1.25 release notes
+# flag v1.8.0 as broken — it fails Traefik's plugin integrity check, which
+# disables the plugin that every router below depends on
+# (traefik/traefik#14115). v1.8.0 only adds permanent redirects. Re-check that
+# issue before the next badger bump.
 #
 # Traefik is not in that set — the installer pins the floating `traefik:v3.7`,
 # so our exact v3.7.x patch is ours to choose and does not move with Pangolin.

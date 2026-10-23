@@ -9,7 +9,7 @@ Server added 2026-06-29. k3s agent added 2026-06-30.
 - **Namespace:** `pulse`
 - **Hostname:** https://pulse.local.safeqbit.com (admin UI, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/pulse/`
-- **Image:** `rcourtman/pulse:v6.4.1` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
+- **Image:** `rcourtman/pulse:v6.5.0` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
 - **Server port:** `7655` (ClusterIP `pulse`, in-cluster DNS `pulse.pulse.svc.cluster.local:7655`)
 - **Storage:** `pulse-data` 4Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
 - **Web-UI auth:** built-in, `PULSE_AUTH_USER` / `PULSE_AUTH_PASS` from SealedSecret `pulse-auth` (`03-sealed-secret.yaml`). Plaintext pass auto-hashed on startup → auth enforced from first boot, no open window. Admin password stored in Vaultwarden.
@@ -138,6 +138,23 @@ throwaway pod) before any future bump rather than assuming they survived.
 | 2026-08-02 | `v6.1.2` | **server only** | patch, edited straight on GitHub; left the agent on `v6.1.1` and this doc unamended |
 | 2026-08-18 | `v6.2.1` | both | minor, realigns the two on one tag |
 | 2026-08-29 | `v6.4.1` | both | two minors + a patch; **went straight to `v6.4.1`** — `v6.4.0` shipped a non-executable embedded agent |
+| 2026-10-23 | `v6.5.0` | both | minor; no migration, no manifest changes |
+
+### v6.4.1 → v6.5.0 (2026-10-23)
+
+One minor release, promoted from `v6.5.0-rc.1` and replacing the `v6.4.5` line.
+It is a reliability release: recurring alerts and recovery messages deliver
+once per occurrence, flapping honours thresholds above ten, missing readings no
+longer count as a recovery, and charts separate missing data from zero. Nothing
+touches the Kubernetes agent path beyond showing job times as ages.
+
+All four v6 pins re-verified against the `v6.5.0` image before merging, using
+the manifest's binary path: `--health-addr` still defaults to `127.0.0.1:9191`,
+`--disable-auto-update` and `--enable-kubernetes` unchanged, and
+`/var/lib/pulse-agent` still referenced by the binary. RBAC unchanged — the
+`v6.4.1` and `v6.5.0` agent binaries reference the same 38 Kubernetes resource
+names. The [rolling-CPU window](#the-2026-09-23-cpu-burn--rolling-cpu-evaluation-window)
+has not been re-tested on this version; keep it at `0` until it is.
 
 ### v6.2.1 → v6.4.1 (2026-08-29)
 
