@@ -63,6 +63,11 @@ GitHub's host keys are pinned in the manifest (`GITHUB_KNOWN_HOSTS`, from
 rotates its host key, `fetch-source` fails with `Host key verification failed`;
 update the env var from that URL.
 
+`fetch-source` mounts a two-line `/etc/passwd` (ConfigMap `qbit-labs-ssh-passwd`)
+over the image's own copy. OpenSSH refuses to run as a uid with no passwd entry
+(`No user exists for uid 1000`), and `alpine/git` has none for 1000. Podman
+injects one, so a local test won't catch this.
+
 **Re-key / rotate:**
 
 ```sh

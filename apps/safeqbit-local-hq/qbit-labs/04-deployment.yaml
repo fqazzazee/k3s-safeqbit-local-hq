@@ -93,8 +93,10 @@ spec:
           args:
             - |
               set -eu
-              # A retried initContainer reuses the emptyDir; start clean.
+              # A retried initContainer reuses BOTH emptyDirs; start clean, or
+              # one failed attempt wedges every retry on "File exists".
               find /app -mindepth 1 -delete
+              rm -rf /tmp/ssh
               # ssh refuses a group-readable key and the Secret volume is
               # root-owned, so work from a private copy.
               mkdir -m 700 /tmp/ssh
@@ -137,6 +139,12 @@ spec:
               mountPath: /app
             - name: deploy-key
               mountPath: /deploy-key
+              readOnly: true
+            # OpenSSH exits with "No user exists for uid 1000" when the uid has
+            # no passwd entry, and alpine/git ships none. Overlay just the file.
+            - name: passwd
+              mountPath: /etc/passwd
+              subPath: passwd
               readOnly: true
             - name: tmp
               mountPath: /tmp
@@ -255,9 +263,26 @@ spec:
           secret:
             secretName: qbit-labs-deploy-key
             defaultMode: 0440
+        - name: passwd
+          configMap:
+            name: qbit-labs-ssh-passwd
         - name: data
           persistentVolumeClaim:
             claimName: qbit-labs-data
+---
+# /etc/passwd for fetch-source: gives uid 1000 a name so ssh will run.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qbit-labs-ssh-passwd
+  namespace: qbit-labs
+  labels:
+    app.kubernetes.io/name: qbit-labs
+    app.kubernetes.io/component: server
+data:
+  passwd: |
+    root:x:0:0:root:/root:/bin/sh
+    git:x:1000:1000:git:/tmp:/sbin/nologin
 ---
 apiVersion: v1
 kind: Service
