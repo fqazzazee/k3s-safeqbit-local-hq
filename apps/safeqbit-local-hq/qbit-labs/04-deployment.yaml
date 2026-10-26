@@ -1,0 +1,279 @@
+# 04-deployment.yaml
+# qbit-labs Deployment + ClusterIP Service.
+#
+# Upstream: https://github.com/fqazzazee/qbit-labs (my own, PRIVATE)
+#
+# ── Why there is no application image ─────────────────────────────────────
+# Same model as babytracker: the app publishes no image and this cluster has
+# no registry, so the pod builds its own code on start from ONE PINNED COMMIT
+# and stock node:alpine runs it. Upgrading is a one-line commit here.
+#
+# Two things make it heavier than babytracker, and both are deliberate:
+#
+#   1. The repo is private, so the clone authenticates with a read-only SSH
+#      DEPLOY KEY scoped to that one repo (03-deploy-key.sealed.yaml). Not a
+#      PAT: a deploy key can't read any other repo, can't write, and has no
+#      expiry date to forget about. Revoke it under the repo's Settings →
+#      Deploy keys; workbook/qbit-labs.md has the re-key procedure.
+#   2. It is a SvelteKit app with a build step and runtime dependencies, so
+#      a second initContainer runs `npm ci` + `npm run build`, then prunes
+#      devDependencies. The build is ~10s and peaks around 1.2GiB (the
+#      client bundle, mostly mermaid) — that is what the 2Gi limit on the
+#      build container is for. `npm ci` installs exactly what
+#      package-lock.json pins, integrity-checked, with --ignore-scripts so no
+#      dependency's install hook runs here.
+#
+# The trade-offs, stated plainly:
+#   - A pod START needs github.com (SSH, port 22) and registry.npmjs.org. A
+#     running pod needs neither, so an outage can only delay a restart.
+#   - Pinned to a full SHA, never a branch, so `main` moving can't restart
+#     the pod onto unreviewed code or a new SQLite schema.
+#
+# TO UPGRADE: change QBIT_REF and the qbit-labs.safeqbit.com/source-ref
+# annotation to the new SHA (same value, both places), commit, let Flux
+# reconcile. Lab content lives in the same repo, so publishing a new page IS
+# an upgrade. See workbook/qbit-labs.md.
+#
+# ── Single replica ─────────────────────────────────────────────────────────
+# SQLite on an RWO Longhorn volume: one writer, by construction. Resilience
+# comes from fast rescheduling (60s tolerations below), same doctrine as the
+# other single-writer apps.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qbit-labs
+  namespace: qbit-labs
+  labels:
+    app.kubernetes.io/name: qbit-labs
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # Recreate: RollingUpdate would deadlock on Multi-Attach of the RWO volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qbit-labs
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qbit-labs
+        app.kubernetes.io/component: server
+      annotations:
+        # Makes "which code is this pod running" answerable from
+        # `kubectl describe pod` without digging into initContainer env.
+        qbit-labs.safeqbit.com/source-ref: "3b6b83162fc87d99eaa026a335cab2c3b904cd01"
+    spec:
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+      # musl resolves github.com / registry.npmjs.org through the
+      # local.safeqbit.com search domain first under the default ndots:5 and
+      # can hard-fail. Nothing here needs in-cluster short names.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: fetch-source
+          image: alpine/git:2.54.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # A retried initContainer reuses the emptyDir; start clean.
+              find /app -mindepth 1 -delete
+              # ssh refuses a group-readable key and the Secret volume is
+              # root-owned, so work from a private copy.
+              mkdir -m 700 /tmp/ssh
+              cp /deploy-key/ssh-privatekey /tmp/ssh/id
+              chmod 600 /tmp/ssh/id
+              printf '%s\n' "$GITHUB_KNOWN_HOSTS" > /tmp/ssh/known_hosts
+              export GIT_SSH_COMMAND="ssh -F /dev/null -i /tmp/ssh/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/tmp/ssh/known_hosts"
+              # Subdirectory, not /app itself: the emptyDir is root-owned and
+              # git refuses a repo in a directory owned by another uid
+              # ("dubious ownership"). Same reasoning as babytracker.
+              mkdir /app/src
+              git init -q /app/src
+              cd /app/src
+              git remote add origin "$QBIT_REPO"
+              git fetch -q --depth 1 origin "$QBIT_REF"
+              git checkout -q FETCH_HEAD
+              rm -rf .git /tmp/ssh
+              echo "checked out $QBIT_REF"
+          env:
+            - name: QBIT_REPO
+              value: git@github.com:fqazzazee/qbit-labs.git
+            # ── The pinned commit. This is the version knob. ──
+            - name: QBIT_REF
+              value: "3b6b83162fc87d99eaa026a335cab2c3b904cd01"
+            # From https://api.github.com/meta (ssh_keys). Pinned rather than
+            # learned on first connect, so a spoofed github.com is refused.
+            - name: GITHUB_KNOWN_HOSTS
+              value: |-
+                github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+                github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /app
+            - name: deploy-key
+              mountPath: /deploy-key
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+        - name: build
+          image: node:24.22.1-alpine3.24
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              cd /app/src
+              npm ci --ignore-scripts --no-audit --no-fund --no-progress
+              npm run build
+              npm prune --omit=dev --no-audit --no-fund
+              rm -rf /tmp/npm
+              echo "built $(du -sh build | cut -f1), node_modules $(du -sh node_modules | cut -f1)"
+          env:
+            - name: HOME
+              value: /tmp
+            - name: npm_config_cache
+              value: /tmp/npm
+            - name: npm_config_update_notifier
+              value: "false"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /app
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      containers:
+        - name: qbit-labs
+          # Node 24 LTS: the app uses the built-in node:sqlite (engines >=24).
+          image: node:24.22.1-alpine3.24
+          workingDir: /app/src
+          command: ["node", "build"]
+          env:
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "3000"
+            # Behind ingress-nginx: SvelteKit's CSRF check compares a form
+            # post's Origin against this, and it builds absolute URLs from it.
+            - name: ORIGIN
+              value: https://qbit-labs.local.safeqbit.com
+            - name: QBIT_DATA_DIR
+              value: /data
+            - name: QBIT_LABS_DIRS
+              value: /app/src/labs
+            - name: TZ
+              value: America/New_York
+          ports:
+            - containerPort: 3000
+              name: http
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /app
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        # App code + node_modules (~230MB), refilled on every start.
+        - name: source
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: deploy-key
+          secret:
+            secretName: qbit-labs-deploy-key
+            defaultMode: 0440
+        - name: data
+          persistentVolumeClaim:
+            claimName: qbit-labs-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qbit-labs
+  namespace: qbit-labs
+  labels:
+    app.kubernetes.io/name: qbit-labs
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: qbit-labs
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
