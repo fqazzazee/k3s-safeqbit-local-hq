@@ -1,0 +1,42 @@
+# 05-ingress.yaml
+# Ingress for qbit-labs at https://qbit-labs.local.safeqbit.com
+# cert-manager issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+#
+# DNS: qbit-labs.local.safeqbit.com must CNAME to ingress.local.safeqbit.com
+# (→ 10.10.13.50) on the router, like every other app. The certificate does
+# not depend on that record.
+#
+# ── LAN only, on purpose ──────────────────────────────────────────────────
+# qbit-labs v1 has NO authentication (upstream docs/DECISIONS.md, "No
+# authentication in v1"): anyone who can reach it can read the labs and change
+# progress. So: no cloudflared tunnel, no Pangolin resource, no public DNS
+# record. Upstream plans a single SvelteKit `handle` hook for auth; until it
+# exists, Authentik forward auth (the prometheus/alertmanager pattern) is the
+# way to put a login in front of it if that is ever wanted.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qbit-labs
+  namespace: qbit-labs
+  labels:
+    app.kubernetes.io/name: qbit-labs
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - qbit-labs.local.safeqbit.com
+      secretName: qbit-labs-tls
+  rules:
+    - host: qbit-labs.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: qbit-labs
+                port:
+                  number: 3000

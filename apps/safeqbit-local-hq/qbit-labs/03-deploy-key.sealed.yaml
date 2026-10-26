@@ -1,0 +1,17 @@
+# 03-deploy-key.sealed.yaml
+# Read-only SSH deploy key for github.com/fqazzazee/qbit-labs (private), used
+# by the fetch-source initContainer. GitHub: repo Settings → Deploy keys →
+# "k3s-safeqbit-local-hq (read-only)". Re-key: workbook/qbit-labs.md.
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: qbit-labs-deploy-key
+  namespace: qbit-labs
+spec:
+  encryptedData:
+    ssh-privatekey: AgAgWU1g0t0zNqUDQtZBERApP9oKz/FsmEzXVsCaWZuxlmGWdMtIAojU3wbt3ZKGbp9h/Lq/5aKJIA6AEX0Bmhbd0dulutI5mfeSM5iOOvnSNBWcw3Ci34RRCGHhHfee9A3KnPDKo8NwpE6+hnqsoSJKD/5Urxbp+HLLsRrnCBXuSAp5NOUHfFPRnrtJaYaHnnrW/+vskD0t4ZMeY4WIYMG14rN4ecK+Qkn0tW+AFy+hiHueEuydPos/03ybWw0uDpCpZnBH7QgvhWyNnMwPS5YqrQPxuR7j0YtC8x7KuV58fIyTH96+aY8fbFJA68x2jQSt59q3KYMeV/a5+LGWqkMiwx2zrYpdZwLC1x+noqbaLxlKl4ppwlw+CBo+yC+vJbeIKUtS0bNi5+er4L69JyJp1bWRlo1T4FMC6/wOJVxcgOyvIQuL54LIwAXAkBoXYdeITz1Rkow0PJzfc6DacSbJQb8J/ODNsal03xIdH1F8h6KAZKOWllOdvQo0YWbzdJwGk6TpAKq1QTYDu3nA1IqujrH1gwDg/IZHg6zYFG+wEBjazjbMpMD+BOU2uXbWHC+t5FCJrwh7CQuErnzK4skuVpPCz+xMdfoy4vyPfC5uGfUIrY5dVCGbcidvmGlWAEUKctXWLOGkB6SHG6QK5tJbokaiz2tQb+9XyuBS/ZSsNsb/qe0m7Efk5j7KEgxM+dkpYfZ4wZP5icP3uxCtTsgRu3bKGrVKZRiquVoc5w/f40zSNr10lT2hZfqigojh1wGJnuRMB9p+ggNXnW4Ul4RqYFiS5HTSApN7Gg+X2sii50nZi+IeOIUJOgkr7syShUFCqo8Eo1Q4nf1nTppOpL0Kqrf4H/ZE49/Ygp2j7H1pS88rOrAIUotvtjy6sDnBwkkvGcsTKbUdHpIIa4Ndy1WYRnXfWyvdBUBfqUrGE9YYrnDdca8hc11hX+JtLspKPrDxOlTQyaOK6c6xtg61EQ1AOIAbpE8K45v4ZxQe9nzB6SGNqGxogBrK64Xv6Z2aYd7NhbGQlC4j5TBjrOUsYPz5TZmouJl9fE4gE2ftRZfzwd1m3tAfQcYJBO+mHgJFQE+tHw8VceoPsVvnR/3Wc5+juQgmabutZ+g1hhc7t0fEaFAJ3SFaAPCYxVr+mZ6y68Do3bJAeCdNu+LHmEGHNyRpziJPFhLqG0cvkGjsW70qPDEpLyE19CM9Oa8Y52NX2xikwm0Cj6HXmapx44myaUwsGvku+TjbCpfuZWv1OgjC3UgB9eXjPdAD5EIxnekbjEEgOT0iOHE4Vegu908=
+  template:
+    metadata:
+      name: qbit-labs-deploy-key
+      namespace: qbit-labs

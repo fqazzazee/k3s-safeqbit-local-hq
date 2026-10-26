@@ -1,0 +1,26 @@
+# 02-pvc.yaml
+# qbit-labs-data (1Gi RWO) → /data
+#
+# The only state the app has: one SQLite file (qbit.db, WAL mode, so also
+# qbit.db-wal / qbit.db-shm) holding page progress, bookmarks, quiz attempts
+# and flashcard review state. Lab content is NOT here — it is part of the
+# source tree the pod fetches from GitHub on every start.
+#
+# Backed up daily by
+# infrastructure/safeqbit-local-hq/configs/velero-schedule-qbit-labs.yaml.
+# 1Gi is far more than a single reader's progress will ever need.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qbit-labs-data
+  namespace: qbit-labs
+  labels:
+    app.kubernetes.io/name: qbit-labs
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

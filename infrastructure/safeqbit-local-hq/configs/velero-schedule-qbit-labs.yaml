@@ -1,0 +1,47 @@
+# velero-schedule-qbit-labs.yaml
+# Daily backup of the qbit-labs namespace to B2.
+#
+# Covers: qbit-labs-data — qbit.db (+ -wal/-shm), the SQLite file holding page
+# progress, bookmarks, quiz attempts and flashcard review state — plus the k8s
+# objects. That PVC is the only copy. Lab content is not in it; it lives in
+# the qbit-labs Git repo and the pod rebuilds it on every start.
+#
+# Schedule: daily 03:45 UTC (15 min after babytracker)
+# Retention: 14d
+#
+# Daily because flashcard scheduling state changes every study session and
+# can't be reconstructed. 14 days is enough: the newest backup holds all
+# progress, older ones only exist to undo a bad upgrade. A few KB per backup.
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: qbit-labs-daily
+  namespace: velero
+spec:
+  schedule: "45 3 * * *"
+
+  template:
+    ttl: "336h0m0s"   # 14 days
+    includedNamespaces:
+      - qbit-labs
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
+      - certificaterequests.cert-manager.io
+      - orders.acme.cert-manager.io
+      - challenges.acme.cert-manager.io
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false
