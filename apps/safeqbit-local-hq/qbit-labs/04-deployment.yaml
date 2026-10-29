@@ -63,7 +63,7 @@ spec:
       annotations:
         # Makes "which code is this pod running" answerable from
         # `kubectl describe pod` without digging into initContainer env.
-        qbit-labs.safeqbit.com/source-ref: "3b6b83162fc87d99eaa026a335cab2c3b904cd01"
+        qbit-labs.safeqbit.com/source-ref: "142d509c4333bd4f0547c325c29fe24377bafcb7"
     spec:
       tolerations:
         - key: node.kubernetes.io/not-ready
@@ -120,7 +120,7 @@ spec:
               value: git@github.com:fqazzazee/qbit-labs.git
             # ── The pinned commit. This is the version knob. ──
             - name: QBIT_REF
-              value: "3b6b83162fc87d99eaa026a335cab2c3b904cd01"
+              value: "142d509c4333bd4f0547c325c29fe24377bafcb7"
             # From https://api.github.com/meta (ssh_keys). Pinned rather than
             # learned on first connect, so a spoofed github.com is refused.
             - name: GITHUB_KNOWN_HOSTS
