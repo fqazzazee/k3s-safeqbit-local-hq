@@ -8,7 +8,7 @@ flashcards, step-through network maps, progress tracking. Added 2026-10-26.
 - **Manifests:** `apps/safeqbit-local-hq/qbit-labs/`
 - **Upstream:** https://github.com/fqazzazee/qbit-labs (my own, **private**)
 - **Image:** none of its own. `node:24.22.1-alpine3.24` builds and runs the source at a pinned commit
-- **Version pin:** `QBIT_REF` in `04-deployment.yaml`. Commit `3b6b831` = Phase 3 complete (AZ-700)
+- **Version pin:** `QBIT_REF` in `04-deployment.yaml`. Commit `142d509` = Phase 7 complete (AZ-700, ANS-C01, SAA-C03, AZ-104, AZ-305)
 - **Storage:** `qbit-labs-data` 1Gi Longhorn RWO at `/data`, holding one SQLite file (`qbit.db`, WAL mode)
 - **Backup:** `infrastructure/.../velero-schedule-qbit-labs.yaml`, daily 03:45 UTC to B2, 14d retention
 
