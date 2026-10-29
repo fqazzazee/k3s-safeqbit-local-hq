@@ -76,7 +76,7 @@ spec:
               app: qbit-labs-cf-tunnel
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared:2026.10.3
+          image: cloudflare/cloudflared:2026.10.6
           args:
             - tunnel
             - --no-autoupdate
