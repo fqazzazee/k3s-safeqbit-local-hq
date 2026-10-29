@@ -17,6 +17,7 @@ resources:
   - tunnel-ghost-blog.yaml
   - tunnel-csra.yaml
   - tunnel-family-media-server.yaml
+  - tunnel-qbit-labs.yaml
   - prometheusrule.yaml
 
 labels:

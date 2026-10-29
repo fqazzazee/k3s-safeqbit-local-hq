@@ -4,7 +4,7 @@ Self-hosted study platform: lab pages in Markdown, quizzes, spaced-repetition
 flashcards, step-through network maps, progress tracking. Added 2026-10-26.
 
 - **Namespace:** `qbit-labs`
-- **Hostname:** https://qbit-labs.local.safeqbit.com (LAN only; there is no login, see [Security posture](#security-posture))
+- **Hostname:** https://qbit-labs.local.safeqbit.com (LAN, no login). Public: via the `qbit-labs-cf-tunnel` Cloudflare tunnel, behind Cloudflare Access (see [Security posture](#security-posture))
 - **Manifests:** `apps/safeqbit-local-hq/qbit-labs/`
 - **Upstream:** https://github.com/fqazzazee/qbit-labs (my own, **private**)
 - **Image:** none of its own. `node:24.22.1-alpine3.24` builds and runs the source at a pinned commit
@@ -116,12 +116,21 @@ podman run --rm -u 1000 --userns=keep-id -v /tmp/qb/app:/app:Z -e HOME=/tmp -w /
 
 qbit-labs v1 has **no authentication**. Upstream says so in its README and in
 DECISIONS.md: anyone who can reach it can read the labs and change progress.
-That's acceptable on the LAN, so:
+That's acceptable on the LAN. Off the LAN:
 
-- internal hostname only, with no cloudflared tunnel, no Pangolin resource, and no public record;
-- if a login is ever wanted before upstream adds one, use the Authentik forward-auth
-  pattern from prometheus/alertmanager (maintenance.md, "Authentik forward auth").
-  The auth-url must hairpin through the app hostname.
+- **Cloudflare tunnel** `qbit-labs-cf-tunnel` (`apps/safeqbit-local-hq/cloudflared/tunnel-qbit-labs.yaml`,
+  added 2026-10-29). Origin in the dashboard is `http://qbit-labs.qbit-labs.svc.cluster.local:3000`,
+  so it skips ingress-nginx and the LAN Ingress entirely.
+- **The login is Cloudflare Access, and it lives only in the dashboard.** The public hostname
+  must have an Access application (Zero Trust → Access → Applications) with an Allow policy
+  for my identity. Nothing in this repo enforces it. If the Access app is deleted or its policy
+  is loosened, the app is open to the internet with write access to progress. Check it after
+  any dashboard cleanup: an incognito window should land on the Cloudflare login, not the app.
+- Order matters when (re)creating: Access application first, then the public hostname on the
+  tunnel. The other way round leaves a window where it is open.
+- No Pangolin resource. For a LAN login, use the Authentik forward-auth pattern from
+  prometheus/alertmanager (maintenance.md, "Authentik forward auth"); the auth-url must
+  hairpin through the app hostname. Once upstream adds its `handle` hook, revisit both.
 
 The data is low sensitivity (study progress and bookmark notes).
 
