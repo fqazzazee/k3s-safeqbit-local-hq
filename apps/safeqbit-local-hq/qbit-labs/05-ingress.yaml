@@ -6,13 +6,15 @@
 # (→ 10.10.13.50) on the router, like every other app. The certificate does
 # not depend on that record.
 #
-# ── LAN only, on purpose ──────────────────────────────────────────────────
+# ── No login: this Ingress is LAN only ────────────────────────────────────
 # qbit-labs v1 has NO authentication (upstream docs/DECISIONS.md, "No
 # authentication in v1"): anyone who can reach it can read the labs and change
-# progress. So: no cloudflared tunnel, no Pangolin resource, no public DNS
-# record. Upstream plans a single SvelteKit `handle` hook for auth; until it
-# exists, Authentik forward auth (the prometheus/alertmanager pattern) is the
-# way to put a login in front of it if that is ever wanted.
+# progress. Outside access goes through cloudflared/tunnel-qbit-labs.yaml,
+# which talks to the Service directly (not this Ingress), and the public
+# hostname is gated by a Cloudflare Access application in the Zero Trust
+# dashboard. No Pangolin resource. Upstream plans a single SvelteKit `handle`
+# hook for auth; Authentik forward auth (prometheus/alertmanager pattern) is
+# the in-cluster option for a LAN login if that is ever wanted.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

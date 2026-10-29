@@ -13,7 +13,8 @@ Namespace: cloudflared
 ├── tunnel-passzilla              (2 connector pods, token sealed)
 ├── tunnel-ghost-blog             (2 connector pods, token sealed)
 ├── tunnel-csra                   (2 connector pods, token sealed)
-└── tunnel-family-media-server    (2 connector pods, token sealed)
+├── tunnel-family-media-server    (2 connector pods, token sealed)
+└── tunnel-qbit-labs              (2 connector pods, token sealed; added 2026-10-29)
 
 Each tunnel has:
   ├── SealedSecret   → cloudflared-<name>-cf-tunnel-token
@@ -49,7 +50,8 @@ apps/safeqbit-local-hq/cloudflared/
 ├── tunnel-passzilla.yaml        ← SealedSecret + Deployment + Service + ServiceMonitor + PDB
 ├── tunnel-ghost-blog.yaml
 ├── tunnel-csra.yaml
-└── tunnel-family-media-server.yaml
+├── tunnel-family-media-server.yaml
+└── tunnel-qbit-labs.yaml        ← app has no login: Cloudflare Access gate required
 ```
 
 ---
@@ -142,6 +144,7 @@ kubectl run reach-test --rm -it --restart=Never --image=busybox:1.36 \
 | ghost-blog | - | `http://<svc>.<ns>.svc.cluster.local` |
 | csra | - | `http://<svc>.<ns>.svc.cluster.local` |
 | family-media-server | - | `http://<svc>.<ns>.svc.cluster.local` |
+| qbit-labs | (set in dashboard; behind Cloudflare Access) | `http://qbit-labs.qbit-labs.svc.cluster.local:3000` |
 
 ---
 
