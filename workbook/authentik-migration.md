@@ -178,12 +178,17 @@ docker exec authentik-postgres \
   pg_dump -U authentik --clean --if-exists authentik > /tmp/authentik.sql
 scp user@10.10.12.29:/tmp/authentik.sql /tmp/authentik.sql
 
-# On k3s machine - wipe the fresh schema first
-kubectl exec -n authentik authentik-cnpg-1 -- psql -U postgres authentik \
+# On k3s machine - find the current primary (never assume -1: on 2026-11-08
+# the pods were authentik-cnpg-2 primary / -3 replica and -1 was gone)
+PRIMARY=$(kubectl get cluster -n authentik authentik-cnpg \
+  -o jsonpath='{.status.currentPrimary}')
+
+# Wipe the fresh schema first
+kubectl exec -n authentik "$PRIMARY" -c postgres -- psql -U postgres authentik \
   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO authentik;"
 
 # Restore
-kubectl exec -i authentik-cnpg-1 -n authentik -- psql -U postgres authentik \
+kubectl exec -i -n authentik "$PRIMARY" -c postgres -- psql -U postgres authentik \
   < /tmp/authentik.sql
 ```
 
@@ -197,6 +202,10 @@ idempotent. Dropping the whole public schema first handles circular dependencies
 kubectl scale deploy authentik-server authentik-worker -n authentik --replicas=1
 kubectl rollout status deploy/authentik-server -n authentik --timeout=5m
 ```
+
+(Historical: in 2026-05 both ran 1 replica. Today the HelmRelease sets the
+server to 2 and the worker to 1, so after a restore resume the HelmRelease
+and let it set the counts rather than scaling by hand.)
 
 Updated DNS for `authentik01.local.safeqbit.com` from `10.10.12.29` → `10.10.13.50`
 (k3s ingress MetalLB IP). Stopped the Portainer stack on the Docker host.
@@ -234,11 +243,13 @@ kubectl logs -n authentik -l app.kubernetes.io/component=worker -f
 # CNPG cluster health
 kubectl get cluster -n authentik authentik-cnpg
 
-# Connect to the database
-kubectl exec -it -n authentik authentik-cnpg-1 -- psql -U postgres authentik
+# Connect to the database (current primary; instance numbers move on failover)
+kubectl exec -it -n authentik \
+  "$(kubectl get cluster -n authentik authentik-cnpg -o jsonpath='{.status.currentPrimary}')" \
+  -c postgres -- psql -U postgres authentik
 
 # Check Velero schedule
-kubectl get schedule authentik-biweekly -n velero
+kubectl get schedules.velero.io authentik-bimonthly -n velero
 
 # Force Flux reconcile
 kubectl annotate gitrepository flux-system -n flux-system \

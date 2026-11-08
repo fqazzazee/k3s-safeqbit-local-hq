@@ -94,8 +94,7 @@ A dead key only matters at the next pod start: a running pod keeps serving.
    `engines` field (the image is Node 24) and new runtime `dependencies`.
 2. Back up first if the schema moves:
    ```sh
-   kubectl -n velero exec deploy/velero -- \
-     /velero backup create qbit-labs-manual-$(date +%Y%m%d) --from-schedule qbit-labs-daily
+   velero backup create qbit-labs-manual-$(date +%Y%m%d) --from-schedule qbit-labs-daily
    ```
 3. Change `QBIT_REF` **and** the `qbit-labs.safeqbit.com/source-ref` annotation
    to the new full SHA (`git rev-parse HEAD` in the qbit-labs repo).

@@ -143,7 +143,7 @@ manifests).
 ## Drill C — CNPG cluster restore from a Backup CR
 
 **Layer tested:** 2 (CNPG ScheduledBackup → VolumeSnapshot → recovery bootstrap)
-**Guinea pig:** `affine-cnpg` (daily backups, 30 retained; affine tolerates brief DB pauses)
+**Guinea pig:** `affine-cnpg` (daily backups, 7 retained; affine tolerates brief DB pauses)
 **Estimate:** ~1 h
 
 ### C1 — non-destructive (recovery clone alongside the live cluster)
@@ -170,11 +170,13 @@ manifests).
    ```
 3. Wait for `affine-cnpg-drill-1` Ready
    (`kubectl -n affine get cluster affine-cnpg-drill`).
-4. Compare row counts against the live primary:
+4. Compare row counts against the live primary. Look the primary up — it
+   is not always `-1` (the database is named `affine`, not `app`):
    ```bash
-   for c in affine-cnpg affine-cnpg-drill; do
-     kubectl -n affine exec ${c}-1 -c postgres -- \
-       psql -U postgres -d app -tAc \
+   LIVE=$(kubectl -n affine get cluster affine-cnpg -o jsonpath='{.status.currentPrimary}')
+   for pod in "$LIVE" affine-cnpg-drill-1; do
+     kubectl -n affine exec "$pod" -c postgres -- \
+       psql -U postgres -d affine -tAc \
        "select count(*) from pg_stat_user_tables;"
    done
    ```
@@ -188,7 +190,7 @@ cascade).
 
 ### C2 — destructive (replace the live cluster; only after C1 passes, and take a fresh Backup CR first)
 
-Full procedure per [cnpg-strategy.md](cnpg-strategy.md): suspend Flux for
+Full procedure: [cnpg-strategy.md → Restore procedure](cnpg-strategy.md#restore-procedure). In short: suspend Flux for
 apps, scale the affine app to 0, delete the live `affine-cnpg` Cluster,
 recreate it with the same name + `bootstrap.recovery` from the chosen Backup,
 wait Ready (the app secret `affine-cnpg-app` is re-minted — password changes;

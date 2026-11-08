@@ -132,9 +132,15 @@ Do not proceed if any CNPG cluster is not ready or any Longhorn volume is `degra
 
 Longhorn volumes with only one replica **on the target node** will block a drain and leave pods stuck. Check and fix replication first.
 
+> **Today this is a check, not a change.** Every volume runs 3 replicas
+> (`defaultReplicaCount: 3`, 26/26 volumes on 2026-11-08), one per node, so
+> no volume can have its *only* replica on the target node. Only raise a
+> count if the check below shows a volume that is already degraded, and
+> note its original value so step 7 puts it back.
+
 **Identify under-replicated volumes on the target node:**
 ```bash
-NODE=<node-name>   # e.g. k3s-worker-01
+NODE=<node-name>   # e.g. k3s-server-01
 
 kubectl get replicas.longhorn.io -n longhorn-system \
   -o custom-columns='VOLUME:.spec.volumeName,NODE:.spec.nodeID,STATE:.status.currentState' \
@@ -144,9 +150,12 @@ kubectl get replicas.longhorn.io -n longhorn-system \
 For any volume that has its **only** replica on the target node, increase the replica count temporarily so Longhorn places a copy elsewhere:
 
 ```bash
-# Patch replica count to 2 (from 1) - Longhorn will schedule a replica on another node
+# Record the current count first, then raise it by one - Longhorn will
+# schedule the extra replica on another node
+kubectl get volume.longhorn.io <volume-name> -n longhorn-system \
+  -o jsonpath='{.spec.numberOfReplicas}{"\n"}'
 kubectl patch volume.longhorn.io <volume-name> -n longhorn-system \
-  --type=merge -p '{"spec":{"numberOfReplicas":2}}'
+  --type=merge -p '{"spec":{"numberOfReplicas":<current+1>}}'
 
 # Wait until the new replica is healthy before proceeding
 kubectl get replicas.longhorn.io -n longhorn-system \
@@ -171,14 +180,18 @@ Or use the Longhorn UI: **Node** → select the node → **Edit** → toggle **S
 ### 3. Suspend Flux (prevent reconcile fights during drain)
 
 ```bash
-# Suspend all kustomizations so Flux doesn't fight pod evictions
-kubectl patch kustomization apps -n flux-system \
-  --type=merge -p '{"spec":{"suspend":true}}'
-kubectl patch kustomization infrastructure -n flux-system \
-  --type=merge -p '{"spec":{"suspend":true}}'
+# Suspend every workload kustomization so Flux doesn't fight pod evictions.
+# infrastructure-controllers and infrastructure-configs are separate
+# Kustomizations (the `infrastructure` one applies the same objects again),
+# so suspending `infrastructure` alone leaves both of them reconciling.
+for ks in apps infrastructure infrastructure-controllers infrastructure-configs; do
+  kubectl patch kustomization "$ks" -n flux-system \
+    --type=merge -p '{"spec":{"suspend":true}}'
+done
 
-# Confirm
-kubectl get kustomization -n flux-system
+# Confirm: SUSPENDED=true on all four (flux-system itself stays live)
+kubectl get kustomization -n flux-system \
+  -o custom-columns=NAME:.metadata.name,SUSPENDED:.spec.suspend
 ```
 
 ---
@@ -273,16 +286,18 @@ Or via Longhorn UI: **Node** → **Edit** → toggle **Scheduling: Enabled**.
 
 **Resume Flux:**
 ```bash
-kubectl patch kustomization apps -n flux-system \
-  --type=merge -p '{"spec":{"suspend":false}}'
-kubectl patch kustomization infrastructure -n flux-system \
-  --type=merge -p '{"spec":{"suspend":false}}'
+for ks in infrastructure-controllers infrastructure-configs infrastructure apps; do
+  kubectl patch kustomization "$ks" -n flux-system \
+    --type=merge -p '{"spec":{"suspend":false}}'
+done
+kubectl get kustomization -n flux-system \
+  -o custom-columns=NAME:.metadata.name,SUSPENDED:.spec.suspend
 ```
 
-**Check Longhorn volume rebalancing:** Longhorn won't automatically move replicas back, but the node is now available for future replica placement. If you increased any volume's replica count in step 2, restore it:
+**Check Longhorn volume rebalancing:** Longhorn won't automatically move replicas back, but the node is now available for future replica placement. If you increased any volume's replica count in step 2, restore it to the value you recorded there (3 for every volume in this cluster; **never 1**, which would leave the volume with a single copy):
 ```bash
 kubectl patch volume.longhorn.io <volume-name> -n longhorn-system \
-  --type=merge -p '{"spec":{"numberOfReplicas":1}}'
+  --type=merge -p '{"spec":{"numberOfReplicas":3}}'
 ```
 
 ---
@@ -313,7 +328,7 @@ kubectl get helmrelease -A
 
 #### CNPG single-instance clusters (instances: 1)
 
-Most CNPG clusters in this repo use `instances: 1`. When the node hosting the postgres pod is drained, the pod evicts and must reschedule on another node. The Longhorn PVC will follow only if the volume already has a replica on the destination node (see step 2). **If the PVC only has one replica on the drained node, the pod will stay `Pending` until the node comes back.**
+Only `pangolin-cnpg` uses `instances: 1`; affine, authentik, grafana and netbox run 2 instances (primary + replica), so draining their nodes just fails over. When the node hosting a single-instance postgres pod is drained, the pod evicts and must reschedule on another node. The Longhorn PVC will follow only if the volume already has a replica on the destination node (see step 2). **If the PVC only has one replica on the drained node, the pod will stay `Pending` until the node comes back.**
 
 Mitigation: always run step 2 to ensure each CNPG PVC has at least one replica on a node that will survive the drain.
 
@@ -975,14 +990,26 @@ append the WAL nor compact, so it stops ingesting and `up` returns nothing.
 Hit 2026-06-28.
 
 **Confirm:**
+
+The `prometheus` container is distroless (no `sh`, `df`, `wget` or `cat`), so
+`kubectl exec -c prometheus -- <anything>` fails with `executable file not
+found in $PATH` even when Prometheus is healthy. Go through the
+`config-reloader` sidecar (same network namespace, has busybox `wget`) or the
+kubelet instead:
 ```bash
-# Disk full?
-kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus -- df -h /prometheus
+P=prometheus-monitoring-kube-prometheus-prometheus-0
+# Disk full? Ask the kubelet for the volume stats. This works even when
+# Prometheus is wedged; config-reloader doesn't mount /prometheus, so df
+# from there won't help.
+NODE=$(kubectl get pod -n monitoring $P -o jsonpath='{.spec.nodeName}')
+kubectl get --raw "/api/v1/nodes/$NODE/proxy/stats/summary" \
+  | jq -r --arg p "$P" '.pods[] | select(.podRef.name==$p) | .volume[]
+      | select(.pvcRef) | "\(.pvcRef.name): \(.usedBytes/1073741824|floor)Gi used of \(.capacityBytes/1073741824|floor)Gi"'
 # Smoking gun in the logs:
-kubectl logs -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus --tail=20 | grep -i "no space"
+kubectl logs -n monitoring $P -c prometheus --tail=20 | grep -i "no space"
 #   ... write /prometheus/wal/...: no space left on device
 # Ingestion check — an empty result means it is NOT ingesting:
-kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus -- wget -qO- 'http://localhost:9090/api/v1/query?query=up'
+kubectl exec -n monitoring $P -c config-reloader -- wget -qO- 'http://localhost:9090/api/v1/query?query=up'
 ```
 
 **Root cause:** the spec had `retention: 30d` (time-based) but **no `retentionSize`**
@@ -991,11 +1018,12 @@ cap, so data outgrew the 30Gi volume before 30 days elapsed.
 **Permanent fix (in repo):** `controllers/monitoring.yaml` →
 `prometheusSpec.retentionSize: 33GB` (keep it comfortably below the volume size to
 leave room for the WAL + compaction). Whichever of `retention` / `retentionSize` is
-hit first triggers block deletion. Verify the live flags:
+hit first triggers block deletion. Verify the live values through the API
+(they no longer appear in the container args, so the pod spec won't show them):
 ```bash
-kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c prometheus -- cat /proc/1/cmdline | tr '\0' '\n' | grep retention
-# --storage.tsdb.retention.time=30d
-# --storage.tsdb.retention.size=33GB
+kubectl exec -n monitoring prometheus-monitoring-kube-prometheus-prometheus-0 -c config-reloader -- \
+  wget -qO- 'http://localhost:9090/api/v1/status/runtimeinfo' | jq -r .data.storageRetention
+# 30d or 33GiB
 ```
 
 **Recovery when already wedged at 100%:** Prometheus can't self-trim in this state.
@@ -1105,28 +1133,38 @@ kubectl get secret -n <namespace> <cluster-name>-app \
 
 ### Connect to a CNPG cluster interactively
 
+**Never hard-code `<cluster-name>-1`.** Instance numbers move on every
+failover and rebuild: on 2026-11-08 `authentik-cnpg-1` did not exist (pods
+`-2` primary, `-3` replica) and `netbox-cnpg-1` was the read-only replica.
+Look up the current primary and exec into that:
+
 ```bash
+PRIMARY=$(kubectl get cluster -n <namespace> <cluster-name> \
+  -o jsonpath='{.status.currentPrimary}')
 CNPG_PASS=$(kubectl get secret -n <namespace> <cluster-name>-app \
   -o jsonpath='{.data.password}' | base64 -d)
 
-kubectl exec -it -n <namespace> <cluster-name>-1 -- \
+kubectl exec -it -n <namespace> "$PRIMARY" -c postgres -- \
   sh -c "PGPASSWORD='${CNPG_PASS}' psql -U <dbuser> -h <cluster-name>-rw <dbname>"
 ```
 
 For Authentik specifically:
 ```bash
+PRIMARY=$(kubectl get cluster -n authentik authentik-cnpg \
+  -o jsonpath='{.status.currentPrimary}')
 CNPG_PASS=$(kubectl get secret -n authentik authentik-cnpg-app \
   -o jsonpath='{.data.password}' | base64 -d)
 
-kubectl exec -it -n authentik authentik-cnpg-1 -- \
+kubectl exec -it -n authentik "$PRIMARY" -c postgres -- \
   sh -c "PGPASSWORD='${CNPG_PASS}' psql -U authentik -h authentik-cnpg-rw authentik"
 ```
 
 ### Check backup status
 
 ```bash
-kubectl get backup -n <namespace>
-kubectl get scheduledbackup -n <namespace>
+# Fully qualified: bare `backup` can resolve to backups.longhorn.io
+kubectl get backups.postgresql.cnpg.io -n <namespace>
+kubectl get scheduledbackups.postgresql.cnpg.io -n <namespace>
 ```
 
 ### Backup retention CronJob (prevents the 250-snapshot cap)
@@ -1134,7 +1172,8 @@ kubectl get scheduledbackup -n <namespace>
 CNPG's `ScheduledBackup` has no built-in retention, so `cnpg-backup-retention`
 (`configs/cnpg-backup-retention.yaml`, `cnpg-system`, 05:00 UTC daily) prunes old
 Backup CRs (cascade-deletes their VolumeSnapshots → Longhorn snapshots). Keeps:
-authentik 10, affine/netbox/monitoring 30.
+authentik 6, affine/netbox/monitoring 7, pangolin 4 (the `prune` lines in the
+script are the source of truth).
 
 **Gotcha (2026-06-28):** it was `ImagePullBackOff` because `bitnami/kubectl:1.34`
 was removed from Docker Hub (Bitnami pulled all `docker.io/bitnami/*` tags, Aug 2025).
@@ -1153,10 +1192,12 @@ kubectl logs -n cnpg-system -l job-name=cnpg-retention-manual-<...> -f
 ### Dump a CNPG database to stdout
 
 ```bash
+PRIMARY=$(kubectl get cluster -n <namespace> <cluster-name> \
+  -o jsonpath='{.status.currentPrimary}')
 CNPG_PASS=$(kubectl get secret -n <namespace> <cluster-name>-app \
   -o jsonpath='{.data.password}' | base64 -d)
 
-kubectl exec -n <namespace> <cluster-name>-1 -- \
+kubectl exec -n <namespace> "$PRIMARY" -c postgres -- \
   sh -c "PGPASSWORD='${CNPG_PASS}' pg_dump -U <dbuser> -h <cluster-name>-rw <dbname>" \
   > dump.sql
 ```
@@ -1293,7 +1334,7 @@ The cluster is monitored by kube-prometheus-stack in the `monitoring` namespace.
 
 - **Longhorn**: `LonghornVolumeDegraded`, `LonghornVolumeFaulted`, `LonghornVolumeSnapshotCountHigh` (>200, prevent hitting the 250 cap), `LonghornNodeStorageLow` (physical >85%), `LonghornNodeSchedulingCeiling` (scheduled/(capacity−reservation) >85% — the *scheduling* dimension `LonghornNodeStorageLow` misses; added 2026-06-28)
 - **CNPG**: `CNPGReplicationLagHigh` (>5m lag), `CNPGExporterDown`
-- **Velero**: `VeleroBackupFailed` (last status = 0 — full failures only), `VeleroBackupFailureRateHigh` (>2 in 24h), `VeleroBackupPartiallyFailed` (partial-failure counter over 16d, self-healing — catches the silent "data not captured" case `last_status` misses; added 2026-06-28)
+- **Velero**: `VeleroBackupFailed` (last status = 0 — full failures only), `VeleroBackupFailureRateHigh` (>2 in 24h), `VeleroBackupPartiallyFailed` (partial-failure counter over 32d, widened from 16d on 2026-08-17 for the monthly schedules; self-healing — catches the silent "data not captured" case `last_status` misses; added 2026-06-28)
 
 ### Suppressed false-positives
 

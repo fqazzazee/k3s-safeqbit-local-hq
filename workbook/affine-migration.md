@@ -112,15 +112,20 @@ scp user@<docker-host-ip>:/tmp/affine.sql ./affine.sql
 Drop the empty schema that the migration initContainer created, then restore:
 
 ```bash
+# Restore into the current primary. In 2026-05 there was only affine-cnpg-1;
+# the cluster now runs 2 instances and the primary can be either one.
+PRIMARY=$(kubectl get cluster -n affine affine-cnpg \
+  -o jsonpath='{.status.currentPrimary}')
+
 # Drop and restore in one pipeline
 (
   echo "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
   cat affine.sql
-) | kubectl exec -i affine-cnpg-1 -n affine -- \
+) | kubectl exec -i -n affine "$PRIMARY" -c postgres -- \
   psql -U affine affine
 
 # Verify row counts look sane
-kubectl exec -i affine-cnpg-1 -n affine -- \
+kubectl exec -i -n affine "$PRIMARY" -c postgres -- \
   psql -U affine affine -c "\dt" | head -30
 ```
 

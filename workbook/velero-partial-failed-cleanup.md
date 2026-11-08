@@ -1,7 +1,8 @@
 # Velero PartiallyFailed Backups — Triage & Cleanup
 
 **Cluster:** safeqbit-local-hq
-**Last reviewed:** 2026-07-06 (written after the 2026-07-06 cleanup session)
+**Last reviewed:** 2026-11-08 (written after the 2026-07-06 cleanup session;
+32d window and local CLI updated 2026-11-08)
 
 Runbook for when `VeleroBackupPartiallyFailed` (and its usual companion
 `KubeJobFailed` on kopia maintenance jobs) fires: how to find which backups
@@ -15,9 +16,13 @@ CSI-snapshot NFS volumes → `unable to get valid VolumeSnapshotter for
 procedure used to triage and clean up the leftovers, kept generic for next
 time.
 
-> **No local `velero` CLI.** The workstation doesn't have it — every `velero`
-> command below runs inside the server pod:
-> `kubectl exec -n velero deploy/velero -- /velero <args>`
+> **Use the local `velero` CLI** (`/usr/local/bin/velero`, client v1.18; it
+> defaults to the `velero` namespace and uses your kubeconfig). Fallback when
+> it's missing: exec into the **server** pod by its `name=velero` label —
+> `kubectl exec -n velero $(kubectl get pod -n velero -l name=velero -o name) -- /velero <args>`.
+> Never `kubectl exec deploy/velero`: the Deployment's selector
+> (`app.kubernetes.io/{instance,name}=velero`) also matches the three
+> `node-agent` pods, so the exec can land on a node-agent.
 
 ---
 
@@ -48,11 +53,11 @@ and needs special handling (§4).
 ## 2. Root cause — read the backup logs
 
 `.status.failureReason` on the Backup CR is usually empty for partial
-failures; the real errors are in the log file in B2. Pull them through the
-server pod:
+failures; the real errors are in the log file in B2. Pull them with the
+CLI (it downloads the log from B2 through a signed URL):
 
 ```bash
-kubectl exec -n velero deploy/velero -- /velero backup logs <backup-name> \
+velero backup logs <backup-name> \
   | grep -i 'level=error' | sed 's/time="[^"]*" //' | sort -u
 ```
 
@@ -75,24 +80,27 @@ kubectl get podvolumebackups.velero.io -n velero -l velero.io/backup-name=<backu
 The rule is **not** "last backup status". It is:
 
 ```
-increase(velero_backup_partial_failure_total{schedule!=""}[16d]) > 0
-  unless on (schedule) (time() - velero_backup_last_successful_timestamp) < 16*86400
+increase(velero_backup_partial_failure_total{schedule!=""}[32d]) > 0
+  unless on (schedule) (time() - velero_backup_last_successful_timestamp) < 32*86400
 ```
 
 Consequences:
 
-- A partial failure keeps the alert firing for **16 days** after it happened,
+- A partial failure keeps the alert firing for **32 days** after it happened,
   *unless* a newer **success** on the same schedule suppresses it.
 - **Restarting Velero does NOT clear it** (tried 2026-07-06 — the counter
   history lives in Prometheus, not the pod).
 - Weeklies usually self-heal before anyone notices; **bimonthly schedules can
-  fire for 2+ weeks** waiting for their next run.
+  fire for 2+ weeks** and pangolin's monthly for up to a month, waiting for
+  their next run. (The window was widened 16d → 32d on 2026-08-17 so a
+  monthly schedule's next success can still clear it — see the comment in
+  `configs/monitoring-alert-rules.yaml`.)
 
 So to clear a firing schedule early, give it a success — trigger a run from
 the schedule (inherits filters, TTL, volume policy):
 
 ```bash
-kubectl exec -n velero deploy/velero -- /velero backup create \
+velero backup create \
   --from-schedule=<schedule-name> <schedule-name>-manual-$(date +%Y%m%d)
 ```
 
@@ -111,8 +119,8 @@ Alert clears on the next Prometheus eval (~1 min) after `Completed`.
 ## 4. Orphaned schedules (renamed/deleted)
 
 If the schedule no longer exists there is nothing to succeed, so the alert
-fires until the failure ages out of the 16-day window. Don't fight it —
-**silence it** with an expiry set to the age-out date (failure time + 16d):
+fires until the failure ages out of the 32-day window. Don't fight it —
+**silence it** with an expiry set to the age-out date (failure time + 32d):
 
 ```bash
 kubectl port-forward -n monitoring svc/alertmanager-operated 19093:9093 &
@@ -122,15 +130,16 @@ curl -s -XPOST http://localhost:19093/api/v2/silences -H 'Content-Type: applicat
     {"name":"schedule","value":"<orphaned-schedule>","isRegex":false,"isEqual":true}
   ],
   "startsAt": "<now RFC3339>",
-  "endsAt": "<failure-time + 16d>",
+  "endsAt": "<failure-time + 32d>",
   "createdBy": "fadi",
-  "comment": "Schedule renamed/removed; failure ages out of the 16d alert window on <date>."
+  "comment": "Schedule renamed/removed; failure ages out of the 32d alert window on <date>."
 }'
 kill %1
 ```
 
-(2026-07-06 example: `sra-dev-demo-bimonthly` failed 06-23, silenced until
-07-09.)
+(2026-07-06 example, under the old 16d window: `sra-dev-demo-bimonthly`
+failed 06-23, silenced until 07-09. Today the same failure needs a silence
+until 07-25.)
 
 ## 5. Companion alert: KubeJobFailed on kopia maintain jobs
 
@@ -150,7 +159,7 @@ Alert clears immediately.
 ## 6. Pruning PartiallyFailed backup objects
 
 Why bother: they clutter the `/cluster backups` report for their whole TTL
-(weeklies = 180 days), they are **imperfect restore points** (missing the
+(up to 180 days for vaultwarden), they are **imperfect restore points** (missing the
 volumes that errored), and they hold B2 space.
 
 **Safety gate — check before every delete:** the workload must have a newer
@@ -167,14 +176,14 @@ the bucket on its next sync. The Velero delete removes bucket data + CR +
 associated snapshots:
 
 ```bash
-kubectl exec -n velero deploy/velero -- /velero backup delete <backup-name> --confirm
+velero backup delete <backup-name> --confirm
 ```
 
 Batch form (as run on 2026-07-06 for all 17 leftovers):
 
 ```bash
 for b in <name1> <name2> ...; do
-  kubectl exec -n velero deploy/velero -- /velero backup delete $b --confirm
+  velero backup delete $b --confirm
 done
 ```
 

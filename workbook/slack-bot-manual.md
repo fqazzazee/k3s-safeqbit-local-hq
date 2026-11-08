@@ -83,11 +83,11 @@ The bot covers the *triage* half:
 | Step | Bot | Terminal |
 |---|---|---|
 | Which backup, how bad | `/cluster velero` → `/cluster velero <name>` (prefix ok): errors, failureReason, per-volume PodVolumeBackup failures | `kubectl -n velero get backups.velero.io`, `kubectl -n velero describe backup <name>` |
-| Full log | — (bot shows PVB messages only) | `kubectl -n velero exec deploy/velero -- /velero backup logs <name>` |
+| Full log | — (bot shows PVB messages only) | `velero backup logs <name>` (local CLI; never `exec deploy/velero`, it can land on a node-agent pod) |
 | Stale kopia-maintain jobs | `/cluster jobs velero` — lingering Failed jobs flagged "stale?" | `kubectl -n velero delete job <name>` |
-| Clear the 16d alert | — (needs a write) | new success from the same schedule: `kubectl -n velero exec deploy/velero -- /velero backup create --from-schedule=<sched>`; **remember: restarting velero does NOT clear the alert** |
-| Orphaned schedule | `/cluster silences` — check the silence exists and hasn't lapsed | create silence in Alertmanager UI until failure+16d |
-| Delete a bad backup | — | `exec … /velero backup delete <name> --confirm` — **never `kubectl delete`**, backup-sync resurrects the CR |
+| Clear the 32d alert | — (needs a write) | new success from the same schedule: `velero backup create --from-schedule=<sched>`; **remember: restarting velero does NOT clear the alert** |
+| Orphaned schedule | `/cluster silences` — check the silence exists and hasn't lapsed | create silence in Alertmanager UI until failure+32d |
+| Delete a bad backup | — | `velero backup delete <name> --confirm` — **never `kubectl delete`**, backup-sync resurrects the CR |
 
 ### 4. Longhorn volume degraded / node disk trouble
 
@@ -177,7 +177,7 @@ rebuilt weekly); older drift, and `affine:stable`, are listed.
 |---|---|---|
 | Fleet view | `/cluster cnpg` — ready/instances, current primary, replication lag, last backup age | `kubectl get clusters.postgresql.cnpg.io -A` |
 | Suspicious lag / failover | `/cluster why <ns> <cluster>-N` on the lagging instance | maintenance.md → CNPG connect/dump for psql access and dumps |
-| Backup missing | `/cluster cnpg` (last-backup age) + `/cluster backups` weekly digest | see [cnpg-strategy.md](cnpg-strategy.md) + [backup-strategy.md](backup-strategy.md) |
+| Backup missing | `/cluster cnpg` (last-backup age) + `/cluster backups` weekly digest | see [backup-strategy.md](backup-strategy.md) Layer 2; restore from a Backup CR: [cnpg-strategy.md → Restore procedure](cnpg-strategy.md#restore-procedure) |
 
 ### 10. "Are the backups actually running?" (all 4 layers)
 

@@ -212,12 +212,17 @@ scp user@10.10.12.34:/tmp/netbox.sql /tmp/netbox.sql
 ### Step 5 - Wipe the fresh schema and restore
 
 ```bash
+# Find the current primary. Never assume -1: with 2 instances, netbox-cnpg-1
+# can be the read-only replica (it was on 2026-11-08), and writes there fail.
+PRIMARY=$(kubectl get cluster -n netbox netbox-cnpg \
+  -o jsonpath='{.status.currentPrimary}')
+
 # Drop the schema created by Netbox's initial boot
-kubectl exec -n netbox netbox-cnpg-1 -- psql -U postgres netbox \
+kubectl exec -n netbox "$PRIMARY" -c postgres -- psql -U postgres netbox \
   -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO netbox;"
 
 # Restore the dump
-kubectl exec -i netbox-cnpg-1 -n netbox -- psql -U postgres netbox < /tmp/netbox.sql
+kubectl exec -i -n netbox "$PRIMARY" -c postgres -- psql -U postgres netbox < /tmp/netbox.sql
 ```
 
 **Why drop the schema first?** The `--clean` flag in pg_dump emits `DROP` statements for every object, but it emits them in dependency order for individual objects - not as a single schema wipe. On a database that was initialised by Django migrations, there are circular dependencies and extension objects that `--clean` alone can't resolve cleanly. Dropping the whole public schema first gives pg_restore a clean slate.
@@ -351,8 +356,9 @@ kubectl logs -n netbox -l app.kubernetes.io/component=web -f
 # Tail worker logs
 kubectl logs -n netbox -l app.kubernetes.io/component=worker -f
 
-# Connect to the Netbox Postgres DB
-kubectl exec -it -n netbox netbox-cnpg-1 -- psql -U postgres netbox
+# Connect to the Netbox Postgres DB (current primary; -1 may be the replica)
+PRIMARY=$(kubectl get cluster -n netbox netbox-cnpg -o jsonpath='{.status.currentPrimary}')
+kubectl exec -it -n netbox "$PRIMARY" -c postgres -- psql -U postgres netbox
 
 # Check CNPG cluster health
 kubectl get cluster -n netbox netbox-cnpg
@@ -367,11 +373,11 @@ kubectl create job --from=cronjob/netbox-manage netbox-manage-once -n netbox
 
 # Housekeeping is a built-in daily system job since NetBox v4.4 (run by the
 # worker); confirm it is completing:
-kubectl exec -n netbox netbox-cnpg-1 -c postgres -- psql -U postgres -d netbox -Atc \
+kubectl exec -n netbox "$PRIMARY" -c postgres -- psql -U postgres -d netbox -Atc \
   "select status, created, completed from core_job where name = 'System Housekeeping' order by created desc limit 3;"
 
 # Check Velero schedule
-kubectl get schedule netbox-biweekly -n velero
+kubectl get schedules.velero.io netbox-biweekly -n velero
 ```
 
 ---
