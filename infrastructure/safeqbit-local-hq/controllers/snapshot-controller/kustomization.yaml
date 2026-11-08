@@ -4,7 +4,7 @@
 # re-fetchable. Splitting them out keeps the diff of a version bump readable.
 #
 # PROVENANCE — everything here comes from
-# https://github.com/kubernetes-csi/external-snapshotter at tag v8.6.0:
+# https://github.com/kubernetes-csi/external-snapshotter at tag v8.7.0:
 #   00/01  client/config/crd/*.yaml
 #   02     deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml
 #   03     deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml

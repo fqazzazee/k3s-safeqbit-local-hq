@@ -1,7 +1,7 @@
 # velero.yaml
 # Velero with CSI snapshot data movement against B2. The B2 credentials are
-# referenced as a Secret named "velero-b2-credentials"; we materialize that
-# from a SealedSecret in configs/velero-b2.yaml.
+# referenced as a Secret named "cloud-credentials"; we materialize that
+# from a SealedSecret in configs/velero-cloud-credentials.yaml.
 
 ---
 apiVersion: v1
@@ -19,7 +19,7 @@ spec:
   chart:
     spec:
       chart: velero
-      version: 12.2.1                      # check `helm list -n velero`
+      version: 12.2.3                      # check `helm list -n velero`
       sourceRef:
         kind: HelmRepository
         name: vmware-tanzu
@@ -37,7 +37,7 @@ spec:
   values:
     image:
       repository: velero/velero
-      # Chart 12.2.1 still ships 1.18.2; v1.18.4 is a patch on the same minor,
+      # Chart 12.2.3 still ships 1.18.2; v1.18.4 is a patch on the same minor,
       # released upstream before the chart caught up. Drop this override
       # once a chart shipping >=1.18.4 exists.
       tag: v1.18.4
