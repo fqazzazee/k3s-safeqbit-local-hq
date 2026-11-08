@@ -1,6 +1,6 @@
 # infrastructure/safeqbit-local-hq/controllers/snapshot-controller/01-crds-groupsnapshot.yaml
 # The three groupsnapshot.storage.k8s.io CRDs, verbatim from
-# external-snapshotter v8.6.0. Do not hand-edit — re-fetch at the new tag.
+# external-snapshotter v8.7.0. Do not hand-edit — re-fetch at the new tag.
 #
 # Nothing in this cluster uses VolumeGroupSnapshots (zero objects of all three
 # kinds). They are here because the controller watches them and would log

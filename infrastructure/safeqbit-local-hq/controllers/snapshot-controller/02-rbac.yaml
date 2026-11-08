@@ -1,6 +1,6 @@
 # infrastructure/safeqbit-local-hq/controllers/snapshot-controller/02-rbac.yaml
 # ServiceAccount, ClusterRole, ClusterRoleBinding and the leader-election
-# Role/RoleBinding, verbatim from external-snapshotter v8.6.0
+# Role/RoleBinding, verbatim from external-snapshotter v8.7.0
 # (deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml).
 #
 # No secrets access and no wildcard rules, so this needs no .trivyignore entry

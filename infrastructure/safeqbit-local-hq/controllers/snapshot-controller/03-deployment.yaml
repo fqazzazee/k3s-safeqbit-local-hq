@@ -1,11 +1,11 @@
 # infrastructure/safeqbit-local-hq/controllers/snapshot-controller/03-deployment.yaml
-# The snapshot-controller Deployment, from external-snapshotter v8.6.0
+# The snapshot-controller Deployment, from external-snapshotter v8.7.0
 # (deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml).
 #
 # TWO DELIBERATE DEVIATIONS from that upstream file:
 #
-# 1. The image is pinned to v8.6.0. Upstream's manifest at the v8.6.0 tag
-#    still says v8.5.0 — they release the controller without bumping the tag
+# 1. The image is pinned to v8.7.0. Upstream's manifest at the v8.7.0 tag
+#    still says v8.6.0 — they release the controller without bumping the tag
 #    inside the example manifest. Read the release, not the YAML.
 #
 # 2. resources are set. Upstream ships `resources: {}`. Measured before
@@ -43,7 +43,7 @@ spec:
       serviceAccountName: snapshot-controller
       containers:
         - name: snapshot-controller
-          image: registry.k8s.io/sig-storage/snapshot-controller:v8.6.0
+          image: registry.k8s.io/sig-storage/snapshot-controller:v8.7.0
           args:
             - "--v=5"
             - "--leader-election=true"
