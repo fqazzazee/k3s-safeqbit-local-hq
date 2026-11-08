@@ -13,7 +13,7 @@ Both apps were running as a single Portainer stack on a Docker host, sharing mac
 
 - GitOps - the full stack is in version control
 - Separate namespaces - Immich and Photoprism are independent apps that happen to share a photo library, not one monolithic stack
-- Velero biweekly backups via the namespace `backup.policy/velero: biweekly` label
+- Velero backups to B2 from per-namespace Schedules in `infrastructure/safeqbit-local-hq/configs/`: `immich-bimonthly` (1st + 16th, 03:30 UTC, 60d) and `photoprism-bimonthly` (13th + 28th, 03:00 UTC, 60d). They select by `includedNamespaces`; the `backup.policy/velero` namespace label is a leftover that nothing reads
 - Ingress + cert-manager TLS instead of macvlan IPs
 - Resource allocation in a dedicated file (`09-resources.yaml` / `06-resources.yaml`) with an optional node-pinning escape hatch for when hardware is upgraded
 
@@ -295,6 +295,63 @@ env:
 
 ---
 
+## Upgrading Immich
+
+**Current:** server + machine-learning `v3.3.6` (since 2026-11). Postgres
+`ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0`, unchanged
+since the migration.
+
+Rules:
+
+- Pin an exact tag. Never use the floating `:release` tag (it jumps majors on
+  a pod reschedule).
+- Bump server (`06-immich-server.yaml`) and ML (`07-immich-ml.yaml`) in the
+  same commit, to the same tag.
+- On every bump, compare the postgres image in upstream
+  `docker/docker-compose.yml` at the new tag with `03-postgres.yaml`. If it
+  changed, the vectorchord/pgvectors extension upgrade needs its own plan and
+  restore point; do not fold it into a server bump.
+- Read every release note in the range for schema migrations and env-var
+  renames. The server runs migrations before it opens port 2283; the
+  startupProbe gives it 10 minutes. Immich has no supported downgrade once a
+  migration has run.
+
+Restore point before any bump with migrations (the July 2026 pattern):
+
+```bash
+# 1. Longhorn snapshot of the DB volume (class longhorn-velero)
+cat <<EOF | kubectl apply -f -
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: immich-postgres-preupgrade-$(date +%Y%m%d)
+  namespace: immich
+spec:
+  volumeSnapshotClassName: longhorn-velero
+  source:
+    persistentVolumeClaimName: immich-postgres-data
+EOF
+kubectl get volumesnapshot -n immich -w   # wait for READYTOUSE=true
+
+# 2. Logical dump to the workstation
+kubectl exec -n immich deploy/immich-postgres -- \
+  sh -c 'pg_dump -U "$POSTGRES_USER" --no-owner --no-acl "$POSTGRES_DB"' \
+  | gzip > immich-preupgrade-$(date +%Y%m%d).sql.gz
+```
+
+Delete the VolumeSnapshot once the new version has soaked (it holds a Longhorn
+snapshot of the whole 10Gi volume).
+
+### Version history
+
+| Date | Version | Notes |
+|---|---|---|
+| 2026-07-19 | v3.0.3 | Major; mobile apps must be v3+, legacy timeline removed |
+| 2026-09-22 | v3.2.2 | |
+| 2026-11 | v3.3.6 | 5 schema migrations (people sharing, asset-face state, OAuth id cleanup, GeoNames country rename). 3.3.5 = Node Oct-2026 security release + certifi (eMudhra distrust); 3.3.6 turns off onnxruntime telemetry in the ML container. Postgres image unchanged |
+
+---
+
 ## Key Files
 
 ```
@@ -302,7 +359,7 @@ infrastructure/safeqbit-local-hq/controllers/
 └── nfs-bulk.yaml                  nfs-bulk-media StorageClass (HelmRelease)
 
 apps/safeqbit-local-hq/immich/
-├── 01-namespace.yaml              Namespace, backup.policy/velero: biweekly
+├── 01-namespace.yaml              Namespace (its backup.policy label is unused)
 ├── 02-sealed-secrets.yaml         SealedSecret: db-password, db-username, db-name
 ├── 03-postgres.yaml               Deployment (plain, strategy: Recreate) + Service
 ├── 04-redis.yaml                  Valkey Deployment + Service (no auth, no PVC)
@@ -314,7 +371,7 @@ apps/safeqbit-local-hq/immich/
 └── kustomization.yaml
 
 apps/safeqbit-local-hq/photoprism/
-├── 01-namespace.yaml              Namespace, backup.policy/velero: biweekly
+├── 01-namespace.yaml              Namespace (its backup.policy label is unused)
 ├── 02-sealed-secrets.yaml         SealedSecret: admin-password
 ├── 03-pvcs.yaml                   3× static NFS PV/PVC pairs
 ├── 04-photoprism.yaml             Deployment (seccompProfile: Unconfined) + Service
