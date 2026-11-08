@@ -398,7 +398,7 @@ Static NFS PVs (photoprism/immich media) need no copy — they point at fixed
 paths; restore the data in-place from a ZFS snapshot if it was damaged.
 
 ### Single CNPG cluster restore from a Backup CR
-The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. See CNPG docs - destroy the old Cluster first, then create a new one pointing at the desired Backup. Full procedure: [cnpg-strategy.md → Restore procedure](cnpg-strategy.md#restore-procedure).
+The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. Restore into a **new** Cluster name (`<cluster>-r1`) and move the app over. Do NOT destroy the old Cluster first: its Layer-2 snapshots live inside its own Longhorn volumes and are deleted with it. Full procedure: [cnpg-strategy.md → Restore procedure](cnpg-strategy.md#restore-procedure).
 
 ### Roll back a single PVC to a Longhorn snapshot
 Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "Revert". Requires the volume to be detached first (scale the owning Deployment to 0). Loses any data written since the snapshot.
