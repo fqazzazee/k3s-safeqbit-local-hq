@@ -19,7 +19,7 @@ spec:
   chart:
     spec:
       chart: metallb
-      version: 0.16.1                     # check `helm list -n metallb-system`
+      version: 0.16.2                     # check `helm list -n metallb-system`
       sourceRef:
         kind: HelmRepository
         name: metallb
