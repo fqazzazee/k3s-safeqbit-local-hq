@@ -114,6 +114,11 @@ spec:
                   prune affine       7    # daily × 1 week
                   prune netbox       7    # daily × 1 week
                   prune monitoring   7    # daily × 1 week (grafana-cnpg)
+                  # 2026-11-08: pangolin was never listed, so its weekly
+                  # snapshots piled up (14 backups, ~4.6G of snapshot data on
+                  # a 5Gi volume). 4 weeklies = ~1 month local; older restore
+                  # points come from pangolin-monthly on B2.
+                  prune pangolin     4    # weekly × ~4 weeks
                   # 2026-08-29: guacamole decommissioned — cluster gone.
                   # prune guacamole 10    # weekly × ~10 weeks (~34M snaps)
 

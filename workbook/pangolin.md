@@ -291,11 +291,14 @@ header comments of `04-` and `05-`.
 
 - **CNPG ScheduledBackup** `pangolin-cnpg-backup` — weekly Sun 03:30 UTC,
   volumeSnapshot (`longhorn-velero`). This is the important one: orgs, users,
-  sites, resources, policies, license registration. Retention via
-  `configs/cnpg-backup-retention.yaml`.
-- **Velero** `pangolin-bimonthly` — 11th & 26th 04:15 UTC → B2, ttl 28d (keep
-  last 2). Catches Gerbil's key PVC, the ACME state and the k8s objects. See
-  [[backup-strategy]].
+  sites, resources, policies, license registration. Retention: newest 4
+  (~1 month), pruned by `configs/cnpg-backup-retention.yaml` (only since
+  2026-11-08 — before that pangolin was missing from the prune list).
+- **Velero** `pangolin-monthly` — 25th 04:15 UTC → B2, ttl 60d (keep last 2).
+  Catches the CNPG PVC, Gerbil's key PVC and the k8s objects. The ACME state
+  (`pangolin-letsencrypt`) is on `nfs-truenas`, which the Velero volume policy
+  skips, so it is NOT in B2; Traefik re-issues the wildcard cert on startup.
+  See [backup-strategy.md](backup-strategy.md).
 
 Losing Gerbil's key PVC is not fatal, but forces every Newt/Olm peer to
 re-handshake against a new server key.

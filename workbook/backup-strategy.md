@@ -62,6 +62,7 @@ Each layer protects against a different failure mode:
 | **03:00** | `monitoring-bimonthly` | Velero | 9th + 24th | namespace `monitoring` | B2 |
 | **03:00** | `passzilla-bimonthly` | Velero | 11th + 26th | namespace `passzilla` | B2 |
 | **03:00** | `photoprism-bimonthly` | Velero | 13th + 28th | namespace `photoprism` | B2 |
+| **03:30** | `pangolin-cnpg-backup` | CNPG snapshot | weekly Sun | pangolin-cnpg | Longhorn |
 | **03:30** | `weekly-trim` | Longhorn fstrim | weekly Sun | every Longhorn volume | (reclaim) |
 | **04:15** | `weekly-snapshot` | Longhorn snapshot, retain 1 | weekly Sun | every Longhorn volume | Longhorn |
 | **05:00** | `cnpg-backup-retention` | CronJob (kubectl) | daily | all 5 CNPG clusters | (prune) |
@@ -177,16 +178,18 @@ Delete the **Backup CR** → garbage collection cascades all the way down. This 
 
 | Cluster | Schedule | Cron (6-field) | Cadence | Retention | Notes |
 |---|---|---|---|---|---|
-| `affine-cnpg` | `affine-cnpg-backup` | `0 0 2 * * *` | daily 02:00 | 30 | Notes app, high churn |
-| `netbox-cnpg` | `netbox-cnpg-backup` | `0 15 2 * * *` | daily 02:15 | 30 | Network inventory, critical |
-| `grafana-cnpg` | `grafana-cnpg-backup` | `0 30 2 * * *` | daily 02:30 | 30 | ~15MB DB, tiny snapshots |
-| `authentik-cnpg` | `authentik-cnpg-backup` | `0 45 2 * * 0` | weekly Sun 02:45 | 10 | SSO, lower change velocity |
+| `affine-cnpg` | `affine-cnpg-backup` | `0 0 2 * * *` | daily 02:00 | 7 | Notes app, high churn |
+| `netbox-cnpg` | `netbox-cnpg-backup` | `0 15 2 * * *` | daily 02:15 | 7 | Network inventory, critical |
+| `grafana-cnpg` | `grafana-cnpg-backup` | `0 30 2 * * *` | daily 02:30 | 7 | ~15MB DB, tiny snapshots |
+| `authentik-cnpg` | `authentik-cnpg-backup` | `0 45 2 * * 0` | weekly Sun 02:45 | 6 | SSO, lower change velocity |
+| `pangolin-cnpg` | `pangolin-cnpg-backup` | `0 30 3 * * 0` | weekly Sun 03:30 | 4 | Orgs/users/sites/resources; instances: 1. Unpruned until 2026-11-08 |
 
 **Source of truth:**
 - `apps/safeqbit-local-hq/affine/04-cnpg-scheduled-backup.yaml`
 - `apps/safeqbit-local-hq/netbox/04-cnpg-scheduled-backup.yaml`
 - `apps/safeqbit-local-hq/authentik/04-cnpg-scheduled-backup.yaml`
 - `infrastructure/safeqbit-local-hq/configs/grafana-cnpg-scheduled-backup.yaml`
+- `apps/safeqbit-local-hq/pangolin/03-cnpg-scheduled-backup.yaml`
 
 **⚠️ Cron syntax gotcha:** CNPG ScheduledBackup uses a **6-field cron** (`sec min hour dom mon dow`), not the standard 5-field. We were burned by this on 2026-05-27: `"0 2 * * *"` was misparsed as "every hour at minute 2" and produced 288 backups over 12 days. Always write 6 fields.
 
