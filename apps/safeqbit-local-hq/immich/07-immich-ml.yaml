@@ -38,7 +38,7 @@ spec:
       containers:
         - name: immich-machine-learning
           # Pinned to match immich-server (see 06-immich-server.yaml).
-          image: ghcr.io/immich-app/immich-machine-learning:v3.2.2
+          image: ghcr.io/immich-app/immich-machine-learning:v3.3.6
           ports:
             - containerPort: 3003
           env:
