@@ -72,7 +72,7 @@ spec:
       containers:
         # ---------------------------------------------------------------- gerbil
         - name: gerbil
-          image: docker.io/fosrl/gerbil:1.5.2
+          image: docker.io/fosrl/gerbil:1.6.0
           args:
             # What Gerbil tells Pangolin its own API is reachable at. Pangolin
             # calls this URL to push peer config, so it must be the ClusterIP
@@ -110,7 +110,7 @@ spec:
         # Shares this pod's netns with gerbil, so it binds :80/:443 on the very
         # same address Gerbil serves WireGuard on — upstream's topology exactly.
         - name: traefik
-          image: docker.io/traefik:v3.7.16
+          image: docker.io/traefik:v3.7.17
           args:
             - --configFile=/etc/traefik/traefik_config.yml
           securityContext:
