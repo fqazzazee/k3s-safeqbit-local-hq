@@ -449,3 +449,55 @@ kubectl get nodes   # → find the hostname to use
 **Two static PVs can point to the same NFS path.** Kubernetes enforces 1 PV → 1 PVC binding, but two separate PVs pointing to the same NFS export is valid. Use `claimRef` in each PV to prevent accidental cross-binding.
 
 **`proxy-body-size: 0` is required for photo/video upload apps.** nginx's default is 1m. Immich and Photoprism both upload multi-MB to multi-GB files. Without this annotation the ingress silently rejects large uploads with a 413 error. Always set it on media-heavy ingresses.
+
+---
+
+## Upgrading PhotoPrism
+
+**Current:** `photoprism/photoprism:261029` (since 2026-11). Tags are dates
+(YYMMDD); pin the exact tag and never `:latest`.
+
+Things that matter on every bump:
+
+- **The index is SQLite on NFS** (`/photoprism/storage/index.db`, on the
+  `photoprism-storage` static PV). Velero skips NFS, so the only copies are
+  TrueNAS snapshots of `Memories/storage` and PhotoPrism's own daily SQL dumps
+  in `/photoprism/storage/backup/sqlite3/`. Those keep only 3 days
+  (`PHOTOPRISM_BACKUP_RETAIN` default), so a pre-upgrade dump rotates out three
+  days after the upgrade. Copy the DB aside first (below).
+- **`strategy: Recreate`** (since 261029). The volume is RWX, so a
+  RollingUpdate would happily run two pods on one `index.db`, with the new one
+  migrating the schema while the old one writes.
+- **startupProbe, 10 minutes.** Schema migrations run before port 2342 opens.
+- **`PHOTOPRISM_DISABLE_MCP=true`.** 261029 enabled the MCP endpoint (AI
+  agents searching the library) by default. Nothing here uses it.
+  `PHOTOPRISM_OAUTH_APPS` stays at its default `registered` (only apps an admin
+  registers can use the new OAuth sign-in flow).
+
+Copy the DB aside before a bump with schema changes. This uses SQLite's online
+backup API: the source is opened read-only and only the new file is written,
+so PhotoPrism can keep running.
+
+```bash
+D=$(date +%Y%m%d)
+kubectl exec -n photoprism deploy/photoprism -- \
+  sqlite3 -readonly /photoprism/storage/index.db \
+  ".backup '/photoprism/storage/index.db.preupgrade-$D'"
+kubectl exec -n photoprism deploy/photoprism -- \
+  sqlite3 -readonly /photoprism/storage/index.db.preupgrade-$D 'PRAGMA integrity_check;'   # ok
+# Optional off-cluster copy
+kubectl exec -n photoprism deploy/photoprism -- \
+  cat /photoprism/storage/index.db.preupgrade-$D > photoprism-index-preupgrade-$D.db
+```
+
+Rollback: revert the image tag in Git, suspend the `apps` Kustomization and
+scale PhotoPrism to 0, copy the saved file over `index.db` (the share is also
+mounted on TrueNAS, or use a throwaway pod on the `photoprism-storage` PVC),
+then scale up and resume. Delete the copy once the new version has soaked.
+
+### Version history
+
+| Date | Version | Notes |
+|---|---|---|
+| 2026-10-23 | 261007 | |
+| 2026-11 | 261029 | DB layer upgrade (GORM v1.9 -> v1.31) with schema migrations; MCP on by default (disabled here); files with `\|"?*%<>{}:~$` in their names are no longer indexed. libheif (23 GHSA), Go 1.27.3 (11 CVE), ONNX Runtime 1.31 |

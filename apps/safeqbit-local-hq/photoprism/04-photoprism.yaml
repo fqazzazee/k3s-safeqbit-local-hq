@@ -8,6 +8,9 @@
 # PHOTOPRISM_DISABLE_TLS: TLS is terminated at the nginx ingress.
 # SQLite database lives inside /photoprism/storage (NFS-backed PVC),
 # so no separate database service is needed.
+#
+# PHOTOPRISM_DISABLE_MCP: 261029 turned the MCP endpoint (AI-agent access to
+# the library) on by default. Nothing here uses it, so it stays off.
 
 ---
 apiVersion: apps/v1
@@ -20,6 +23,11 @@ metadata:
     app.kubernetes.io/component: server
 spec:
   replicas: 1
+  # Recreate: the storage volume is RWX NFS, so nothing stops a RollingUpdate
+  # from running two PhotoPrism pods against the same SQLite index.db at
+  # once (and the new one may be migrating the schema while the old writes).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: photoprism
@@ -36,7 +44,7 @@ spec:
 
       containers:
         - name: photoprism
-          image: photoprism/photoprism:261007
+          image: photoprism/photoprism:261029
           ports:
             - containerPort: 2342
           env:
@@ -59,6 +67,8 @@ spec:
               value: "false"
             - name: PHOTOPRISM_DISABLE_TLS
               value: "true"
+            - name: PHOTOPRISM_DISABLE_MCP
+              value: "true"
           volumeMounts:
             - name: storage
               mountPath: /photoprism/storage
@@ -69,6 +79,14 @@ spec:
             - name: localtime
               mountPath: /etc/localtime
               readOnly: true
+          # Schema migrations run before the port opens (261029 moved to
+          # GORM v2 and warns the first start "may take longer than usual").
+          # 10 minutes of grace so liveness cannot kill a migration midway.
+          startupProbe:
+            tcpSocket:
+              port: 2342
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             tcpSocket:
               port: 2342
