@@ -148,7 +148,7 @@ Also posts itself Mondays 08:30 ET. Two things to keep honest:
 - Anything you deliberately decide **not** to upgrade belongs in `HOLDS`
   (charts) or `IMAGE_HOLDS` (images) with the reason, in
   `configs/chart-updates-report.yaml` — otherwise the digest re-argues a
-  settled decision every week. cert-manager and Home Assistant are there now.
+  settled decision every week. Longhorn and Home Assistant are there now.
 - A new app appears under **Untracked images** until you add it to `IMAGES`
   (with a source and tag pattern) or to `IGNORE` (with a reason). That line
   is the feature, not a nag — it is how an image avoids going unwatched.
@@ -158,11 +158,14 @@ not a CVE severity. See [vulnerability-scanning.md](vulnerability-scanning.md)
 for why, and for what scanning would cost if that is ever wanted.
 
 Chart-managed sidecars are not tracked at all — they move with their chart.
-Floating tags (`affine:stable`, `redis:7-alpine`, the alpine/python/node
-bases) have no version to compare, so they get their own section: it reports
-whether the digest a pod actually pulled still matches what the tag resolves
-to now. Moves inside 30 days collapse to one line (python/redis/postgres are
-rebuilt weekly); older drift, and `affine:stable`, are listed.
+Floating tags (`redis:7-alpine`, the alpine/python/node bases) have no
+version to compare, so they get their own section: it reports whether the
+digest a pod actually pulled still matches what the tag resolves to now.
+Moves inside 30 days collapse to one line (python/redis/postgres are rebuilt
+weekly); older drift is listed. AFFiNE used to be the headline case
+(`affine:stable`), but it has been pinned by tag and digest
+(`0.27.4@sha256:…`) since PR #135; the report's IGNORE entry for it still
+says "floating tag :stable" and is due an update.
 
 ### 8. Certificate expiry
 

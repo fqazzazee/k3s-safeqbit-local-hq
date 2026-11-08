@@ -92,10 +92,14 @@ data:
     • Alpine/distroless images have `sh` at best, not `bash`
     • One-shot: `kubectl exec <pod> -- env | sort` · `-- ls /config`
     • `kubectl cp <ns>/<pod>:/path ./local` — needs `tar` in the image
-    • CNPG psql (pattern from workbook/maintenance.md):
-      `kubectl exec -it -n <ns> <cluster>-1 -- psql -U postgres`
-    • Velero CLI lives only in the velero pod:
-      `kubectl exec -n velero deploy/velero -- /velero backup get`
+    • CNPG psql (pattern from workbook/maintenance.md) — exec into the
+      CURRENT PRIMARY, never assume `-1` (authentik-cnpg-1 is gone,
+      netbox-cnpg-1 is the replica):
+      `kubectl get cluster -n <ns> <cluster> -o jsonpath='{.status.currentPrimary}'`
+      then `kubectl exec -it -n <ns> <that-pod> -c postgres -- psql -U postgres`
+    • Velero: use the local `velero` CLI on the workstation
+      (`velero backup get`). NOT `kubectl exec deploy/velero` — the
+      Deployment selector also matches the node-agent pods.
 
     :warning: exec is a *write-ish* action (you can change state inside
     the pod) — the Slack bot deliberately has no equivalent.
@@ -178,9 +182,8 @@ data:
       kopia-maintain jobs) must be deleted by hand
 
     :rotating_light: *Never `kubectl delete` a Velero backup CR* — the
-    backup-sync controller resurrects it from B2. Use the CLI in the
-    pod: `kubectl exec -n velero deploy/velero -- /velero backup delete
-    <name> --confirm`.
+    backup-sync controller resurrects it from B2. Use the local CLI:
+    `velero backup delete <name> --confirm`.
     Remember: deleting a PVC deletes the data (Longhorn volume follows
     the claim). Snapshot/backup first if in doubt.
   kubectl.debug: |
@@ -395,15 +398,17 @@ data:
     • *Lag high/persistent* → network or storage pressure:
       `/cluster ps`, `longhorn`.
     • *Connect / dump* (workbook/maintenance.md has the full recipes):
-      `kubectl exec -it -n <ns> <cluster>-1 -- psql -U postgres`
+      exec into the pod named by `kubectl get cluster -n <ns> <cluster>
+      -o jsonpath='{.status.currentPrimary}'` (never assume `-1`),
       or port-forward `svc/<cluster>-rw` 5432 and use local psql.
       App creds live in the app's secret (`<cluster>-app`).
     • *Before risky upgrades:* take a CNPG snapshot restore point —
       the pattern from the July 2026 upgrade wave; instant rollback.
-    • Not in `/cluster cnpg`: Immich & PhotoPrism run their own
-      bundled Postgres (plain Deployments); Vaultwarden, Uptime Kuma
-      and Home Assistant are SQLite-on-Longhorn — single writer, never
-      scale them to 2 replicas.
+    • Not in `/cluster cnpg`: Immich runs its own bundled Postgres
+      (plain Deployment); PhotoPrism is SQLite on its NFS storage PV;
+      Vaultwarden, Uptime Kuma, Home Assistant, Passzilla, Pulse and
+      qbit-labs are SQLite-on-Longhorn — single writer, never scale
+      them to 2 replicas.
     Strategy & inventory rationale: workbook/cnpg-strategy.md.
   method.backups-restore: |
     *Backup & restore triage* — checking all four layers
@@ -415,9 +420,10 @@ data:
       per-volume failures
     *PartiallyFailed backups:* full runbook
     workbook/velero-partial-failed-cleanup.md. Short version: the
-    alert looks back 16 DAYS unless a newer success exists — clear it
-    by rerunning: `kubectl exec -n velero deploy/velero -- /velero
-    backup create --from-schedule <sched>`. Restarting velero does NOT
+    alert looks back 32 DAYS unless a newer success exists — clear it
+    by rerunning: `velero backup create --from-schedule <sched>`
+    (local CLI). Orphaned schedule: silence until failure+32d.
+    Restarting velero does NOT
     clear it. Delete backups ONLY via the velero CLI (kubectl delete
     gets resurrected by backup-sync). Stale Failed kopia-maintain jobs:
     delete by hand (`/cluster jobs` flags them).
@@ -543,13 +549,21 @@ data:
     • `grafana-cnpg` — 2 (moved off SQLite after deadlocks)
     • `netbox-cnpg` — 2
     • `affine-cnpg` — 2
+    • `pangolin-cnpg` — 1 (single instance by design; drains need a
+      manual pod delete, see maintenance.md)
     Primary+standby always on different nodes (anti-affinity);
-    failover automatic.
+    failover automatic. Instance numbers move on failover — look up
+    `.status.currentPrimary`, don't assume `-1`.
     Outliers (not in cnpg output):
-    • Immich & PhotoPrism — own bundled Postgres deployments
-    • Vaultwarden, Uptime Kuma, Home Assistant — SQLite on Longhorn:
-      single-writer, 1 replica + Recreate, NEVER scale to 2
-    • NetBox & AFFiNE also run small Redis deployments (no persistence)
+    • Immich — own bundled Postgres deployment
+    • PhotoPrism — SQLite inside its NFS storage PV (TrueNAS is its
+      only backup; Velero skips NFS)
+    • Vaultwarden, Uptime Kuma, Home Assistant, Passzilla, Pulse,
+      qbit-labs — SQLite on Longhorn: single-writer, 1 replica +
+      Recreate, NEVER scale to 2
+    • NetBox & AFFiNE also run small Redis deployments; AFFiNE's and
+      NetBox's cache have no persistence, `netbox-redis-tasks` has a
+      1Gi Longhorn PVC + appendonly
     Connect/dump recipes: workbook/maintenance.md. Rationale &
     post-mortems: workbook/cnpg-strategy.md.
   cluster.monitoring: |
@@ -568,7 +582,7 @@ data:
     • *Uptime Kuma* — uptime.local.safeqbit.com; FQDN-only HTTP checks.
     • *Pulse* — pulse.local.safeqbit.com; single pane for Proxmox
       hosts + this cluster (agent DaemonSet→Deployment) + the legacy
-      Docker host. Known flap: `wiki cluster.gotchas`.
+      Docker host.
     _Bot: `alerts` · `silences` · `summary` (digest on demand)._
   cluster.gitops: |
     *GitOps* — how changes actually reach the cluster
@@ -582,6 +596,10 @@ data:
     ```
     Flow: edit YAML → PR → merge → Flux reconciles (controllers →
     configs → apps ordering via dependsOn).
+    :warning: An older `infrastructure` Kustomization also applies
+    controllers+configs together with no ordering (improvement-plan
+    P2.8). Suspending for maintenance means all four: apps,
+    infrastructure, infrastructure-controllers, infrastructure-configs.
     • Secrets: `kubeseal` on the laptop → SealedSecret in Git; only
       the in-cluster controller can decrypt. Master key lives offline.
     • Live changes get reverted/stripped — the emergency pattern is
@@ -600,15 +618,24 @@ data:
     • *authentik* — SSO/IdP (authentik01.…); CNPG ×2; forward-auth
       for prometheus/alertmanager
     • *immich* — photos; own Postgres + NFS bulk media
-    • *photoprism* — photos/AI tagging; own DB + NFS bulk media
+    • *photoprism* — photos/AI tagging; SQLite on NFS + NFS bulk media
+      (Velero carries manifests only)
     • *netbox* — IPAM/DCIM; CNPG ×2 + 2 Redis + NFS RWX
     • *affine* — notes; CNPG ×2 + Redis + Longhorn ×2 PVCs
-    • *passzilla* — one-time secret links
+    • *passzilla* — one-time secret links; SQLite/Longhorn; public via
+      cloudflared tunnel
     • *home-assistant* — home automation (home-assistant-01.…, LAN LB
-      10.10.13.51 for IoT devices); image PINNED 2026.4.1 (recorder
-      schema one-way + Sensi compat) — do not bump casually
+      10.10.13.51 for IoT devices); image PINNED 2026.4.4 (recorder
+      schema one-way + Sensi compat) — do not bump casually, NEVER
+      downgrade
     • *uptime-kuma* — uptime checks (uptime.…); SQLite/Longhorn
     • *pulse* — Proxmox/k3s/Docker monitoring (pulse.…)
+    • *pangolin* — identity-aware remote access; own edge on
+      10.10.13.52, `*.pg.local.safeqbit.com`; CNPG ×1
+    • *babytracker* — newborn tracking (babytracker.…); LAN-only, no
+      auth; append-only log on Longhorn, Velero daily
+    • *qbit-labs* — study platform (qbit-labs.…); SQLite/Longhorn,
+      Velero daily; public tunnel behind Cloudflare Access
     • *monitoring* — prometheus/grafana/alertmanager + this bot
     Per-app backup schedules/TTLs: workbook/backup-strategy.md.
     _Bot: `/cluster pods <ns>` · `ps <ns>` · `deploys <ns>`._
@@ -641,8 +668,9 @@ data:
       "online", controls no-op); reload integration/restart HA pod.
     • *HA internal_url* — if unset, HA advertises its POD IP and
       rewrites IoT websocket targets; keep http://10.10.13.51:8123.
-    • *Pulse k8s agent flap* — any UI config save orphans the agent
-      handler; restart the pulse pod.
+    • *Pulse k8s agent flap* (FIXED upstream in v6.1.1, #1558) — a UI
+      config save used to orphan the agent handler; restarting the
+      pulse pod was the fix. Only relevant if it ever comes back.
     • *Longhorn snapshots never fold into the live head* — a removed
       snapshot reclaims only into a NEWER snapshot; without one it
       traps under the head forever (42.5 GB on the TSDB volume,
@@ -679,5 +707,13 @@ data:
       `immich-photoprism-migration.md` — per-app docs & migrations
     • `pangolin.md` — identity-aware remote access; its own edge on
       10.10.13.52, everything published under *.pg.local.safeqbit.com
+    • `vaultwarden.md`, `passzilla.md`, `babytracker.md`,
+      `qbit-labs.md`, `cloudflared-migration.md` — more per-app docs
+    • `restore-drills.md` — quarterly restore drills per backup layer
+    • `longhorn-1.12-upgrade.md` — the HELD Longhorn upgrade (wait for
+      1.12.2 GA)
+    • `vulnerability-scanning.md` — why there's no scanner yet, and
+      what would change that
+    • `guacamole.md` — decommissioned; kept for the resurrection lesson
     _The wiki summarizes; the runbooks decide. When they disagree,
     trust the runbook and fix the wiki page._

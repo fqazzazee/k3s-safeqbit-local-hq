@@ -35,6 +35,7 @@
 ![Pangolin](https://img.shields.io/badge/Pangolin-F36118?style=for-the-badge&logo=pangolin&logoColor=white)
 ![Pulse](https://img.shields.io/badge/Pulse-00B4D8?style=for-the-badge&logoColor=white)
 ![Baby Tracker](https://img.shields.io/badge/Baby%20Tracker-FF6F91?style=for-the-badge&logoColor=white)
+![qbit-labs](https://img.shields.io/badge/qbit--labs-2E7D32?style=for-the-badge&logoColor=white)
 
 > A small private cloud running in my home - three computers working together to host
 > my passwords, photos, notes, and a handful of other apps I'd rather not rent from a
@@ -187,6 +188,7 @@ flowchart TB
             ha["Home Assistant<br/>LAN LB 10.10.13.51"]
             kuma["Uptime Kuma"]
             bt["Baby Tracker"]
+            ql["qbit-labs"]
         end
         subgraph pg["🔐 Pangolin — brings its own front door"]
             pgedge["Gerbil + Traefik — one pod<br/>10.10.13.52 · TLS + WireGuard UDP"]
@@ -195,8 +197,8 @@ flowchart TB
         end
         subgraph db["🐘 Databases"]
             cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>pangolin ×1")]
-            ownpg[("bundled Postgres<br/>immich · photoprism")]
-            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant<br/>plain-text log: babytracker")]
+            ownpg[("bundled Postgres<br/>immich")]
+            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant<br/>passzilla · pulse · qbit-labs<br/>plain-text log: babytracker<br/>photoprism: SQLite on NFS")]
         end
         subgraph storage["💾 Storage"]
             longhorn[("Longhorn<br/>replicated block storage")]
@@ -408,9 +410,9 @@ over SSH, giving me a continuously-updated, ready-to-go second copy of all NAS d
 
 ---
 
-## 🛟 Backups - three copies, three failure modes
+## 🛟 Backups - four layers, four failure modes
 
-A backup is only useful for the disaster it was designed for, so I run three layers, each
+A backup is only useful for the disaster it was designed for, so I run four layers, each
 covering a different "what if."
 
 | Layer | Tool | Protects against | Where it goes |
@@ -431,8 +433,10 @@ A few details for the curious:
   state, including the one key that can decrypt every secret in this repo.
 - **Layer 3** (Velero) ships both the Kubernetes configuration *and* the volume data up to
   a [Backblaze B2](https://www.backblaze.com/cloud-storage) bucket off-site. Schedules are
-  staggered so only one app uploads per day, keeping costs predictable. Bulk file data on
-  the NAS (photo libraries, media, app files on NFS) is deliberately *excluded* - ZFS
+  staggered so most days carry at most one big upload, keeping costs predictable. Bulk file data on
+  the NAS (photo libraries, media, app files on NFS - which includes PhotoPrism's whole
+  state, its SQLite database too, so its Velero run carries manifests only) is
+  deliberately *excluded* - ZFS
   snapshots + NAS replication + the NAS's own cloud backup already cover it, and
   duplicating it into B2 would add cost without adding safety. Credentials for B2
   are stored encrypted in this repo (see *Security* below).
@@ -489,10 +493,11 @@ database offline.
 | grafana-cnpg | Grafana | 2 | Moved off SQLite (which deadlocked); primary + standby |
 | netbox | NetBox | 2 | Primary + standby |
 | affine | AFFiNE | 2 | Primary + standby |
+| pangolin-cnpg | Pangolin | 1 | Single instance by design; drains move it by pod delete (see the maintenance runbook) |
 
 All four pairs use anti-affinity so the primary and standby never share a node. (Immich
-and PhotoPrism run their own tuned PostgreSQL; Vaultwarden uses a simple SQLite file on
-replicated storage.)
+runs its own tuned PostgreSQL; PhotoPrism keeps a SQLite database on its NFS storage
+volume; Vaultwarden uses a simple SQLite file on replicated storage.)
 
 ### cloudflared: secure access from outside the house
 
@@ -537,15 +542,24 @@ k3s-safeqbit-local-hq/
 │   ├── flux-system/                  # Flux's own bootstrap manifests
 │   ├── apps.yaml                     # tells Flux where the apps are
 │   ├── infrastructure-controllers.yaml
-│   └── infrastructure-configs.yaml
+│   ├── infrastructure-configs.yaml
+│   └── infrastructure.yaml           # older catch-all, see below
 ├── apps/safeqbit-local-hq/           # one folder per app I run
 └── infrastructure/safeqbit-local-hq/
     ├── controllers/                  # the platform pieces (Helm charts)
     └── configs/                      # settings that depend on those pieces
 ```
 
-The controllers/configs split lets Flux bring things up **in the right order** during a
-rebuild - operators first, then the things that depend on them - all in one pass.
+The controllers/configs split is meant to let Flux bring things up **in the right order**
+during a rebuild: `infrastructure-configs` waits (`dependsOn`) for
+`infrastructure-controllers`, and `apps` waits for `infrastructure-configs`. One wrinkle:
+an older `infrastructure` Kustomization still points at the parent
+`infrastructure/safeqbit-local-hq/` folder with no `dependsOn`, so it applies the same
+controllers *and* configs again (115 objects = 41 + 74) without any ordering. In steady
+state that is harmless double-applying. On a fresh rebuild it can try the configs before
+the operators' CRDs exist, which just fails and retries until the ordered pair catches
+up. Removing it is tracked in
+[workbook/improvement-plan.md](workbook/improvement-plan.md).
 
 ### Rebuilding from nothing
 
@@ -620,22 +634,23 @@ learn.
 
 ### Apps I actually use
 
-| App | What it's for |
-|---|---|
-| [Vaultwarden](https://github.com/dani-garcia/vaultwarden) | Password manager (Bitwarden-compatible) |
-| [Authentik](https://goauthentik.io/) | Single sign-on / identity provider |
-| [Immich](https://immich.app/) | Self-hosted photo & video backup (Google Photos alternative) |
-| [PhotoPrism](https://www.photoprism.app/) | Photo management with AI tagging |
-| [NetBox](https://netbox.dev/) | Network documentation & IP address management |
-| [AFFiNE](https://affine.pro/) | Notes & collaborative knowledge base |
-| [Passzilla](https://github.com/pglombardo/PasswordPusher) | One-time secret / password sharing links |
-| [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring |
-| [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards |
-| [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms ([my own project](#things-im-building)) |
-| [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard |
-| [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports |
-| [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine |
-| [Pulse](https://github.com/rcourtman/Pulse) | Single-pane-of-glass monitoring for the Proxmox hosts, this k3s cluster, and my legacy Docker host environment |
+| App | What it's for | Runbook |
+|---|---|---|
+| [Vaultwarden](https://github.com/dani-garcia/vaultwarden) | Password manager (Bitwarden-compatible) | [vaultwarden.md](workbook/vaultwarden.md) |
+| [Authentik](https://goauthentik.io/) | Single sign-on / identity provider | [authentik-migration.md](workbook/authentik-migration.md) |
+| [Immich](https://immich.app/) | Self-hosted photo & video backup (Google Photos alternative) | [immich-photoprism-migration.md](workbook/immich-photoprism-migration.md) |
+| [PhotoPrism](https://www.photoprism.app/) | Photo management with AI tagging | [immich-photoprism-migration.md](workbook/immich-photoprism-migration.md) |
+| [NetBox](https://netbox.dev/) | Network documentation & IP address management | [netbox-migration.md](workbook/netbox-migration.md) |
+| [AFFiNE](https://affine.pro/) | Notes & collaborative knowledge base | [affine-migration.md](workbook/affine-migration.md) |
+| [Passzilla](https://github.com/pglombardo/PasswordPusher) | One-time secret / password sharing links | [passzilla.md](workbook/passzilla.md) |
+| [Uptime Kuma](https://github.com/louislam/uptime-kuma) | Uptime & availability monitoring | [uptime-kuma.md](workbook/uptime-kuma.md) |
+| [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards | [home-assistant-migration.md](workbook/home-assistant-migration.md) |
+| [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms ([my own project](#things-im-building)) | [babytracker.md](workbook/babytracker.md) |
+| qbit-labs | Self-hosted study platform - lab pages, quizzes, spaced-repetition flashcards and progress tracking ([my own project](#things-im-building), private repo) | [qbit-labs.md](workbook/qbit-labs.md) |
+| [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard | [pangolin.md](workbook/pangolin.md) |
+| [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports | [maintenance.md](workbook/maintenance.md) |
+| [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine | [maintenance.md](workbook/maintenance.md) |
+| [Pulse](https://github.com/rcourtman/Pulse) | Single-pane-of-glass monitoring for the Proxmox hosts, this k3s cluster, and my legacy Docker host environment | [pulse.md](workbook/pulse.md) |
 
 ### Platform components (the plumbing)
 
@@ -662,6 +677,7 @@ learn.
 | Project | Description |
 |---|---|
 | [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep, custom buttons and programmable alarms. Zero dependencies, no build step, plain-text storage; it runs on this cluster (see [the app list](#apps-i-actually-use)) from a pinned commit of its own repo, and an Android companion app is in private development. |
+| qbit-labs | A self-hosted study platform: Markdown lab pages, quizzes, spaced-repetition flashcards and step-through network maps. Runs on this cluster from a pinned commit of its private repo, same pattern as the baby tracker. |
 | QubeCommander (`qube`) | An htop-style terminal commander for this cluster. It runs the Slack bot's own code, so it answers the same commands - and its trace pane doubles as a kubectl teacher, showing the command you'd type by hand for every answer on screen. Not published yet. |
 | cluster-slack-bot | The read-only `/cluster` ChatOps bot and in-Slack wiki described [above](#cluster-slack-bot-chatops--a-built-in-wiki) - still growing new commands as I find things I want to check from my phone. |
 
