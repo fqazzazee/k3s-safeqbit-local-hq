@@ -9,7 +9,7 @@
 LAN-only — nothing is forwarded from the WAN.
 
 > Sole remote-access stack as of 2026-08-29: the Guacamole sibling that
-> overlapped with it ([[guacamole]]) was decommissioned.
+> overlapped with it ([guacamole.md](guacamole.md)) was decommissioned.
 
 ---
 
@@ -56,16 +56,18 @@ It also matters for two concrete reasons:
 Mixed TCP/UDP on one LoadBalancer is GA (`MixedProtocolLBService`, k8s ≥1.26);
 this cluster runs 1.35 and MetalLB L2 handles it.
 
-**No Helm chart.** The official chart is `0.1.0-alpha.1` with appVersion 1.18.2
-against an image at 1.21.1. Everything here is hand-authored plain manifests.
+**No Helm chart.** The official chart (`fosrl/helm-charts`) is still
+`0.1.0-alpha.1` with appVersion 1.18.3, far behind the app. Everything here is
+hand-authored plain manifests.
 
 | Component | Image | File | Exposure |
 |---|---|---|---|
-| Pangolin | `fosrl/pangolin:ee-postgresql-1.21.1` | `08-pangolin-deployment.yaml` | ClusterIP `pangolin` :3000/3001/3002/3003 |
+| Pangolin | `fosrl/pangolin:ee-postgresql-1.26.0` | `08-pangolin-deployment.yaml` | ClusterIP `pangolin` :3000/3001/3002/3003 |
 | Gerbil | `fosrl/gerbil:1.6.0` | `11-edge-deployment.yaml` (container 1) | UDP 51820/21820 + TCP 3004 internal |
 | Traefik | `traefik:v3.7.17` | `11-edge-deployment.yaml` (container 2, **same pod**) | TCP 80/443 + UDP 443 (h3) |
+| Badger | Traefik plugin `github.com/fosrl/badger` | `10-edge-config.yaml` (`experimental.plugins`) | loaded by Traefik at startup |
 | Database | CNPG `pangolin-cnpg` | `02-cnpg-cluster.yaml` | Longhorn 5Gi, `instances: 1` |
-| Newt (in-cluster) | `fosrl/newt:1.15.0` | `14-newt-deployment.yaml` | none — outbound only |
+| Newt (in-cluster) | `fosrl/newt:1.20.0` | `14-newt-deployment.yaml` | none — outbound only |
 
 Traefik loads routing the canonical Pangolin way: HTTP provider →
 `http://pangolin:3001/api/v1/traefik-config`, plus a file provider for the four
@@ -77,7 +79,7 @@ dashboard routers, plus Badger on every router. No Traefik CRDs, no RBAC.
 |---|---|---|
 | Edge LoadBalancer | **10.10.13.52** | reserved pool `10.10.13.50–59`, `autoAssign:false`, ETP `Local` |
 | Edge ClusterIP | **10.43.0.100** (pinned) | pinned because `hostAliases` needs a literal IP |
-| ingress-nginx | 10.10.13.50 | the other 16 apps — untouched by this |
+| ingress-nginx | 10.10.13.50 | every other app — untouched by this |
 | home-assistant-lan | 10.10.13.51 | **do not reuse** — Shelly sensors have it baked in |
 
 `10.43.0.100` sits in the service CIDR's low/static band (Kubernetes allocates
@@ -218,7 +220,7 @@ application → paste the key at `/admin/license` after first login.
 Misrepresenting revenue to claim the free tier violates the license.
 
 EE ↔ community is a **tag swap, not a one-way door** — the schema is identical,
-so `postgresql-1.21.x` works if EE is ever dropped.
+so the matching `postgresql-<version>` tag works if EE is ever dropped.
 
 ---
 
@@ -248,7 +250,8 @@ so `postgresql-1.21.x` works if EE is ever dropped.
      id/secret, scopes `openid profile email`.
 8. **Create the in-cluster Site** (type: Newt), seal its credentials, and enable
    the connector — the `kubeseal` command is in the header of
-   `14-newt-deployment.yaml`. Uncomment `14`/`15` in `kustomization.yaml`.
+   `15-sealed-secret-newt.yaml`. Done: Site `k3s-pg-newt-01`, and `14`/`15` are
+   listed in `kustomization.yaml`.
 9. **Other Newt connectors:** the Docker host, and any LAN hosts with
    line-of-sight to RDP/VNC/SSH targets. They need a route to `10.10.13.0/24`.
 10. **Decommission the Docker/Portainer stack** once soaked.
@@ -305,6 +308,48 @@ re-handshake against a new server key.
 
 ---
 
+## Upgrading
+
+- **There is no compatibility table upstream.** The installer resolves
+  Pangolin, Gerbil and Badger to the newest tag on the day it runs
+  (`install/Makefile`), so "current" means newest stable of each. Traefik is
+  not in that set: the installer's compose pins a v3.7.x tag, and our exact
+  patch level is ours to choose.
+- **Take a restore point first.** Pangolin runs its schema migrations on boot,
+  a failed one blocks startup, and upstream does not support downgrades:
+  ```
+  kubectl apply -f - <<'EOF'
+  apiVersion: postgresql.cnpg.io/v1
+  kind: Backup
+  metadata:
+    name: pangolin-pre-<version>-<yyyymmdd>
+    namespace: pangolin
+  spec:
+    cluster:
+      name: pangolin-cnpg
+    method: volumeSnapshot
+  EOF
+  kubectl -n pangolin get backups.postgresql.cnpg.io pangolin-pre-<version>-<yyyymmdd>   # wait for completed
+  ```
+  Use the full resource name: plain `backup` resolves to Longhorn's CRD. The
+  retention CronJob counts these against pangolin's newest 4, so the restore
+  point ages out with the weeklies.
+- **Bump Newt with Pangolin, and Gerbil with Traefik.** New server features
+  often need a matching connector (1.26's SSH session logging needs Newt
+  1.20.0+). Gerbil and Traefik share the edge pod, so batching them costs one
+  restart instead of two.
+- **Badger is bumped by hand, in `10-edge-config.yaml`.** Some Pangolin
+  migrations try to rewrite `config/traefik/traefik_config.yml` to raise the
+  Badger version. That file does not exist in the Pangolin pod here, so the
+  step logs `We were unable to update the version of Badger in your Traefik
+  configuration` and carries on. That line is expected, not a failed upgrade.
+- **Edge static config needs a pod delete.** Traefik reads
+  `traefik_config.yml` (entrypoints, plugins, resolvers) only at startup, and
+  nothing restarts the edge when the ConfigMap changes. Delete the pod:
+  `kubectl -n pangolin delete pod -l app.kubernetes.io/component=edge`.
+
+---
+
 ## Gotchas
 
 - **Gerbil must track Pangolin's release.** Nothing below **1.4.2** is safe here:
@@ -312,9 +357,17 @@ re-handshake against a new server key.
   endpoint was the same"*, and every exit node in this deployment shares one
   endpoint. The failure is indirect — the Newt connects, the server logs `Site
   last hole punch is too old; skipping this register`, `Config version` stays
-  `0`, and **no resource router is published**, so resources 404. Pinned at
-  **1.4.3**.
+  `0`, and **no resource router is published**, so resources 404. The pinned
+  version is in `11-edge-deployment.yaml`.
 - **`externalTrafficPolicy: Local` is required, not preferred** — see above.
+- **Every pod here sets `dnsConfig` `ndots:1`.** Pods inherit the search domain
+  `local.safeqbit.com`, and with the default `ndots:5` a name like
+  `mail.smtp2go.com` is tried as `mail.smtp2go.com.local.safeqbit.com` first;
+  upstream answers that with NOERROR/no-answer, so lookups flap or fail. Same
+  fix and same story as Home Assistant ([home-assistant-migration.md](home-assistant-migration.md)).
+- **Single writer, no HA.** Pangolin, the edge and Newt are each `replicas: 1` +
+  `Recreate`, and the database is `instances: 1`. Losing a node means a
+  reschedule, not a failover.
 - **DNS-01 needs both propagation settings.** `disableANSChecks: true` because
   lego's default check queries Cloudflare's *authoritative* nameservers on :53,
   which pods cannot reach; and `delayBeforeChecks: 120s` because with that check
@@ -336,5 +389,5 @@ re-handshake against a new server key.
   only by standing up a share-manager NFS pod, and no volume in this cluster does
   that today — the edge's ability to start is not where to introduce it.
 
-See also: [[cnpg-strategy]], [[guacamole]], [[backup-strategy]],
-[[node-loss-resilience]], [[dns-search-amplification]].
+See also: [cnpg-strategy.md](cnpg-strategy.md), [guacamole.md](guacamole.md),
+[backup-strategy.md](backup-strategy.md).
