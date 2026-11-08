@@ -7,7 +7,7 @@ alarms. Added 2026-08-25.
 - **Hostname:** https://babytracker.local.safeqbit.com (internal only — see [Security posture](#security-posture))
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
 - **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own; relicensed MIT → PolyForm Strict 1.0.0 on 2026-08-30 — noncommercial self-hosting only, which this is)
-- **Image:** none of its own — `node:22.23.2-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
+- **Image:** none of its own — `node:22.23.4-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
 - **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `2073238` = v1.13.0 (upgraded 2026-09-07 from `e1e18a8` = v1.6.0)
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
@@ -121,7 +121,7 @@ kubectl -n babytracker exec deploy/babytracker -- cat /data/config.json > /tmp/b
 kubectl -n babytracker exec deploy/babytracker -- cat /data/events.log  > /tmp/bt/data/events.log
 ```
 
-Then run `node:22.23.2-alpine3.24` over a checkout of the candidate commit with
+Then run `node:22.23.4-alpine3.24` over a checkout of the candidate commit with
 `BT_DATA_DIR=/data` and check the startup line's event count against the live
 one. **Bind mounts from a Claude Code scratchpad are invisible to the docker
 daemon** — the container sees an empty directory and Node says

@@ -17,7 +17,7 @@ Namespace: cloudflared
 └── tunnel-qbit-labs              (2 connector pods, token sealed; added 2026-10-29)
 
 Each tunnel has:
-  ├── SealedSecret   → cloudflared-<name>-cf-tunnel-token
+  ├── SealedSecret   → <name>-cf-tunnel-token
   ├── Deployment     → 2 replicas, spread across nodes
   ├── Service        → headless, metrics port 2000 only
   ├── ServiceMonitor → Prometheus scrapes metrics every 30s
