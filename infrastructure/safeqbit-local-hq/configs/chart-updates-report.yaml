@@ -59,8 +59,8 @@
 # HOLDS / IMAGE_HOLDS (in the script) are the pin lists: an entry there is
 # reported under "Held" with the reason instead of nagging. Add to them
 # whenever an upgrade is deliberately declined, or the report will argue with
-# a decision you already made. Today: cert-manager, Longhorn and Home
-# Assistant.
+# a decision you already made. Today: Longhorn and Home Assistant
+# (cert-manager's hold ended with the v1.21 upgrade, PRs #150-#154).
 #
 # ── The image half ────────────────────────────────────────────────────────
 # IMAGES in the script is an explicit map, image repo → where to look and a
@@ -180,10 +180,9 @@ data:
     # which is exactly how a recurring report stops being read.
     # Keep in sync with the holdout list in workbook/slack-bot.md.
     HOLDS = {
-        "cert-manager": "held at 1.16.1 by choice (July 2026 wave): no issues,"
-                        " 1.21.x has known crash-loop bugs — target 1.20.x if ever",
-        "longhorn": "held at 1.11.3 (2026-09-22): 1.12's internal NetworkPolicies"
-                    " block Prometheus:9500 — see workbook/longhorn-1.12-upgrade.md",
+        "longhorn": "held at 1.11.3: wait for 1.12.2 GA (1.12.0/1.12.1 NetworkPolicies"
+                    " block Prometheus:9500 and break CSI attach; 1.12.2 fixes both)"
+                    " — see workbook/longhorn-1.12-upgrade.md",
     }
 
     # Pre-release tags never count as "available"; nobody runs an rc in prod here.

@@ -51,7 +51,7 @@ If double answers ever DO appear, that assumption broke: drop back to
 | Manifest | `infrastructure/.../configs/cluster-slack-bot.yaml` |
 | Tokens | SealedSecret `cluster-slack-bot-tokens` (raw values in Vaultwarden) |
 | Image | `python:3.13-alpine` + `pip install slack-bolt` (pinned) at start |
-| Replicas | 1, `Recreate` — two bots would answer every command twice |
+| Replicas | 2, `RollingUpdate` — Socket Mode delivers each command to one connection, so two bots don't answer twice (see "Replicas & HA" above) |
 
 ## Commands
 
@@ -261,10 +261,11 @@ refusals are expected; don't "fix" them.
   `pre`/`snapshot`/`nightly`/`next` are filtered out, so the report never
   suggests an rc.
 - **`HOLDS` in the script is the pin list.** A chart listed there reports
-  under *Held* with the reason instead of nagging. Today: `cert-manager`,
-  held at v1.16.1 (July 2026 wave — 1.21.x has known crash-loop bugs,
-  target 1.20.x if ever), and `longhorn`, held at 1.11.3 (1.12's internal
-  NetworkPolicies block Prometheus — `longhorn-1.12-upgrade.md`). **Add to
+  under *Held* with the reason instead of nagging. Today: `longhorn`, held
+  at 1.11.3 until 1.12.2 is GA (1.12.0/1.12.1's internal NetworkPolicies
+  block Prometheus and break CSI attach — `longhorn-1.12-upgrade.md`).
+  cert-manager was held at v1.16.1 until 2026-10-23, when it went up one
+  minor per PR to v1.21 (PRs #150–#154) and left the list. **Add to
   `HOLDS` whenever an upgrade is deliberately declined**, or the digest will
   argue every week with a decision already made.
 - **Weekly, not daily**, on purpose: upgrades land in batches weeks apart,

@@ -102,8 +102,13 @@ bucket `k3s-safeqbit-etcd` with an application key scoped to that bucket only
 `/etc/rancher/k3s/config.yaml` on all 3 server nodes (root-only 0600, key not
 in git), rolling `systemctl restart k3s` with zero workload impact — and the
 restarts doubled as the first live validation that the CoreDNS autoscaler
-(P0.2) survives a k3s Addon re-apply. Weekly (Sun 00:00 UTC), retention 8 per node
-≈ 8 weeks of reach-back ≈ 2GB live + ~1GB lifecycle tail. Verified end-to-end with an on-demand `k3s etcd-snapshot
+(P0.2) survives a k3s Addon re-apply. Weekly (Sun 00:00 UTC), retention 8
+**in total across all three nodes**, not 8 per node: k3s prunes the bucket's
+scheduled snapshots as one pool, so B2 holds the newest 8, which is under 3
+weeks of reach-back (oldest on 2026-11-08: 2026-10-25). At ~90–100MB per
+snapshot that is ≈ 0.8GB live + ~1.2GB lifecycle tail. (The original
+"8 per node ≈ 8 weeks ≈ 2GB" estimate was wrong; backup-strategy.md
+"Layer 0" has the details.) Verified end-to-end with an on-demand `k3s etcd-snapshot
 save` → `s3://k3s-safeqbit-etcd/snapshots/…` record. Full doc: backup-strategy.md
 "Layer 0". Frequency reduced to weekly same day (VM backups of the server VMs cover the middle layer); retention 8; bucket lifecycle "keep prior versions 30 days".
 
@@ -189,7 +194,10 @@ Make this consistent with how the maintenance workbook documents node shutdown -
 - ☑ **server-03** `apt full-upgrade` + reboot (7.0.0-31 → 7.0.0-38) + graceful
   shutdown on 2026-10-23. All three kubelets report `shutdownGracePeriod 2m0s`,
   critical `30s`.
-- ☐ **k3s v1.35.4 → v1.35.8** on all three, as a separate visit after the OS work.
+- ☐ **k3s v1.35.4 → v1.35.10** on all three, as a separate visit after the OS work.
+  The target moved: v1.35.10+k3s1 (2026-11-03) is the current v1.35 patch and
+  carries CVE fixes (grpc, klipper-helm) and containerd 2.2.10. Re-check the
+  newest v1.35 patch when this is picked up.
 - Found on the way: **graceful node shutdown had never been active on any
   node**. The kubelets all reported `shutdownGracePeriod: 0s`, because
   `kubelet-arg` in `config.yaml` is overridden by the service's command line,
@@ -209,7 +217,8 @@ at **v1.35.8+k3s1** (2026-08-27), four patch releases behind.
 1. `kubectl drain` the node (respect PDBs), then on the host:
    server-01 `do-release-upgrade` to 26.04 LTS; server-02 `apt full-upgrade`.
 2. Upgrade k3s on the same visit (same install script, pinned
-   `INSTALL_K3S_VERSION=v1.35.8+k3s1`), reboot, `kubectl uncordon`.
+   `INSTALL_K3S_VERSION=v1.35.10+k3s1`, or whatever the newest v1.35 patch
+   is by then), reboot, `kubectl uncordon`.
 3. Before moving on: node Ready, etcd members healthy, Longhorn volumes back
    to `healthy`, and the flannel offload fix + multipath blacklist still in
    place — the checklist in [node-bootstrap.md](node-bootstrap.md).
@@ -300,6 +309,13 @@ Then run one of these per quarter, log results, refine docs.
 > list — its weekly CNPG backups grew unbounded since 06-05. Added
 > `prune guacamole 10`.
 
+> **Same gap again, fixed 2026-11-08 (PR #163):** pangolin-cnpg (added
+> 2026-08) was never in the prune list either, and had 14 Backup CRs and
+> growing. Added `prune pangolin 4`. Current retention: authentik 6,
+> affine/netbox/monitoring 7 (trimmed 2026-07-21), pangolin 4; guacamole's
+> line is commented out since its decommission. **When adding a CNPG
+> cluster, add its `prune` line in the same PR.**
+
 ---
 
 ### ☑ P2.4 Replace `:latest` image tags
@@ -345,9 +361,13 @@ No taints, no excluding affinity, no zone enforcement. The "imbalance" is just L
 
 ---
 
-### ☐ P2.7 Plan the replacement for ingress-nginx (upstream is archived)
+### ✗ P2.7 Plan the replacement for ingress-nginx (upstream is archived)
 
-**Opened:** 2026-09-23 (health sweep)
+**Opened:** 2026-09-23 (health sweep) · **Decided:** 2026-10 — keep
+ingress-nginx v1.15.1 while everything behind it stays LAN-only. Not
+re-raised from this page; revisit only if that premise changes (a workload
+exposed directly, not through a Cloudflare Access tunnel) or a CVE lands
+that matters on the LAN. The analysis below is kept for that day.
 
 **Why:** `kubernetes/ingress-nginx` was retired: the repo was archived on
 **2026-03-23**, and our controller **v1.15.1** (chart 4.15.1, 2026-03-19)
@@ -369,6 +389,35 @@ tied to ingress-nginx.
 
 ---
 
+### ☐ P2.8 Retire the duplicate `infrastructure` Flux Kustomization
+
+**Opened:** 2026-11-08 (docs audit)
+
+**Why:** `clusters/safeqbit-local-hq/infrastructure.yaml` points at the
+parent folder `./infrastructure/safeqbit-local-hq` with no `dependsOn`. That
+folder has no `kustomization.yaml`, so Flux generates one that takes in
+both `controllers/` and `configs/`. Its inventory is **115 objects = 41
+(infrastructure-controllers) + 74 (infrastructure-configs)**: the same
+objects, applied a second time, with no ordering. In steady state that is
+just redundant work. On a fresh rebuild it tries the configs before the
+operators' CRDs exist, which fails and retries until the ordered pair has
+caught up. It also means a maintenance suspend has to name four
+Kustomizations, not three (maintenance.md step 3). The README used to say
+the split guarantees ordering, which this Kustomization undercuts.
+
+**Fix:** remove `infrastructure.yaml` from `clusters/safeqbit-local-hq/`.
+All three Kustomizations have `prune: false`, so deleting this one orphans
+nothing. Confirm afterwards with `kubectl get kustomization -n flux-system`
+that `infrastructure-controllers` and `infrastructure-configs` still own
+every object. Then `kubectl delete kustomization -n flux-system
+infrastructure` by hand if Flux doesn't remove it, and drop it from the
+suspend/resume loops in maintenance.md. Check first that nothing in the
+docs or the bot relies on `flux reconcile kustomization infrastructure`.
+
+**Effort:** ~15 min.
+
+---
+
 ## P3 - Future state
 
 ### ☐ P3.1 Migrate CNPG backups to plugin-based (Barman) on S3
@@ -377,7 +426,7 @@ End state of P2.1 - proper native retention, point-in-time recovery via WAL arch
 
 ### ☐ P3.2 Network policies (deny-by-default within namespaces)
 
-The cluster runs everything as default-allow. Kube-router netpol is already enforcing what's there; just no policies are authored. Worth adding minimal deny-all + per-app allow rules eventually for blast-radius reduction.
+The cluster runs everything as default-allow outside `flux-system` (which has the 3 NetworkPolicies Flux installs by default). Kube-router netpol is already enforcing what's there; we just haven't authored any policies of our own. Worth adding minimal deny-all + per-app allow rules eventually for blast-radius reduction.
 
 ### ☐ P3.4 Document on-call playbooks
 

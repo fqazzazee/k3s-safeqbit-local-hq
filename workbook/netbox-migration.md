@@ -325,7 +325,7 @@ This confirms the Redis process is accepting connections, which is all the liven
 apps/safeqbit-local-hq/netbox/
 ├── 01-namespace.yaml        Namespace with backup.policy/velero label
 ├── 02-sealed-secrets.yaml   SealedSecret: redis passwords, SECRET_KEY, superuser creds
-├── 03-cnpg-cluster.yaml     CNPG Cluster: postgres 16, instances: 1, Longhorn 5Gi
+├── 03-cnpg-cluster.yaml     CNPG Cluster: PostgreSQL 18.6, instances: 2, Longhorn 5Gi
 ├── 04-redis.yaml            Two Redis Deployments + PVC (tasks) + two Services
 ├── 05-pvcs.yaml             media/reports/scripts on nfs-truenas (ReadWriteMany)
 ├── 06-netbox-web.yaml       Web Deployment + ClusterIP Service
@@ -334,7 +334,7 @@ apps/safeqbit-local-hq/netbox/
 └── 09-ingress.yaml          netbox.local.safeqbit.com, letsencrypt-prod
 
 infrastructure/safeqbit-local-hq/configs/
-└── velero-schedule-netbox.yaml   Biweekly 1st & 15th at 03:00 UTC, 6-month retention
+└── velero-schedule-netbox.yaml   netbox-biweekly: 4th & 19th at 03:00 UTC, TTL 21d (keep 2)
 ```
 
 ---

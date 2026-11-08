@@ -1,9 +1,9 @@
 # Backup Strategy
 
 **Cluster:** safeqbit-local-hq
-**Last reviewed:** 2026-05-28
+**Last reviewed:** 2026-11-08
 
-Single source of truth for what's backed up, where it goes, how long it's kept, and how to verify or restore. Reflects the live state after the 2026-05-28 rewrite (P2.1 + P2.2 from [improvement-plan.md](improvement-plan.md)).
+Single source of truth for what's backed up, where it goes, how long it's kept, and how to verify or restore. Started as the 2026-05-28 rewrite (P2.1 + P2.2 from [improvement-plan.md](improvement-plan.md)); the schedule tables were re-checked against the live Schedules, ScheduledBackups, RecurringJobs and CronJobs on 2026-11-08. See the change log at the bottom for what moved in between.
 
 ---
 
@@ -22,7 +22,7 @@ Single source of truth for what's backed up, where it goes, how long it's kept, 
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Layer 2 - CNPG ScheduledBackup → Longhorn VolumeSnapshot            │
 │   Coverage: PostgreSQL clusters only (affine, netbox, grafana,      │
-│             authentik). Triggered with pg CHECKPOINT for consistency │
+│             authentik, pangolin). pg CHECKPOINT for consistency     │
 │   Cadence: daily (high-value) or weekly (low-churn)                 │
 │   Retention: enforced by daily CronJob in cnpg-system               │
 └─────────────────────────────────────────────────────────────────────┘
@@ -36,6 +36,10 @@ Single source of truth for what's backed up, where it goes, how long it's kept, 
 │   Retention: limited to 250 per volume (Longhorn hard cap)          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+Layer 0 (etcd snapshots → their own B2 bucket, weekly) sits outside this
+stack: it backs up the cluster's state, not volume data. See
+[Layer 0 - etcd snapshots to B2](#layer-0---etcd-snapshots-to-b2-control-plane) below.
 
 Each layer protects against a different failure mode:
 
@@ -55,28 +59,46 @@ Each layer protects against a different failure mode:
 | **02:15** | `netbox-cnpg-backup` | CNPG snapshot | daily | netbox-cnpg | Longhorn |
 | **02:30** | `grafana-cnpg-backup` | CNPG snapshot | daily | grafana-cnpg | Longhorn |
 | **02:45** | `authentik-cnpg-backup` | CNPG snapshot | weekly Sun | authentik-cnpg | Longhorn |
-| **03:00** | `affine-weekly` | Velero | weekly Sun | namespace `affine` | B2 |
-| **03:00** | `netbox-weekly` | Velero | weekly Wed | namespace `netbox` | B2 |
+| **03:00** | `affine-biweekly` | Velero | 2nd + 17th | namespace `affine` | B2 |
+| **03:00** | `netbox-biweekly` | Velero | 4th + 19th | namespace `netbox` | B2 |
 | **03:00** | `authentik-bimonthly` | Velero | 5th + 20th | namespace `authentik` | B2 |
 | **03:00** | `vaultwarden-bimonthly` | Velero | 7th + 22nd | namespace `vaultwarden` | B2 |
 | **03:00** | `monitoring-bimonthly` | Velero | 9th + 24th | namespace `monitoring` | B2 |
 | **03:00** | `passzilla-bimonthly` | Velero | 11th + 26th | namespace `passzilla` | B2 |
 | **03:00** | `photoprism-bimonthly` | Velero | 13th + 28th | namespace `photoprism` | B2 |
+| **03:30** | `immich-bimonthly` | Velero | 1st + 16th | namespace `immich` | B2 |
+| **03:30** | `babytracker-daily` | Velero | daily | namespace `babytracker` | B2 |
 | **03:30** | `pangolin-cnpg-backup` | CNPG snapshot | weekly Sun | pangolin-cnpg | Longhorn |
 | **03:30** | `weekly-trim` | Longhorn fstrim | weekly Sun | every Longhorn volume | (reclaim) |
+| **03:45** | `qbit-labs-daily` | Velero | daily | namespace `qbit-labs` | B2 |
+| **04:00** | `uptime-kuma-weekly` | Velero | weekly Sun | namespace `uptime-kuma` | B2 |
+| **04:15** | `pangolin-monthly` | Velero | 25th | namespace `pangolin` | B2 |
 | **04:15** | `weekly-snapshot` | Longhorn snapshot, retain 1 | weekly Sun | every Longhorn volume | Longhorn |
+| **05:00** | `pulse-bimonthly` | Velero | 6th + 21st | namespace `pulse` | B2 |
 | **05:00** | `cnpg-backup-retention` | CronJob (kubectl) | daily | all 5 CNPG clusters | (prune) |
+| **06:00** | `home-assistant-biweekly` | Velero | 1st + 15th + 29th | namespace `home-assistant` | B2 |
+| **07:00** | `velero-repo-maintenance-pulse` | CronJob (kopia maintenance) | daily | pulse kopia repo | (B2 GC) |
 
-**Day-of-month layout** for bi-monthly Velero jobs (only one workload to B2 per day, avoids B2 transaction-cap spikes):
+**Day-of-month layout** for the Velero jobs that don't run daily or weekly.
+Most days carry at most one of them, which keeps B2 transaction counts
+spread out:
 
 ```
-Day:   1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28
-              A     V     M        P        Ph              A     V        M     P     Ph
-                    |          (Sundays = affine-weekly,  Wednesdays = netbox-weekly,
-                    |                                     interleaved with these days)
+Day  Velero job(s)                 Day  Velero job(s)
+ 1   immich 03:30 · HA 06:00       16   immich 03:30
+ 2   affine                        17   affine
+ 4   netbox                        19   netbox
+ 5   authentik                     20   authentik
+ 6   pulse 05:00                   21   pulse 05:00
+ 7   vaultwarden                   22   vaultwarden
+ 9   monitoring                    24   monitoring
+11   passzilla                     25   pangolin 04:15 (monthly)
+13   photoprism                    26   passzilla
+15   HA 06:00                      28   photoprism
+                                   29   HA 06:00
+Every day: babytracker 03:30, qbit-labs 03:45.  Sundays: uptime-kuma 04:00.
+(Times are 03:00 unless shown. HA is `*/14` on the day field: 1st, 15th, 29th.)
 ```
-
-A=authentik, V=vaultwarden, M=monitoring, P=passzilla, Ph=photoprism
 
 ---
 
@@ -101,6 +123,8 @@ All Velero schedules use `snapshotMoveData: true`, which:
 | `pangolin-monthly` | `15 4 25 * *` | 25th 04:15 | 60d (keep 2) | pangolin |
 | `uptime-kuma-weekly` | `0 4 * * 0` | Sundays 04:00 | 60d | uptime-kuma |
 | `home-assistant-biweekly` | `0 6 */14 * *` | 1st + 15th + 29th 06:00 | 28d (~keep last 2) | home-assistant |
+| `babytracker-daily` | `30 3 * * *` | daily 03:30 | 30d | babytracker |
+| `qbit-labs-daily` | `45 3 * * *` | daily 03:45 | 14d | qbit-labs |
 
 **Terminology warning.** This repo uses "bi-monthly" to mean *twice a month*
 (~15-day interval), not once every two months. "Bi-weekly" means *every 14
@@ -128,7 +152,7 @@ improvement-plan P3.1 gives CNPG a real Barman/S3 target.
 - Endpoint: `https://s3.us-east-005.backblazeb2.com`
 - Credentials: SealedSecret `velero-cloud-credentials`
 
-**Kopia maintenance frequency:** `168h0m0s` (weekly per repo, set in `velero.yaml` HelmRelease values as `defaultRepoMaintainFrequency`). Was hourly until 2026-05-27 when it blew through the B2 free-tier transaction cap.
+**Kopia maintenance frequency:** `168h0m0s` (weekly per repo, set in `velero.yaml` HelmRelease values as `defaultRepoMaintainFrequency`). Was hourly until 2026-05-27 when it blew through the B2 free-tier transaction cap. One exception: the `velero-repo-maintenance-pulse` CronJob (`configs/velero-repo-maintenance-pulse.yaml`, daily 07:00) runs extra maintenance on the pulse repo only, because pulse-data rewrites itself constantly and dedups badly, so expired pulse backups would otherwise keep billing B2 for up to a week (rationale in the file header).
 
 **NFS volumes are deliberately skipped (2026-07-03).** Every Schedule references
 the `velero-volume-policy` ConfigMap (`template.resourcePolicy`), whose single
@@ -142,8 +166,11 @@ rule skips any NFS-sourced volume. Rationale:
   the two NAS boxes + the NAS's own cloud backup. Duplicating bulk files into
   the B2 free tier adds transactions/cost, not durability.
 - Affected data: netbox media/reports/scripts, authentik media/templates,
-  grafana NFS home (plugins — rebuildable), photoprism
-  library (static PVs). All under `10.10.10.5:/mnt/nvme2tb/k8s/pvs` (dynamic)
+  grafana NFS home (plugins — rebuildable), pangolin-letsencrypt (ACME
+  state, `nfs-truenas`), photoprism library (static PVs) **and photoprism's
+  SQLite database**, which lives in the static `photoprism-storage-pv`. So
+  `photoprism-bimonthly` carries manifests only, and PhotoPrism's DR is
+  TrueNAS alone. All under `10.10.10.5:/mnt/nvme2tb/k8s/pvs` (dynamic)
   or `/mnt/mach2/mach2nas/Media` (static). **Both datasets must stay covered
   by the TrueNAS snapshot/replication/cloud tasks — verify when changing NAS
   config.**
@@ -159,7 +186,7 @@ rebuilds the replica from it.
 | Namespace | Why skipped |
 |---|---|
 | `cloudflared` | Config only - no PVCs. Tunnels reconstruct from manifests + sealed-secrets via Flux. |
-| `longhorn-system`, `cnpg-system`, `cert-manager`, `ingress-nginx`, `sealed-secrets`, `kube-system`, `flux-system`, `nfs-provisioner`, `metallb-system`, `velero` | Platform components - reinstall from Flux + manifests in repo. State (CRs, secrets) lives in apps' namespaces. |
+| `longhorn-system`, `cnpg-system`, `cert-manager`, `ingress-nginx`, `kube-system` (incl. the sealed-secrets controller), `flux-system`, `nfs-provisioner`, `nfs-bulk-media`, `metallb-system`, `velero` | Platform components - reinstall from Flux + manifests in repo. State (CRs, secrets) lives in apps' namespaces. |
 
 ---
 
@@ -309,8 +336,9 @@ it every SealedSecret in this repo is undecryptable).
 - **Bucket lifecycle:** "keep prior versions for 30 days" — k3s pruning
   deletes ~3 objects/week; the 30-day hidden tail makes any deletion
   done with the node-side key undoable from the B2 console (account creds,
-  not the stolen key) for a month. Snapshots are ~65MB each (2026-10-23), so
-  steady state is ≈ 0.6GB live + ~0.8GB tail.
+  not the stolen key) for a month. Snapshots were ~65MB each on 2026-10-23
+  and ~90–100MB by 2026-11-08 (88–103MB in `kubectl get etcdsnapshotfiles`),
+  so steady state is ≈ 0.8GB live + ~1.2GB tail, and still growing.
 - **Verify:** `kubectl get etcdsnapshotfiles | grep s3://` — S3-flavored
   records appear next to the `file://` ones after each scheduled snapshot.
   On-demand test: `sudo k3s etcd-snapshot save` on any server node.
@@ -339,7 +367,7 @@ kubectl -n velero get backups.velero.io --sort-by=.metadata.creationTimestamp | 
 kubectl get backups.postgresql.cnpg.io -A --sort-by=.metadata.creationTimestamp
 
 # Backup CR counts per namespace (should plateau near retention values)
-for ns in affine authentik netbox monitoring; do
+for ns in affine authentik netbox monitoring pangolin; do
   echo "$ns: $(kubectl -n $ns get backups.postgresql.cnpg.io --no-headers 2>/dev/null | wc -l)"
 done
 

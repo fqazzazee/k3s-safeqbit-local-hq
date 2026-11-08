@@ -11,15 +11,22 @@
 
 ## Current State
 
+As of 2026-11-08 (the rest of this page is the May 2026 migration history):
+
 ```
 Namespace: authentik
-├── CNPG Cluster: authentik-cnpg (Postgres 16, instances: 2, Longhorn 10Gi)
-│   ├── authentik-cnpg-1  (primary)
-│   └── authentik-cnpg-2  (hot standby)
-├── HelmRelease: authentik (chart: authentik 2025.10.3, redis subchart enabled)
+├── CNPG Cluster: authentik-cnpg (PostgreSQL 18.6, instances: 2, Longhorn 10Gi)
+│   ├── authentik-cnpg-2  (primary on 2026-11-08; -1 is gone, numbers move on failover)
+│   └── authentik-cnpg-3  (hot standby)
+├── HelmRelease: authentik (chart authentik 2026.8.5; server ×2, worker ×1; no Redis,
+│                           2025.10+ doesn't use it)
 ├── NFS PVCs: authentik-media (5Gi), authentik-templates (1Gi) - nfs-truenas RWX
 └── Ingress: authentik01.local.safeqbit.com → authentik-server:80 (letsencrypt-prod)
 ```
+
+Find the current primary with
+`kubectl get cluster -n authentik authentik-cnpg -o jsonpath='{.status.currentPrimary}'`.
+For the running chart version, trust `07-helmrelease.yaml` over this page.
 
 ---
 
@@ -69,7 +76,7 @@ Velero fires → tells Longhorn to snapshot the PVC → snapshot taken while Pos
 
 **Now (CNPG DB-aware):**
 ```
-ScheduledBackup fires (02:00 UTC daily)
+ScheduledBackup fires (weekly, Sunday 02:45 UTC; was daily 02:00 at migration time)
   → CNPG issues CHECKPOINT to Postgres (flush all dirty pages to disk)
   → Postgres confirms checkpoint complete
   → CNPG triggers VolumeSnapshot via Longhorn CSI
@@ -77,8 +84,10 @@ ScheduledBackup fires (02:00 UTC daily)
   → Backup object created; owns the VolumeSnapshot (GC'd together)
 ```
 
-Velero continues to run biweekly and covers the rest of the namespace (media PVC,
-templates PVC, sealed secret). Use the CNPG ScheduledBackup for database-specific restores.
+Velero (`authentik-bimonthly`, 5th + 20th) covers the rest of the namespace, including
+the primary's CNPG PVC, which makes it the only off-site copy of the database. The media
+and templates PVCs are NFS and are skipped by the volume policy; TrueNAS covers them. Use
+the CNPG ScheduledBackup for in-cluster database restores.
 
 ### Phase 1 runbook (what was done)
 
@@ -207,16 +216,17 @@ Updated DNS for `authentik01.local.safeqbit.com` from `10.10.12.29` → `10.10.1
 
 ```
 apps/safeqbit-local-hq/authentik/
-├── 01-namespace.yaml             Namespace; backup.policy/velero: biweekly
+├── 01-namespace.yaml             Namespace (its backup.policy/velero label is unused;
+│                                 Schedules select by includedNamespaces)
 ├── 02-sealed-secrets.yaml        SealedSecret: AUTHENTIK_SECRET_KEY only
-├── 03-cnpg-cluster.yaml          CNPG Cluster: postgres 16, instances: 2, Longhorn 10Gi
-├── 04-cnpg-scheduled-backup.yaml Daily 02:00 UTC VolumeSnapshot
+├── 03-cnpg-cluster.yaml          CNPG Cluster: PostgreSQL 18.6, instances: 2, Longhorn 10Gi
+├── 04-cnpg-scheduled-backup.yaml Weekly Sun 02:45 UTC VolumeSnapshot (keep 6)
 ├── 06-shared-pvcs.yaml           media (5Gi) + templates (1Gi) on nfs-truenas (RWX)
-├── 07-helmrelease.yaml           authentik chart 2025.10.3; redis subchart on
+├── 07-helmrelease.yaml           authentik chart 2026.8.5; no Redis
 └── 08-ingress.yaml               authentik01.local.safeqbit.com; letsencrypt-prod
 
 infrastructure/safeqbit-local-hq/configs/
-└── velero-schedule-authentik.yaml   Biweekly 1st & 15th at 03:00 UTC; 6-month retention
+└── velero-schedule-authentik.yaml   authentik-bimonthly: 5th & 20th at 03:00 UTC; TTL 21d (keep 2)
 ```
 
 ---
