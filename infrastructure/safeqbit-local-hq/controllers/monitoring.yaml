@@ -19,29 +19,29 @@ spec:
   chart:
     spec:
       chart: kube-prometheus-stack
-      # 91.4.1 = prometheus-operator v0.94.0. Seven majors in one jump; every
-      # documented break was checked against this deployment before taking it,
-      # and the notes live in the PR rather than here because none of them
-      # needed a values change:
+      # 93.1.0 = prometheus-operator v0.95.1, Prometheus v3.16.0, Grafana
+      # 13.3.0. Two majors from 91.4.1; none of the documented breaks needed a
+      # values change (full render diff is in the PR):
       #
-      #   84->85  distroless image variants became the default. The known trap
-      #           is listenLocal: true, whose probes shell out to sh/curl that
-      #           distroless does not ship — we leave listenLocal at the chart
-      #           default of false, so it does not apply.
-      #   85->88  CRD updates only (operator v0.91 -> v0.93).
-      #   88->89  Grafana subchart v13. We pin grafana.image.tag and already
-      #           run Grafana 13.1.0, so the subchart caught up to us.
-      #   89->90  control-plane ServiceMonitor auth refactor. kubeProxy,
-      #           kubeScheduler and kubeControllerManager are all disabled
-      #           here, and prometheus.serviceAccount.createTokenSecret
-      #           defaults to true, so the new token Secret appears on its own.
-      #   90->91  operator v0.94.0, wildcard verbs dropped from its ClusterRole.
+      #   91->92  default nodeSelector kubernetes.io/os=linux on Prometheus,
+      #           Alertmanager, the operator and the admission jobs (KSM 9.x
+      #           does the same). Pod specs change, so each restarts once.
+      #           The certgen job also switches the admission Secret from
+      #           Opaque (ca/cert/key) to kubernetes.io/tls (ca.crt/tls.crt/
+      #           tls.key): it deletes and recreates it with the SAME certs and
+      #           keeps the legacy keys, so the old operator pod and a chart
+      #           rollback both still find /cert/cert.
+      #   92->93  operator v0.95.1. Its ClusterRole gains
+      #           alertmanagerconfigs/status and loses `delete` on pods.
+      #   subcharts  grafana 13->14 adds values.schema.json (our values pass
+      #           it), node-exporter 4->5 adds a restrictive securityContext
+      #           (host mounts unchanged).
       #
       # CRDs are handled by `crds: CreateReplace` below, which is proven in
-      # this cluster rather than assumed: the live CRDs carry
-      # operator.prometheus.io/version 0.90.1, exactly matching the 84.5.0
-      # appVersion, so Flux has been keeping them in step already.
-      version: 91.4.1                     # check `helm list -n monitoring`
+      # this cluster rather than assumed: after the 84.5.0 -> 91.4.1 jump the
+      # live CRDs carried operator.prometheus.io/version 0.94.0, exactly the
+      # 91.4.1 appVersion, without any manual kubectl apply.
+      version: 93.1.0                     # check `helm list -n monitoring`
       sourceRef:
         kind: HelmRepository
         name: prometheus-community
@@ -176,13 +176,13 @@ spec:
       enabled: true
       # No image override. This carried tag "13.1.0" from when the stack was on
       # 84.5.0, which pinned grafana 13.0.1 — the override existed to move us
-      # forward a minor. Chart 91.4.1 ships grafana appVersion 13.2.2, so the
+      # forward a minor. Chart 91.4.1 shipped grafana appVersion 13.2.2, so the
       # pin had inverted and was holding us back; its own comment said to drop
-      # it on the next stack bump, and #130 was that bump.
+      # it on the next stack bump, and #130 was that bump. 93.1.0 ships 13.3.0.
       #
       # Inheriting the chart default also changes the image VARIANT, not just
       # the version: the subchart default is `{{ .Chart.AppVersion }}-distroless`,
-      # so grafana now runs 13.2.2-distroless. Checked before accepting that —
+      # so grafana runs <appVersion>-distroless. Checked before accepting that —
       # nothing here needs a shell in the grafana container. No plugins, no
       # downloadDashboards, no custom command, lifecycle or env; the probes are
       # httpGet rather than exec; and the one init container, init-chown-data,
