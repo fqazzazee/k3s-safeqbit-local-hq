@@ -9,11 +9,11 @@ Server added 2026-06-29. k3s agent added 2026-06-30.
 - **Namespace:** `pulse`
 - **Hostname:** https://pulse.local.safeqbit.com (admin UI, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/pulse/`
-- **Image:** `rcourtman/pulse:v6.5.0` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
+- **Image:** `rcourtman/pulse:v6.7.0` (pinned; bump deliberately after reading upstream release notes — see [Version history](#version-history))
 - **Server port:** `7655` (ClusterIP `pulse`, in-cluster DNS `pulse.pulse.svc.cluster.local:7655`)
 - **Storage:** `pulse-data` 4Gi Longhorn RWO at `/data` — holds config, the **encrypted target credentials** (Proxmox tokens, agent tokens), discovered nodes, alert config, and history. **The only home for that config** (targets are added in the UI, not in Git).
 - **Web-UI auth:** built-in, `PULSE_AUTH_USER` / `PULSE_AUTH_PASS` from SealedSecret `pulse-auth` (`03-sealed-secret.yaml`). Plaintext pass auto-hashed on startup → auth enforced from first boot, no open window. Admin password stored in Vaultwarden.
-- **Backup:** `infrastructure/.../velero-schedule-pulse.yaml` — weekly to B2, Sundays 05:00 UTC, 60d retention (tuned down from 180d, 2026-07-03).
+- **Backup:** `infrastructure/safeqbit-local-hq/configs/velero-schedule-pulse.yaml` — Velero Schedule `pulse-bimonthly` to B2, 6th + 21st of the month at 05:00 UTC, **21d TTL** (= the last two restore points). It replaced the old `pulse-weekly` (Sundays, 60d). pulse-data barely dedups in kopia, so a separate daily CronJob, `velero-repo-maintenance-pulse` (`configs/velero-repo-maintenance-pulse.yaml`, 07:00 UTC), runs kopia maintenance on the pulse repo. That is what makes expired backups actually free B2 space; the global maintenance frequency is 168h.
 
 ---
 
@@ -58,8 +58,12 @@ To make the cluster appear in Pulse, the **unified agent** runs as a
   it later: set `PULSE_ENABLE_HOST=true`, add the `/proc` `/sys` `/` hostPath
   mounts + `privileged: true`, and reissue the token with `host-agent:report`
   (see upstream `docs/KUBERNETES.md`).
-- **RBAC:** `pulse-agent` ServiceAccount + read-only ClusterRole (`get`/`list`/
-  `watch` on nodes, pods, deployments) + binding. Monitoring read path only.
+- **RBAC:** `pulse-agent` ServiceAccount + read-only ClusterRole `pulse-agent-read`
+  + binding. `get`/`list`/`watch` on nodes, pods, namespaces, PVCs, events, the
+  `apps` and `batch` workload kinds, `metrics.k8s.io`, VolumeSnapshots and Velero
+  backups/schedules (v6 widened this; see
+  [Four things v6 breaks](#four-things-v6-breaks-that-a-bare-tag-bump-would-not-fix)).
+  No secrets, no writes. Monitoring read path only.
 - **Token:** sealed `PULSE_TOKEN` (`pulse-agent-token`), generated in the Pulse UI
   with scope **`kubernetes:report`**.
 - **`PULSE_AGENT_ID=safeqbit-local-hq`:** stable identity for the cluster's single
@@ -95,14 +99,14 @@ kubectl -n pulse logs deploy/pulse-agent --tail=20
 ## First-run / configuration (UI)
 
 1. Log in at https://pulse.local.safeqbit.com as `admin` (password in Vaultwarden).
-2. **Settings → API Tokens** — the `kubernetes:report` token for the DaemonSet
+2. **Settings → API Tokens** — the `kubernetes:report` token for the k3s agent
    already exists (sealed in Git). Generate additional tokens here for the Docker
    host agent if/when added.
 3. **Add Proxmox hosts:** Settings → add each PVE node with a Proxmox API token.
 4. Confirm the k3s cluster shows up as agent **`safeqbit-local-hq`**.
 
-Target config lives only in the `pulse-data` PVC → it's covered by the weekly
-Velero backup. Nothing about targets is in Git.
+Target config lives only in the `pulse-data` PVC → it's covered by the
+`pulse-bimonthly` Velero backup. Nothing about targets is in Git.
 
 Three UI-only settings are **load-bearing** and must survive any reconfigure or
 restore. See [the 2026-09-23 CPU burn](#the-2026-09-23-cpu-burn--rolling-cpu-evaluation-window):
@@ -139,6 +143,40 @@ throwaway pod) before any future bump rather than assuming they survived.
 | 2026-08-18 | `v6.2.1` | both | minor, realigns the two on one tag |
 | 2026-08-29 | `v6.4.1` | both | two minors + a patch; **went straight to `v6.4.1`** — `v6.4.0` shipped a non-executable embedded agent |
 | 2026-10-23 | `v6.5.0` | both | minor; no migration, no manifest changes |
+| 2026-11 | `v6.7.0` | both | two minors (6.6, 6.7); auth/token hardening; no manifest changes |
+
+### v6.5.0 → v6.7.0 (2026-11)
+
+Two minor releases, `v6.6.0` (10-25) and `v6.7.0` (11-02). Neither lists a
+`/data` migration, a breaking change or a "before you upgrade" item that applies
+to a Kubernetes deployment. What matters here:
+
+- **Security hardening (both releases).** v6.6 stops tokens from granting scopes
+  their caller lacks and keeps instance administration with instance admins.
+  v6.7 rechecks live tokens after revocation, stops non-admin users reading agent
+  config, bounds decompressed WebSocket messages, and updates the OIDC/JWT
+  libraries. The agent token here is a plain `kubernetes:report` token, so none
+  of this should touch it; watch the agent log for a 401/403 after the roll.
+- **Rolling alerts.** v6.7 "Rolling alerts use the right history" changes how
+  averaged alerts find their stored readings. That is the code path behind the
+  [2026-09-23 CPU burn](#the-2026-09-23-cpu-burn--rolling-cpu-evaluation-window).
+  The `v6.7.0` source (`internal/alerts/config/normalize.go`) still keeps an
+  explicit `cpu: 0` and only seeds the 300s default when the key is missing, so
+  the setting should survive the upgrade. Check it anyway after the roll (see
+  the Troubleshooting grep) and keep it at `0`. Re-enabling it on this version is
+  untested.
+- **Kubernetes agent path unchanged.** `internal/kubernetesagent/agent.go` is
+  byte-identical between `v6.5.0` and `v6.7.0`, and the agent reads the same 43
+  environment variables. RBAC therefore needs no change.
+
+All four v6 pins re-checked against the `v6.7.0` image (`pulse-agent-linux-amd64
+--help`, run locally with podman): `--health-addr` still defaults to
+`127.0.0.1:9191`, `--disable-auto-update` and `--enable-kubernetes` unchanged,
+and the default state dir is still `/var/lib/pulse-agent` (`defaultAgentStateDir`
+in `cmd/pulse-agent/main.go`).
+
+Known issue carried in both releases: "Elevated server memory remains
+unresolved". Compare `kubectl top` against the ~300Mi warm baseline after a day.
 
 ### v6.4.1 → v6.5.0 (2026-10-23)
 
@@ -304,10 +342,12 @@ VOL=$(kubectl -n pulse get pvc pulse-data -o jsonpath='{.spec.volumeName}')
 kubectl -n longhorn-system get volume "$VOL"          # confirm attached/healthy
 
 # Layer 3 — off-cluster copy to B2 (bare `kubectl get backup` in the velero ns
-# resolves to backups.longhorn.io — always spell out backups.velero.io)
-kubectl -n velero exec deploy/velero -- \
-  /velero backup create pulse-pre-v6-$(date +%Y%m%d) --from-schedule pulse-weekly
-kubectl -n velero get backups.velero.io | grep pulse-pre-v6
+# resolves to backups.longhorn.io — always spell out backups.velero.io).
+# In 2026-07 this ran `--from-schedule pulse-weekly`, which no longer exists.
+# Use the local velero CLI: `kubectl exec deploy/velero` can land on a
+# node-agent pod, because that selector matches them too.
+velero backup create pulse-pre-<version>-$(date +%Y%m%d) --from-schedule pulse-bimonthly
+kubectl -n velero get backups.velero.io | grep pulse-pre-
 
 # Layer 0 — Pulse's own encrypted backup, UI: Settings → System → Recovery →
 # Create Backup, then download it OFF the cluster. This is the only artefact
@@ -343,13 +383,13 @@ reporting, cluster `safeqbit-local-hq` online, and fire one test notification.
 
 ### Retiring pre-upgrade restore points
 
-Once v6 has run clean for a week (and the next scheduled `pulse-weekly` has
-succeeded *on v6*), the pre-upgrade artefacts are dead weight:
+Once the new version has run clean for a week (and the next scheduled
+`pulse-bimonthly` has succeeded *on it*), the pre-upgrade artefacts are dead
+weight:
 
 ```sh
 # Velero: NEVER kubectl delete the CR — backup-sync resurrects it from B2
-kubectl -n velero exec deploy/velero -- \
-  /velero backup delete pulse-pre-v6-<DATE> --confirm
+velero backup delete pulse-pre-<version>-<DATE> --confirm
 
 # Longhorn: delete the manual pre-upgrade snapshot in the UI (Volume → Snapshots),
 # then let the weekly-trim RecurringJob reclaim the space
@@ -681,8 +721,8 @@ writing anyway.
   find the alert that filled it (a flapping metric alert) and fix *that*;
   otherwise the store refills.
 - **Server CrashLoop after image bump** — a new tag may have migrated `/data`.
-  Roll the image back in `04-deployment.yaml`; restore the PVC from Velero
-  `pulse-weekly` if `/data` was corrupted.
+  Roll the image back in `04-deployment.yaml`; restore the PVC from the latest
+  `pulse-bimonthly` Velero backup if `/data` was corrupted.
 - **Forgot/lost admin password** — re-seal a new `PULSE_AUTH_PASS` (kubeseal vs
   the controller in `kube-system`) and roll the Deployment, or change it in
   Settings → Security while logged in.
@@ -693,10 +733,10 @@ Everything that defines the monitoring stack — config + encrypted target
 credentials — is in the `pulse-data` PVC.
 
 ```sh
-velero backup get | grep pulse-weekly
-velero restore create --from-backup pulse-weekly-<TIMESTAMP>
+velero backup get | grep pulse-bimonthly
+velero restore create --from-backup pulse-bimonthly-<TIMESTAMP>
 ```
 
-Then reconcile Flux so the Deployment/Service/Ingress/DaemonSet match Git again.
-The DaemonSet's token is sealed in Git; only the UI-entered Proxmox/Docker target
+Then reconcile Flux so the Deployments/Service/Ingress match Git again.
+The agent's token is sealed in Git; only the UI-entered Proxmox/Docker target
 creds depend on the PVC restore.
