@@ -6,9 +6,9 @@ Added 2026-05-29.
 - **Namespace:** `uptime-kuma`
 - **Hostname:** https://uptime.local.safeqbit.com (admin UI *and* status pages, internal only)
 - **Manifests:** `apps/safeqbit-local-hq/uptime-kuma/`
-- **Image:** `louislam/uptime-kuma:2.3.2` (pinned; bump deliberately)
+- **Image:** `louislam/uptime-kuma:2.5.9` (pinned; bump deliberately)
 - **Storage:** `uptime-kuma-data` 2Gi Longhorn RWO at `/app/data` (SQLite - the *only* home for all monitor/status-page/login config)
-- **Backup:** `infrastructure/.../velero-schedule-uptime-kuma.yaml` - weekly to B2, 180d retention
+- **Backup:** `infrastructure/.../velero-schedule-uptime-kuma.yaml` (`uptime-kuma-weekly`) - Sundays 04:00 UTC to B2, 60d retention (TTL `1440h`)
 - **Deeper metrics:** Grafana/Prometheus handles resource/latency metrics. Uptime Kuma is intentionally scoped to **uptime only**, checked over public **FQDNs** (not cluster-internal IPs/service DNS).
 
 > Why FQDN-only: monitors hit the same path a user would (DNS → ingress → TLS →
@@ -132,6 +132,11 @@ kubectl get nodes -o wide                               # -> the 3 node INTERNAL
 | **Node reachability** (×3) | Ping | Host `<nodeN-ip>`. ICMP liveness for each Proxmox-hosted k3s VM. Combine with the per-node etcd checks to localize a node outage. |
 
 Use the same interval/retry settings as the app monitors (60s / 2 retries / 30s).
+
+> **TCP Port monitors are plain TCP only (since 2.5.8).** Upstream dropped the
+> TLS option from the TCP Port type (#8028); any monitor that had it on was
+> converted to a plain port check. The TCP rows above never used it. To check
+> TLS on a port, use an HTTP(s) monitor instead.
 
 ### Other monitor types worth knowing
 
