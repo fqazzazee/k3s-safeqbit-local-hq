@@ -1,13 +1,20 @@
 # Home Assistant migration — Docker host → k3s
 
 **Status:** CUTOVER DONE 2026-07-09 (clean boot, 0 errors, cert issued) — soak until ~2026-07-16, then decommission the Docker container
-**Namespace:** `home-assistant` · **Hostname:** `home-assistant-01.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.4.1` (= exact Docker-host version; lift-and-shift)
+**Namespace:** `home-assistant` · **Hostname:** `home-assistant-01.local.safeqbit.com` · **Image:** `ghcr.io/home-assistant/home-assistant:2026.4.4` (migrated on 2026.4.1, the exact Docker-host version; bumped to 2026.4.4 on 2026-10-23 in PR #147, and `/config/.HA_VERSION` now says 2026.4.4)
+
+> **Never downgrade.** The recorder schema and `.storage/` move forward on
+> every boot, so a rebuild or restore must use **2026.4.4 or newer**, never
+> the 2026.4.1 this page was written around. Check the tag in
+> `apps/safeqbit-local-hq/home-assistant/03-deployment.yaml` before trusting
+> any version on this page.
 
 **Upgrade gate (2026-07-09):** Sensi is a HACS **custom component**
-(`custom_components/sensi`, iprak/sensi v2.1.4), plus HACS itself. Core was
-deliberately NOT bumped during migration (host ran 2026.4.1). To upgrade core
-later: check iprak/sensi compatibility → bump the image tag → update HACS
-components. Never downgrade the tag once booted.
+(`custom_components/sensi`, iprak/sensi v2.1.4 at cutover, 2.1.6 installed on
+the PVC as of 2026-10-23), plus HACS itself. Core was deliberately NOT bumped
+during migration (host ran 2026.4.1). To upgrade core later: check iprak/sensi
+compatibility → bump the image tag → update HACS components. Never downgrade
+the tag once booted.
 
 ## Why / shape
 

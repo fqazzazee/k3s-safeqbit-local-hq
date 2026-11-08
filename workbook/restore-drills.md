@@ -143,7 +143,7 @@ manifests).
 ## Drill C — CNPG cluster restore from a Backup CR
 
 **Layer tested:** 2 (CNPG ScheduledBackup → VolumeSnapshot → recovery bootstrap)
-**Guinea pig:** `affine-cnpg` (daily backups, 30 retained; affine tolerates brief DB pauses)
+**Guinea pig:** `affine-cnpg` (daily backups, 7 retained; affine tolerates brief DB pauses)
 **Estimate:** ~1 h
 
 ### C1 — non-destructive (recovery clone alongside the live cluster)
@@ -170,11 +170,13 @@ manifests).
    ```
 3. Wait for `affine-cnpg-drill-1` Ready
    (`kubectl -n affine get cluster affine-cnpg-drill`).
-4. Compare row counts against the live primary:
+4. Compare row counts against the live primary. Look the primary up — it
+   is not always `-1` (the database is named `affine`, not `app`):
    ```bash
-   for c in affine-cnpg affine-cnpg-drill; do
-     kubectl -n affine exec ${c}-1 -c postgres -- \
-       psql -U postgres -d app -tAc \
+   LIVE=$(kubectl -n affine get cluster affine-cnpg -o jsonpath='{.status.currentPrimary}')
+   for pod in "$LIVE" affine-cnpg-drill-1; do
+     kubectl -n affine exec "$pod" -c postgres -- \
+       psql -U postgres -d affine -tAc \
        "select count(*) from pg_stat_user_tables;"
    done
    ```
@@ -186,19 +188,21 @@ data is present and plausible.
 **Cleanup:** `kubectl -n affine delete cluster affine-cnpg-drill` (its PVCs
 cascade).
 
-### C2 — destructive (replace the live cluster; only after C1 passes, and take a fresh Backup CR first)
+### C2 — destructive (move the live app onto a restored cluster; only after C1 passes, and take a fresh Backup CR first)
 
-Full procedure per [cnpg-strategy.md](cnpg-strategy.md): suspend Flux for
-apps, scale the affine app to 0, delete the live `affine-cnpg` Cluster,
-recreate it with the same name + `bootstrap.recovery` from the chosen Backup,
-wait Ready (the app secret `affine-cnpg-app` is re-minted — password changes;
-the app consumes it via secretKeyRef so a pod restart picks it up), scale the
-app up, verify login + recent docs, resume Flux.
-**Watch for:** the git manifest for `affine-cnpg` has no `bootstrap.recovery`
-— Flux resume must NOT revert the Cluster spec into a re-init. CNPG ignores
-bootstrap changes after creation (bootstrap is create-only), so resume is
-safe — but verify `kubectl -n affine get cluster affine-cnpg` stays healthy
-for 10 min after resume, and record the observation.
+Full procedure: [cnpg-strategy.md → Restore procedure](cnpg-strategy.md#restore-procedure).
+In short: restore the chosen Backup into a **new** Cluster next to the live one
+(`affine-cnpg-r1`), wait Ready, verify the data, then point the affine app at
+`affine-cnpg-r1-rw` / `affine-cnpg-r1-app` in Git and let Flux roll it. Verify
+login + recent docs. Only after a soak, retire the old `affine-cnpg` Cluster.
+
+**Never delete the live `affine-cnpg` and recreate it under the same name to
+restore it.** Its Layer-2 Backups are Longhorn `type: snap` snapshots that live
+*inside* the Cluster's own volumes. The Cluster owns those PVCs and the
+`longhorn` StorageClass has `reclaimPolicy: Delete`, so deleting the Cluster
+deletes the volumes and every snapshot in them, including the one you meant to
+restore from. (Verified 2026-11-08: VolumeSnapshotClass `longhorn-velero` is
+`type: snap`; `affine-cnpg-*` PVCs have a `Cluster` ownerReference.)
 
 ---
 

@@ -203,10 +203,14 @@ Two paths, depending on what survived:
 1. Bootstrap all three nodes (sections 1–5).
 2. Restore the sealed-secrets master key from the offline backup
    (Vaultwarden) **before** apps reconcile, or every SealedSecret fails.
+   Vaultwarden runs *in this cluster*, so in this scenario that means an
+   offline Vaultwarden export or a client's cached vault, not the live
+   instance (see restore-drills.md Drill D, access check).
 3. `flux bootstrap github` against this repo.
 4. Velero restores volume data per namespace; NFS data per the
-   backup-strategy NFS procedure; CNPG databases from Velero-restored
-   snapshots or CNPG backups.
+   backup-strategy NFS procedure; CNPG databases from the Velero-restored
+   primary PVC. Velero is the **only** source here: the Layer-2 CNPG
+   backups are in-cluster Longhorn snapshots and died with the nodes.
 
 Path A is strictly better when available — it is the reason the etcd-s3
 layer exists.

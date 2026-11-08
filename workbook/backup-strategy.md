@@ -139,7 +139,12 @@ interval does not give you "keep 1" safely — it gives you a recurring window
 with zero off-site copies, which is why nothing in this table is set that way.
 
 **Postgres IS in these backups.** Every namespace with a CNPG cluster ships its
-`*-cnpg-1` PVC in the Velero run. The Layer-2 CNPG ScheduledBackups write
+**current primary's** PVC in the Velero run (the volume policy skips
+`cnpg.io/instanceRole: replica`). That is not always `*-cnpg-1`: after a
+failover it can be `-2` or `-3` (on 2026-11-08 it was `authentik-cnpg-2` and
+`netbox-cnpg-2`, and `authentik-cnpg-1` no longer exists). Look the name up
+in the backup, or with `kubectl get cluster -n <ns> <name> -o
+jsonpath='{.status.currentPrimary}'`, instead of assuming `-1`. The Layer-2 CNPG ScheduledBackups write
 Longhorn VolumeSnapshots, which never leave the cluster — so for affine,
 netbox, authentik, grafana and pangolin, the Velero copy is the
 **only** off-site copy of the database. Do not "optimise" it away before
@@ -421,7 +426,7 @@ Static NFS PVs (photoprism/immich media) need no copy — they point at fixed
 paths; restore the data in-place from a ZFS snapshot if it was damaged.
 
 ### Single CNPG cluster restore from a Backup CR
-The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. See CNPG docs - destroy the old Cluster first, then create a new one pointing at the desired Backup. For full procedure see `cnpg-strategy.md`.
+The CNPG Backup CR can be referenced in a new Cluster spec via `bootstrap.recovery`. Restore into a **new** Cluster name (`<cluster>-r1`) and move the app over. Do NOT destroy the old Cluster first: its Layer-2 snapshots live inside its own Longhorn volumes and are deleted with it. Full procedure: [cnpg-strategy.md → Restore procedure](cnpg-strategy.md#restore-procedure).
 
 ### Roll back a single PVC to a Longhorn snapshot
 Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "Revert". Requires the volume to be detached first (scale the owning Deployment to 0). Loses any data written since the snapshot.
