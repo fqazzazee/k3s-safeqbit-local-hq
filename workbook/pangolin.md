@@ -324,6 +324,14 @@ re-handshake against a new server key.
   `06-pangolin-config.yaml`, restart the Deployment.
 - **Restart by deleting the pod**, not `kubectl rollout restart` — Flux's SSA
   strips `restartedAt` and you get a double roll.
+- **A Badger download failure disables all of Traefik's plugins.** Traefik pulls
+  Badger from `plugins.traefik.io` at startup and checks it against the
+  catalog's stored hash. On a mismatch it logs `Plugins are disabled because an
+  error has occurred` and starts without plugins, which breaks every router,
+  because each one uses the `badger` middleware. Badger v1.8.0 hit this until
+  Traefik fixed the catalog on 2026-11-03 (traefik/traefik#13845). After any
+  Badger bump, check the edge's Traefik log for `plugin` errors before walking
+  away.
 - **The ACME PVC's name is load-bearing.** The `nfs-truenas` StorageClass sets
   `pathPattern: ${.PVC.namespace}-${.PVC.name}-${.PV.name}`, but `${.PV.name}` is
   not a token nfs-subdir-external-provisioner understands, so it stays literal

@@ -22,14 +22,24 @@
 # Release-note minimums (e.g. v1.6.0 for the AI gateway in 1.22.0) are floors,
 # not the version to run.
 #
-# Exception: badger stays on v1.7.0 with Pangolin 1.25.x. The 1.25 release notes
-# flag v1.8.0 as broken — it fails Traefik's plugin integrity check, which
-# disables the plugin that every router below depends on
-# (traefik/traefik#14115). v1.8.0 only adds permanent redirects. Re-check that
-# issue before the next badger bump.
+# Badger is fetched from Traefik's plugin catalog (plugins.traefik.io) at
+# startup and checked against the hash the catalog stores. If that check fails,
+# Traefik disables EVERY plugin, and every router below depends on badger, so a
+# bad download takes all of Pangolin's auth with it. v1.8.0 hit exactly that
+# (traefik/traefik#14115, closed 2026-10-22 as a duplicate of #13845): the
+# catalog served archives that did not match its stored hash. Traefik fixed it
+# catalog-side (#13845, closed 2026-11-03: served from proxy.golang.org since
+# 2026-10-30, stored hashes corrected), and the Pangolin 1.26.0 release notes
+# say v1.8.0 is safe to pull as of Nov 3. No `hash:` option is set below, which
+# is the one case #13845 says needs a change. v1.8.0 adds permanent redirects
+# (Pangolin 1.25+).
 #
-# Traefik is not in that set — the installer pins the floating `traefik:v3.7`,
-# so our exact v3.7.x patch is ours to choose and does not move with Pangolin.
+# This block is STATIC config: after changing the version, delete the edge pod
+# (label app.kubernetes.io/component=edge) — nothing restarts it on its own.
+#
+# Traefik is not in that set: the installer's compose pins a fixed v3.7.x tag
+# (v3.7.16 as of Pangolin 1.26.0), so our exact v3.7.x patch is ours to choose
+# and does not move with Pangolin.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -55,7 +65,7 @@ data:
       plugins:
         badger:
           moduleName: "github.com/fosrl/badger"
-          version: "v1.7.0"
+          version: "v1.8.0"
 
     log:
       level: "INFO"
