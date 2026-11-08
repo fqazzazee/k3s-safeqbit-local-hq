@@ -16,7 +16,7 @@
 # the velero 1.18.2 /metrics endpoint on 2026-08-19:
 #   - velero_backup_last_status reads 1 for PartiallyFailed too, so "Last
 #     status" alone never catches the silent skipped-volume case. That is what
-#     the Partial column and the PartiallyFailed (16d) tile are for.
+#     the Partial column and the PartiallyFailed (32d) tile are for.
 #   - Counters live in the Velero process and reset when the pod restarts.
 #     Every failure panel uses increase() over a window, which handles resets
 #     and reads through a restart from Prometheus history -- the same reason a
@@ -238,8 +238,8 @@ data:
         {
           "id": 4,
           "type": "stat",
-          "title": "PartiallyFailed (16d)",
-          "description": "sum(increase(velero_backup_partial_failure_total[16d])) \u2014 the silent case where a backup reports success but volumes were skipped. 16d matches the alert window in monitoring-alert-rules.yaml (longest schedule interval + slack). Triage with workbook/velero-partial-failed-cleanup.md.",
+          "title": "PartiallyFailed (32d)",
+          "description": "sum(increase(velero_backup_partial_failure_total[32d])) \u2014 the silent case where a backup reports success but volumes were skipped. 32d matches the alert window in monitoring-alert-rules.yaml (the monthly schedules' interval + slack). Triage with workbook/velero-partial-failed-cleanup.md.",
           "gridPos": {
             "h": 4,
             "w": 4,
@@ -253,7 +253,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum(increase(velero_backup_partial_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[16d])) or vector(0)",
+              "expr": "sum(increase(velero_backup_partial_failure_total{schedule!=\"\", schedule=~\"$schedule\"}[32d])) or vector(0)",
               "instant": true
             }
           ],

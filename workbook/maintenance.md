@@ -1110,6 +1110,34 @@ The apps Kustomization has `prune: false`. Removing a file from Git does **not**
 kubectl delete <kind> -n <namespace> <name>
 ```
 
+### Switching a live Deployment to `strategy: Recreate` wedges `apps`
+
+Changing an existing Deployment from RollingUpdate to `type: Recreate` in Git
+makes the **whole** `apps` Kustomization fail to apply:
+
+```
+Deployment.apps "<name>" is invalid: spec.strategy.rollingUpdate: Forbidden:
+may not be specified when strategy `type` is 'Recreate'
+```
+
+The `rollingUpdate` block was filled in by API-server defaulting, so no field
+manager owns it and Flux's server-side apply cannot remove it. Writing
+`rollingUpdate: null` in the manifest does not help (checked with a server-side
+dry-run as kustomize-controller). Every other app in the Kustomization stays
+un-reconciled until this is fixed. Hit with PhotoPrism, PR #172, 2026-11-08.
+
+Fix it with a one-time live patch, **before** merging the PR if you can:
+
+```bash
+kubectl patch deploy <name> -n <namespace> --type=json -p '[
+  {"op":"remove","path":"/spec/strategy/rollingUpdate"},
+  {"op":"replace","path":"/spec/strategy/type","value":"Recreate"}]'
+flux reconcile kustomization apps --with-source
+```
+
+The pod template does not change, so the patch starts no rollout. New
+Deployments created with Recreate from the start are not affected.
+
 ---
 
 ## CNPG
@@ -1189,18 +1217,30 @@ kubectl create job -n cnpg-system cnpg-retention-manual-$(date +%s) --from=cronj
 kubectl logs -n cnpg-system -l job-name=cnpg-retention-manual-<...> -f
 ```
 
-### Dump a CNPG database to stdout
+### Dump a CNPG database to a local file
+
+Don't pipe `pg_dump` straight out through `kubectl exec ... > dump.sql`. Large
+streams can be cut off part-way while the command still exits 0. That happened
+to an Immich dump on 2026-11-08: it stopped mid-row with no
+`-- PostgreSQL database dump complete` footer. Write the dump inside the pod
+(`/run` is the writable emptyDir; the root filesystem is read-only), check it
+there, then copy it out and compare checksums:
 
 ```bash
-PRIMARY=$(kubectl get cluster -n <namespace> <cluster-name> \
-  -o jsonpath='{.status.currentPrimary}')
-CNPG_PASS=$(kubectl get secret -n <namespace> <cluster-name>-app \
-  -o jsonpath='{.data.password}' | base64 -d)
+NS=<namespace>; CLUSTER=<cluster-name>; DB=<dbname>; F=$DB-$(date +%Y%m%d).dump
+PRIMARY=$(kubectl get cluster -n $NS $CLUSTER -o jsonpath='{.status.currentPrimary}')
+CNPG_PASS=$(kubectl get secret -n $NS $CLUSTER-app -o jsonpath='{.data.password}' | base64 -d)
 
-kubectl exec -n <namespace> "$PRIMARY" -c postgres -- \
-  sh -c "PGPASSWORD='${CNPG_PASS}' pg_dump -U <dbuser> -h <cluster-name>-rw <dbname>" \
-  > dump.sql
+kubectl exec -n $NS "$PRIMARY" -c postgres -- sh -c \
+  "PGPASSWORD='${CNPG_PASS}' pg_dump -Fc -U <dbuser> -h $CLUSTER-rw $DB -f /run/$F \
+   && pg_restore --list /run/$F | grep -c 'TABLE DATA' && sha256sum /run/$F"
+
+kubectl exec -n $NS "$PRIMARY" -c postgres -- cat /run/$F > "$F"
+sha256sum "$F"        # must match the in-pod sum; if not, copy it again
+kubectl exec -n $NS "$PRIMARY" -c postgres -- rm /run/$F
 ```
+
+The same applies to any large file you `cat` out of a pod.
 
 ---
 

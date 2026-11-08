@@ -51,7 +51,7 @@
 # CSI sidecars, cert-manager's three, the prometheus-stack's six) are
 # deliberately NOT reported: you cannot move them without bumping the chart,
 # which the chart half already tells you. Neither are floating tags
-# (affine:stable, redis:7-alpine, postgres:16-alpine, the alpine/python/node
+# (redis:7-alpine, postgres:16-alpine, the alpine/python/node
 # bases): for those "newer" means the tag moved to a new digest, not a new
 # tag, so semver tracking would be a lie. Both groups sit in IGNORE with
 # their reason. Digest drift on floating tags is the next piece of work.
@@ -368,6 +368,12 @@ data:
             dict(src="github", repo="immich-app/immich", pat=SEMVER),
         "louislam/uptime-kuma":
             dict(src="github", repo="louislam/uptime-kuma", pat=SEMVER),
+        # Pinned as 0.27.4@sha256:… since 2026-09-22 (was the floating :stable);
+        # the digest is dropped before the tag is compared. Canary builds are
+        # GitHub prereleases, so they are skipped.
+        "ghcr.io/toeverything/affine":
+            dict(src="github", repo="toeverything/AFFiNE", pat=SEMVER,
+                 name="affine"),
         "vaultwarden/server":
             dict(src="github", repo="dani-garcia/vaultwarden", pat=SEMVER,
                  name="vaultwarden"),
@@ -435,7 +441,6 @@ data:
         ("rancher/mirrored-", "shipped by k3s itself"),
         # Floating or base tags: "newer" means the tag moved to a new digest, not
         # a new tag, so semver tracking would be a lie. Phase 3 (digest drift).
-        ("ghcr.io/toeverything/affine", "floating tag :stable"),
         ("docker.io/valkey/valkey", "floating base image"),
         ("ghcr.io/immich-app/postgres", "pinned DB image; a bump is a data migration"),
         ("postgres", "floating base image"),
@@ -607,7 +612,7 @@ data:
 
     # ---------- floating tags: digest drift ----------
     #
-    # For a tag that carries no version (affine:stable, redis:7-alpine, the
+    # For a tag that carries no version (redis:7-alpine, the
     # alpine/python/node bases) "newer" means the tag was rebuilt and now points
     # at a different digest — semver has nothing to say. What CAN be said is
     # whether the digest these pods are running is still the one the tag
@@ -837,8 +842,8 @@ data:
 
         if floating:
             moved = [r for r in floating if r["drift"]]
-            # Unknown move date ⇒ always listed: the only such image is an app
-            # (affine:stable), where a move IS a new release worth acting on.
+            # Unknown move date ⇒ always listed: a non-Docker-Hub registry gives
+            # no move timestamp, so there is no age to hold it back with.
             stale = [r for r in moved
                      if r["moved"] is None or r["moved"] >= FLOAT_STALE_DAYS]
             fresh = [r for r in moved if r not in stale]

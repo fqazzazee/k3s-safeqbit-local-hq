@@ -30,8 +30,8 @@
 # reconcile. Read the upstream diff first — events.log is replayed at startup,
 # so a format change is a one-way door for existing data. Take a backup first
 # (workbook/babytracker.md has the full procedure):
-#   kubectl -n velero exec deploy/velero -- \
-#     /velero backup create babytracker-manual-<date> --from-schedule babytracker-daily
+#   velero backup create babytracker-manual-<date> --from-schedule babytracker-daily
+# (local velero CLI — `kubectl exec deploy/velero` can land on a node-agent pod)
 #
 # ── Single replica, and why it stays that way ─────────────────────────────
 # The store is an append-only file replayed into memory at boot, with the SSE

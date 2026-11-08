@@ -9,7 +9,7 @@ days. Used to hand secrets to people outside the vault. Added 2026-05-13.
   - LAN: https://passzilla.local.safeqbit.com (ingress-nginx)
   - Public: https://passzilla.safeqbit.com (Cloudflare tunnel `passzilla-cf-tunnel`; see [Exposure](#exposure))
 - **Manifests:** `apps/safeqbit-local-hq/passzilla/`, tunnel in `apps/safeqbit-local-hq/cloudflared/tunnel-passzilla.yaml`
-- **Image:** `pglombardo/pwpush:2.16.0` (Docker Hub, pinned by tag, not digest)
+- **Image:** `pglombardo/pwpush:2.17.1` (Docker Hub, pinned by tag, not digest)
 - **Storage:** `passzilla-db`, 1Gi Longhorn RWO at `/opt/PasswordPusher/storage/db`
 - **Database:** SQLite, `production.sqlite3` on that volume. This includes the Solid Queue job tables
 - **Backup:** `infrastructure/.../velero-schedule-passzilla.yaml`, 11th + 26th 03:00 UTC to B2, 28d retention
@@ -141,7 +141,8 @@ release pushes it towards 1Gi, raise the limit before it starts flapping:
 `kubectl -n passzilla top pod`.
 
 Version history in Git: `latest` (2026-05-13) → 2.7.0 (pinned 2026-05-28) →
-2.9.3 (07-19) → 2.11.5 (08-29) → 2.14.0 (09-22) → 2.16.0 (10-23).
+2.9.3 (07-19) → 2.11.5 (08-29) → 2.14.0 (09-22) → 2.16.0 (10-23) →
+2.17.1 (11-08).
 
 ## Restore
 
