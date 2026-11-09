@@ -8,7 +8,7 @@ alarms. Added 2026-08-25.
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
 - **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own; relicensed MIT → PolyForm Strict 1.0.0 on 2026-08-30 — noncommercial self-hosting only, which this is)
 - **Image:** none of its own — `node:22.23.4-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
-- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `2073238` = v1.13.0 (upgraded 2026-09-07 from `e1e18a8` = v1.6.0)
+- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `44caa8c` = v1.14.0 (upgraded 2026-11-08 from `2073238` = v1.13.0)
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
 
@@ -112,6 +112,18 @@ read: 1.6.0 ignores the extra key and applies the delete as it always did. The
 dry run against a copy of the live data replayed all 319 events, wrote nothing
 to disk on boot, and served `GET /`.
 
+The 1.13.0 → 1.14.0 hop (2026-11-08) is different in one way: **it writes on
+boot.** `CONFIG_VERSION` stays 6 and the `events.log` line format is unchanged,
+but `init()` now stamps a `configRev` counter into `config.json` the first time
+it starts (1.14 refuses a Setup save made from a stale copy, and needs the counter
+to do that). It also arms any switched-on alarm that has no `armedAt` in `alarms.json`.
+The dry run against live data: 1666 events replayed on 1.13 → 1.14 → back to
+1.13, `config.json` grew by exactly `"configRev": 1`, `alarms.json` was untouched
+(every alarm already armed), and 1.13 read the stamped config back without
+complaint. A rollback leaves `configRev` behind, and that's harmless: if a 1.13
+save drops it, the next 1.14 boot stamps it again, and if it keeps it, 1.14
+counts on from there.
+
 ### Dry-running an upgrade
 
 Cheap and worth it before anything that migrates config. Copy the live data out
@@ -192,6 +204,8 @@ alarms.json    snooze / last-fired state
 
 pre-restore-<timestamp>.json   written automatically before a restore
                                overwrites anything (1.2.0+)
+events.log.torn-<timestamp>    a torn last line set aside at startup after a
+                               crash mid-append (1.14.0+); look, then delete
 
 backups/            unattended backup copies, only if you turn them on (1.8.0+)
 backup-state.json   when the scheduler last ran; deliberately not in a bundle
