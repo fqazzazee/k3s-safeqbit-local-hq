@@ -85,9 +85,10 @@ What this costs, stated plainly:
    `npm install` step (or a real image) before it can move to that version.
 2. Back up first:
    ```sh
-   kubectl -n velero exec deploy/velero -- \
-     /velero backup create babytracker-manual-$(date +%Y%m%d) --from-schedule babytracker-daily
+   velero backup create babytracker-manual-$(date +%Y%m%d) --from-schedule babytracker-daily
    ```
+   Use the local `velero` CLI: `kubectl exec deploy/velero` can land on a
+   node-agent pod, because that selector matches them too.
    (`kubectl -n velero get backups.velero.io` — the bare `get backup` in that
    namespace resolves to `backups.longhorn.io`.)
 3. Change `BT_REF` **and** the `babytracker.safeqbit.com/source-ref` pod
@@ -267,9 +268,8 @@ the wrong volume. Restore below.
 
 ```sh
 kubectl -n velero get backups.velero.io | grep babytracker
-kubectl -n velero exec deploy/velero -- \
-  /velero restore create --from-backup babytracker-daily-<timestamp> \
-    --include-namespaces babytracker
+velero restore create --from-backup babytracker-daily-<timestamp> \
+  --include-namespaces babytracker
 ```
 
 Restored `CertificateRequest`/`Order`/`Challenge` objects are excluded from the

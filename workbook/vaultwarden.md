@@ -12,7 +12,7 @@ cluster's own disaster-recovery keys. Read
 - **Hostname:** https://vaultwarden.local.safeqbit.com (LAN only. No cloudflared tunnel and no public record)
 - **Manifests:** `apps/safeqbit-local-hq/vaultwarden/`
 - **Upstream:** https://github.com/dani-garcia/vaultwarden
-- **Image:** `vaultwarden/server:1.37.4` (Docker Hub, pinned by tag, not digest). Bundles its own copy of the web vault
+- **Image:** `vaultwarden/server:1.37.5` (Docker Hub, pinned by tag, not digest). Bundles its own copy of the web vault
 - **Storage:** `vaultwarden-data`, 5Gi Longhorn RWO at `/data` (~6MB used on 2026-11-08)
 - **Database:** SQLite, `/data/db.sqlite3` (WAL mode). No CNPG
 - **Backup:** `infrastructure/.../velero-schedule-vaultwarden.yaml`, 7th + 22nd 03:00 UTC to B2, **180d** retention (the longest in the cluster, on purpose)
@@ -139,7 +139,8 @@ first), mount the PVC in a throwaway pod, edit the file, then scale back up and
 resume Flux.
 
 Version history in Git: 1.32.0 (2026-05-06) → 1.36.0 (2026-07-18) → 1.37.2
-(2026-08-29) → 1.37.3 (2026-09-22) → 1.37.4 (2026-10-23, High GHSA).
+(2026-08-29) → 1.37.3 (2026-09-22) → 1.37.4 (2026-10-23, High GHSA) →
+1.37.5 (2026-11-08).
 
 ## The chicken-and-egg problem
 
