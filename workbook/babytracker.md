@@ -8,7 +8,7 @@ alarms. Added 2026-08-25.
 - **Manifests:** `apps/safeqbit-local-hq/babytracker/`
 - **Upstream:** https://github.com/fqazzazee/ultimate-baby-tracker (my own; relicensed MIT → PolyForm Strict 1.0.0 on 2026-08-30 — noncommercial self-hosting only, which this is)
 - **Image:** none of its own — `node:22.23.4-alpine3.24` running source cloned at a pinned commit (see [Why there is no image](#why-there-is-no-image))
-- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `44caa8c` = v1.14.0 (upgraded 2026-11-08 from `2073238` = v1.13.0)
+- **Version pin:** `BT_REF` in `03-deployment.yaml` — commit `5004bdc` = v1.14.1 (upgraded 2026-11-10 from `44caa8c` = v1.14.0)
 - **Storage:** `babytracker-data` 1Gi Longhorn RWO at `/data` — plain-text JSON, the *only* copy of the log
 - **Backup:** `infrastructure/.../velero-schedule-babytracker.yaml` — daily 03:30 UTC to B2, 30d retention
 
@@ -123,6 +123,11 @@ The dry run against live data: 1666 events replayed on 1.13 → 1.14 → back to
 complaint. A rollback leaves `configRev` behind, and that's harmless: if a 1.13
 save drops it, the next 1.14 boot stamps it again, and if it keeps it, 1.14
 counts on from there.
+
+The 1.14.0 → 1.14.1 hop (2026-11-10) is browser-only: `public/js/core.js` stops
+asking for a PIN when you pick someone under **Who** in the log/edit sheet (it
+still asks before saving as a locked *active* profile). No server code, no
+storage change, so no dry run, just the usual pre-upgrade backup.
 
 ### Dry-running an upgrade
 
