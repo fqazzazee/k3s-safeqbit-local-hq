@@ -3,8 +3,9 @@
 #
 # Purpose: an offline, LAN-side copy of every GitHub repo (fqazzazee + the
 # Zonduit org). Each repo is a read-only PULL MIRROR that Forgejo re-fetches
-# from GitHub on an interval. The mirrors are created by the Gickup CronJob
-# (added separately), which also picks up new GitHub repos.
+# from GitHub hourly. The mirrors are created by the Gickup CronJob
+# (05-gickup-config.yaml, 07-gickup-cronjob.yaml), which also picks up new
+# GitHub repos daily.
 #
 # ── The mirror is not the backup; the Velero copies are ──────────────────
 # A pull mirror runs `git remote update --prune`, so force-pushes and branch

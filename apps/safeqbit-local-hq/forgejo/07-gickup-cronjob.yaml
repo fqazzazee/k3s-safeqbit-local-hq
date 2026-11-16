@@ -1,0 +1,96 @@
+# 07-gickup-cronjob.yaml
+# Daily Gickup run: creates a Forgejo pull mirror for every GitHub repo that
+# doesn't have one yet, and triggers a sync of the ones that do. Config and
+# the reasoning behind it: 05-gickup-config.yaml.
+#
+# Schedule: 04:00 UTC, 30 min before forgejo-daily (04:30), so a repo
+# created on GitHub today is mirrored and in tonight's B2 backup.
+#
+# ── Failure signal ────────────────────────────────────────────────────────
+# Gickup exits 1 if anything in the run logged an error, which makes the Job
+# fail and fires the stock KubeJobFailed alert to Slack. The mirrors use the
+# same PATs, so an expired or revoked PAT shows up here within a day, before
+# the mirrors have been stale for long.
+#
+# backoffLimit 0 + history 1/1: one failed Job per day at most, never a
+# retry storm (see the 2026-08-29 kopia/Slack incident in backup-strategy.md).
+# activeDeadlineSeconds: on a GitHub rate limit Gickup sleeps for an HOUR
+# and retries. 30 min is plenty for a normal run (seconds), so a rate-limited
+# run is cut short and fails visibly instead of hanging.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gickup
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: gickup
+    app.kubernetes.io/component: mirror-discovery
+spec:
+  schedule: "0 4 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: gickup
+            app.kubernetes.io/component: mirror-discovery
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          # github.com / api.github.com tried as-is first; the dot-less
+          # "forgejo" still resolves through the search list.
+          dnsConfig:
+            options:
+              - name: ndots
+                value: "1"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            # Makes the 0440 token files group-readable by this uid.
+            fsGroup: 65534
+          containers:
+            - name: gickup
+              image: ghcr.io/cooperspencer/gickup:0.10.47@sha256:a0307e9c131b45b0d2039417f291b7ef44580d9d9e303bb5a6083aaf82691044
+              args: ["/config/conf.yml"]
+              env:
+                # Gickup and go-git want a writable HOME; nothing persists.
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+                - name: tokens
+                  mountPath: /secrets
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 256Mi
+          volumes:
+            - name: config
+              configMap:
+                name: gickup-config
+            - name: tokens
+              secret:
+                secretName: gickup-tokens
+                defaultMode: 0440
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi

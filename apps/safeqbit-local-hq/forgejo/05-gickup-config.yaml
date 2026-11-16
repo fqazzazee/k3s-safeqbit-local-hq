@@ -1,0 +1,89 @@
+# 05-gickup-config.yaml
+# Gickup config: which GitHub repos become Forgejo pull mirrors, and where.
+#
+# Gickup only DISCOVERS. Each run lists the repos on GitHub and, for any
+# that has no mirror yet, calls Forgejo's migrate API with mirror=true.
+# For mirrors that already exist it just triggers a sync. Forgejo does the
+# hourly fetching itself.
+#
+# ── `mirror.enabled: false` is NOT a typo ─────────────────────────────────
+# In Gickup's gitea/forgejo destination, `mirror.enabled: true` means
+# "Gickup clones the repo and PUSHES a plain copy". The default (false) is
+# the path that creates a real Forgejo pull mirror (gitea.Backup →
+# MigrateRepo{Mirror: true}). Checked in the v0.10.47 source and end-to-end
+# against Forgejo 15 on 2026-11-15. `mirror.mirrorinterval` is still read in
+# that mode, and must be written exactly as Forgejo reports it ("1h0m0s"):
+# on any mismatch Gickup re-PATCHes the interval and counts it as a failure.
+#
+# ── Two documents = two independent source→destination pairs ─────────────
+# A fine-grained PAT can only cover one owner, hence two tokens. Splitting
+# the pairs also pins each owner to a fixed Forgejo destination:
+#   1. fqazzazee → the Forgejo USER fqazzazee, createorg: false. If that
+#      account doesn't exist yet (it's created by the first Authentik
+#      login), this pair errors instead of creating an ORG called fqazzazee
+#      and taking the username.
+#   2. Zonduit   → the Forgejo org Zonduit, created on first run.
+# `includeorgs` filters each listing by owner login (case-sensitive), so a
+# token that can see other owners' repos still mirrors only its own owner.
+#
+# Wikis: `wiki: true` mirrors a repo's GitHub wiki into the same Forgejo
+# repo. Gickup also lists a separate "<name>.wiki" entry, but skips those
+# for Forgejo destinations, so the log line "starting backup for
+# ….wiki.git" with nothing after it is expected.
+#
+# Forgejo URL: the short Service name. Under the pod's ndots:1 a dot-less
+# name goes through the search list (→ forgejo.forgejo.svc.cluster.local)
+# and github.com is tried as-is first.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gickup-config
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: gickup
+    app.kubernetes.io/component: mirror-discovery
+data:
+  conf.yml: |
+    # ── pair 1: github.com/fqazzazee → git.local.safeqbit.com/fqazzazee ──
+    source:
+      github:
+        - token_file: /secrets/github-fqazzazee
+          user: fqazzazee
+          includeorgs: [fqazzazee]
+          wiki: true
+    destination:
+      gitea:
+        - token_file: /secrets/forgejo
+          url: http://forgejo:3000
+          user: fqazzazee
+          createorg: false
+          lfs: true
+          mirror:
+            enabled: false
+            mirrorinterval: 1h0m0s
+          visibility:
+            repositories: private
+            organizations: private
+    ---
+    # ── pair 2: github.com/Zonduit → git.local.safeqbit.com/Zonduit ──
+    source:
+      github:
+        - token_file: /secrets/github-zonduit
+          # No `user`: an org name here would list only its PUBLIC repos
+          # (/users/{org}/repos), and every Zonduit repo is private. Without
+          # it Gickup lists /user/repos, i.e. whatever the token can see.
+          includeorgs: [Zonduit]
+          wiki: true
+    destination:
+      gitea:
+        - token_file: /secrets/forgejo
+          url: http://forgejo:3000
+          user: Zonduit
+          createorg: true
+          lfs: true
+          mirror:
+            enabled: false
+            mirrorinterval: 1h0m0s
+          visibility:
+            repositories: private
+            organizations: private
