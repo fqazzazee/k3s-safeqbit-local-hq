@@ -13,6 +13,7 @@ whole thing to B2 with two retention tiers. Added 2026-11-15.
 - **Login:** Authentik OIDC, plus a local break-glass admin `forgejo-admin` (password in Vaultwarden)
 - **Mirroring:** Gickup CronJob `gickup`, daily 04:00 UTC, creates the pull mirrors; Forgejo syncs them hourly
 - **Drift check:** CronJob `mirror-check`, daily 03:15 UTC, compares every branch and tag with GitHub; failure → `KubeJobFailed` → Slack
+- **⏰ GitHub PATs expire 2027-11-16 (fqazzazee) / 2027-11-17 (Zonduit).** Rotate during **2027-11-01 → 2027-11-09**. See [Token expiry](#token-expiry)
 
 ---
 
@@ -232,6 +233,48 @@ kubectl -n forgejo exec deploy/forgejo -- forgejo admin user generate-access-tok
 
 `write:admin` is in the tested scope set because the token creates repos
 under another account (`fqazzazee`).
+
+### Token expiry
+
+| Token | Where | Expires | Rotate during |
+|---|---|---|---|
+| `forgejo-mirror-fqazzazee` (GitHub PAT) | `gickup-tokens` → `github-fqazzazee` | **2027-11-16 05:00 UTC** | 2027-11-01 → 2027-11-09 |
+| `forgejo-mirror-zonduit` (GitHub PAT) | `gickup-tokens` → `github-zonduit` | **2027-11-17 05:01 UTC** | same session |
+| `gickup` (Forgejo API token of `forgejo-admin`) | `gickup-tokens` → `forgejo` | never (Forgejo tokens have no expiry) | only if leaked |
+
+Both PATs were issued on 2026-11-16 with a one-year lifetime, so unless a
+rotation picks *No expiration*, this comes round every November. **Put a
+calendar reminder on 2027-11-01.** The rotation window
+ends a week before expiry so a failed attempt still leaves time.
+
+What happens if it's missed: the next 03:15 `mirror-check` fails with
+`ERROR … HTTP 401` and the 04:00 `gickup` run fails too, so the stock
+`KubeJobFailed` alert reaches Slack within a day. The mirrors keep their
+last state (nothing is lost) but stop updating until the rotation is done.
+
+**Check the live expiry dates** (reads the tokens from the cluster secret,
+prints only the date that GitHub returns in a response header):
+
+```bash
+for k in github-fqazzazee github-zonduit; do
+  echo "$k: $(GH_TOKEN=$(kubectl -n forgejo get secret gickup-tokens -o jsonpath="{.data.$k}" | base64 -d) \
+    gh api -i /user 2>/dev/null | grep -i '^github-authentication-token-expiration' | cut -d' ' -f2-)"
+done
+```
+
+**Rotation checklist:**
+
+1. GitHub → Fine-grained tokens → **Regenerate** each token (same
+   permissions; see [Creating the tokens](#creating-the-tokens)). The
+   Zonduit one may need re-approving in the org.
+2. Re-seal `06-gickup-tokens.sealed.yaml` with both new PATs plus the
+   unchanged `forgejo` token, via a PR. (The `forgejo` value can be read back
+   from the live secret, so it doesn't need regenerating.)
+3. Re-create the mirrors so they pick up the new token. Follow the steps
+   below, because each mirror stores its own copy of the PAT.
+4. Run `mirror-check` by hand and expect `39 in sync` (or the current count).
+5. Update the dates in this table and in the summary at the top, and add a
+   change-log row.
 
 ### Where the mirror credentials live, and rotating them
 
