@@ -1,7 +1,7 @@
 # Backup Strategy
 
 **Cluster:** safeqbit-local-hq
-**Last reviewed:** 2026-11-08
+**Last reviewed:** 2026-11-15
 
 Single source of truth for what's backed up, where it goes, how long it's kept, and how to verify or restore. Started as the 2026-05-28 rewrite (P2.1 + P2.2 from [improvement-plan.md](improvement-plan.md)); the schedule tables were re-checked against the live Schedules, ScheduledBackups, RecurringJobs and CronJobs on 2026-11-08. See the change log at the bottom for what moved in between.
 
@@ -74,6 +74,8 @@ Each layer protects against a different failure mode:
 | **04:00** | `uptime-kuma-weekly` | Velero | weekly Sun | namespace `uptime-kuma` | B2 |
 | **04:15** | `pangolin-monthly` | Velero | 25th | namespace `pangolin` | B2 |
 | **04:15** | `weekly-snapshot` | Longhorn snapshot, retain 1 | weekly Sun | every Longhorn volume | Longhorn |
+| **04:30** | `forgejo-daily` | Velero | daily | namespace `forgejo` | B2 |
+| **04:45** | `forgejo-monthly` | Velero | 3rd | namespace `forgejo` | B2 |
 | **05:00** | `pulse-bimonthly` | Velero | 6th + 21st | namespace `pulse` | B2 |
 | **05:00** | `cnpg-backup-retention` | CronJob (kubectl) | daily | all 5 CNPG clusters | (prune) |
 | **06:00** | `home-assistant-biweekly` | Velero | 1st + 15th + 29th | namespace `home-assistant` | B2 |
@@ -87,6 +89,7 @@ spread out:
 Day  Velero job(s)                 Day  Velero job(s)
  1   immich 03:30 · HA 06:00       16   immich 03:30
  2   affine                        17   affine
+ 3   forgejo-monthly 04:45
  4   netbox                        19   netbox
  5   authentik                     20   authentik
  6   pulse 05:00                   21   pulse 05:00
@@ -96,7 +99,7 @@ Day  Velero job(s)                 Day  Velero job(s)
 13   photoprism                    26   passzilla
 15   HA 06:00                      28   photoprism
                                    29   HA 06:00
-Every day: babytracker 03:30, qbit-labs 03:45.  Sundays: uptime-kuma 04:00.
+Every day: babytracker 03:30, qbit-labs 03:45, forgejo 04:30.  Sundays: uptime-kuma 04:00.
 (Times are 03:00 unless shown. HA is `*/14` on the day field: 1st, 15th, 29th.)
 ```
 
@@ -125,6 +128,8 @@ All Velero schedules use `snapshotMoveData: true`, which:
 | `home-assistant-biweekly` | `0 6 */14 * *` | 1st + 15th + 29th 06:00 | 28d (~keep last 2) | home-assistant |
 | `babytracker-daily` | `30 3 * * *` | daily 03:30 | 30d | babytracker |
 | `qbit-labs-daily` | `45 3 * * *` | daily 03:45 | 14d | qbit-labs |
+| `forgejo-daily` | `30 4 * * *` | daily 04:30 | 14.5d (keep 14) | forgejo |
+| `forgejo-monthly` | `45 4 3 * *` | 3rd 04:45 | 380d (keep 12) | forgejo |
 
 **Terminology warning.** This repo uses "bi-monthly" to mean *twice a month*
 (~15-day interval), not once every two months. "Bi-weekly" means *every 14
@@ -463,3 +468,4 @@ Use the Longhorn UI: navigate to Volume → Snapshots → select snapshot → "R
 | 2026-08-17 | B2 tuning round 3 (~31GB source / ~10GB stored → ~8GB source / ~2.7GB stored). (1) **CNPG WAL ring shrunk** — the real cause of the footprint: CNPG defaults `wal_keep_size=512MB` / `max_wal_size=1GB` pinned `pg_wal` at ~561MB on all six clusters while `base/` was only 33–245MB, so ~90% of every CNPG backup was empty WAL. Set to 128MB/256MB fleet-wide (sighup params, no restart). Saves ~400MB per CNPG backup — more than every TTL change combined. (2) Cadence/TTL rework: affine weekly→bi-weekly (2nd+17th, 21d), netbox weekly→bi-weekly (4th+19th, 21d), pulse weekly→bi-monthly (6th+21st, 21d), guacamole bi-monthly→monthly (10th, 45d), pangolin bi-monthly→monthly (25th, 60d), authentik 90d→21d, monitoring 60d→21d — all now "keep last 2". Five schedules renamed to match their cadence; old Schedule CRs hand-deleted (infrastructure-configs has `prune: false`). (3) Stale one-off backups purged (~3.8GB source): netbox-weekly-manual-nfspolicy-test, authentik-postupgrade-20260719c, monitoring-bimonthly-manual-20260706, photoprism-bimonthly-manual-20260706, immich-manual-initial, pulse-pre/post-v6-20260725, and 2 orphaned vaultwarden-frequent backups. (4) `VeleroBackupPartiallyFailed` window 16d→32d so a monthly cadence can still self-heal. (5) Corrected the "Postgres data is NOT in this backup" comment, which was wrong in every schedule file. (6) Also deleted the orphaned `sra-dev-demo-default-kopia` BackupRepository, left behind by the guacamole namespace rename and still being maintained weekly (these CRs are runtime-created by Velero, not in Git). |
 | 2026-08-17 | **Correction to the row above.** It recorded `pulse-data` as "grew 227MB→967MB in three weeks … needs retention trimming". That was wrong — it read a one-time step change as a growth trend. The v6.1.1 upgrade on 2026-07-25 took pulse-data from 228MB to 1032MB **in a single day** (v6 introduced the tiered metrics store); since then it has oscillated 947–1133MB and decreased twice. It is at **steady state**, ~875MB live on a 2Gi PVC, with retention pruning every tier hourly. No action needed and none taken. Verified separately that the SQLite files are not bloated: `metrics.db` (544MB) and `unified_resources.db` (176MB) both report a **freelist of 0**, so the space is live rows, not reclaimable free pages — VACUUM would gain nothing. Only `notification_queue.db` is bloated (18.5MB of 23.7MB reclaimable), which is immaterial. Tuning levers if it ever is needed, in upstream's recommended order: lower `pvePollingInterval` (currently 10s, inflates the 2h raw tier), then `metricsRetentionMinuteHours` (24h default = ~60% of all rows) in `/data/system.json`; both need a Pulse restart. Defaults are raw 2h / minute 24h / hourly 7d / daily 90d. |
 | 2026-08-29 | **Guacamole decommissioned; two kopia repos found deleted from B2.** (1) `kopia/guacamole/` and `kopia/pulse/` were removed from the bucket by hand during the round-3 cleanup, but their `BackupRepository` CRs and `backups/<name>/` metadata stayed. Velero retried maintenance on both every 5 min for days ("repository not initialized in the provided storage"), each retry burning 3 pods → a `KubeJobFailed` storm → Slack hit `message_limit_exceeded` (HTTP 429), which then broke `cluster-summary-report` (daily) and `backup-summary-report` (Mondays) too. **Lesson: deleting a kopia prefix in the B2 console is not a complete deletion — delete the `BackupRepository` CR and the Backup CRs (`velero backup delete`) in the same breath, or Velero retries forever.** (2) Guacamole retired (Pangolin covers browser RDP/VNC/SSH): `guacamole-monthly` Schedule and the app removed from Git, namespace deleted by hand — every layer below `flux-system` is `prune: false`, so removing from Git only orphans. Manifests kept at `apps/safeqbit-local-hq/guacamole/` and `configs/velero-schedule-guacamole.yaml` for a redeploy. Its B2 backups were already unrestorable and the database was let go deliberately. (3) `pulse-default-kopia` deleted so the next `pulse-bimonthly` run re-initializes a fresh repo. |
+| 2026-11-15 | **Forgejo added (GitHub mirror).** Two schedules on one namespace, the first two-tier (GFS-style) retention in this repo: `forgejo-daily` (04:30, 348h → 14 kept) and `forgejo-monthly` (3rd 04:45, 9120h → 12 kept). Two tiers because the app is a pull mirror: upstream force-pushes and branch deletes propagate within an hour, so the B2 copies are the only history. ~300MB of git data, deduped by kopia across both schedules. See [forgejo.md](forgejo.md). |

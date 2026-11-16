@@ -406,9 +406,9 @@ data:
       the pattern from the July 2026 upgrade wave; instant rollback.
     • Not in `/cluster cnpg`: Immich runs its own bundled Postgres
       (plain Deployment); PhotoPrism is SQLite on its NFS storage PV;
-      Vaultwarden, Uptime Kuma, Home Assistant, Passzilla, Pulse and
-      qbit-labs are SQLite-on-Longhorn — single writer, never scale
-      them to 2 replicas.
+      Vaultwarden, Uptime Kuma, Home Assistant, Passzilla, Pulse,
+      qbit-labs and Forgejo are SQLite-on-Longhorn — single writer,
+      never scale them to 2 replicas.
     Strategy & inventory rationale: workbook/cnpg-strategy.md.
   method.backups-restore: |
     *Backup & restore triage* — checking all four layers
@@ -559,7 +559,7 @@ data:
     • PhotoPrism — SQLite inside its NFS storage PV (TrueNAS is its
       only backup; Velero skips NFS)
     • Vaultwarden, Uptime Kuma, Home Assistant, Passzilla, Pulse,
-      qbit-labs — SQLite on Longhorn: single-writer, 1 replica +
+      qbit-labs, Forgejo — SQLite on Longhorn: single-writer, 1 replica +
       Recreate, NEVER scale to 2
     • NetBox & AFFiNE also run small Redis deployments; AFFiNE's and
       NetBox's cache have no persistence, `netbox-redis-tasks` has a
@@ -636,6 +636,8 @@ data:
       auth; append-only log on Longhorn, Velero daily
     • *qbit-labs* — study platform (qbit-labs.…); SQLite/Longhorn,
       Velero daily; public tunnel behind Cloudflare Access
+    • *forgejo* — offline GitHub mirror (git.…); LAN-only, Authentik
+      OIDC + break-glass local admin; Velero 14 daily + 12 monthly
     • *monitoring* — prometheus/grafana/alertmanager + this bot
     Per-app backup schedules/TTLs: workbook/backup-strategy.md.
     _Bot: `/cluster pods <ns>` · `ps <ns>` · `deploys <ns>`._
@@ -708,7 +710,8 @@ data:
     • `pangolin.md` — identity-aware remote access; its own edge on
       10.10.13.52, everything published under *.pg.local.safeqbit.com
     • `vaultwarden.md`, `passzilla.md`, `babytracker.md`,
-      `qbit-labs.md`, `cloudflared-migration.md` — more per-app docs
+      `qbit-labs.md`, `forgejo.md`, `cloudflared-migration.md` — more
+      per-app docs
     • `restore-drills.md` — quarterly restore drills per backup layer
     • `longhorn-1.12-upgrade.md` — the HELD Longhorn upgrade (wait for
       1.12.2 GA)

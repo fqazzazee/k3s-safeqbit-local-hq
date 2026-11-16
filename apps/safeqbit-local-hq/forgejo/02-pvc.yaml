@@ -1,0 +1,38 @@
+# 02-pvc.yaml
+# forgejo-data (5Gi RWO) → /var/lib/gitea
+#
+# Holds ALL of Forgejo's state, deliberately in one volume:
+#   git/repositories/       the mirrored bare repos (the thing we're backing up)
+#   data/gitea.db           SQLite: users, mirror settings, the Authentik auth
+#                           source, API tokens
+#   custom/conf/app.ini     config, including SECRET_KEY / INTERNAL_TOKEN /
+#                           JWT_SECRET, which Forgejo generates on first boot
+#
+# The secrets must stay with the DB, because SECRET_KEY encrypts the DB
+# columns holding the OIDC client secret and the mirrors' GitHub credentials.
+# They aren't in a SealedSecret: keeping them in this volume means every
+# Velero backup has a matching key + DB pair, and a restore can't pair a DB
+# with the wrong key.
+#
+# Sizing: all GitHub repos (user + Zonduit org) were ~290MB on 2026-11-15,
+# 191MB of it librepods. 5Gi leaves room for growth without adding much to
+# Longhorn's over-provisioning (check `kubectl -n longhorn-system get
+# nodes.longhorn.io` before growing it).
+#
+# Backed up by infrastructure/safeqbit-local-hq/configs/velero-schedule-forgejo.yaml
+# (daily ×14 + monthly ×12 to B2).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgejo-data
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 5Gi

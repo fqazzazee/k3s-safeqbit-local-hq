@@ -36,6 +36,7 @@
 ![Pulse](https://img.shields.io/badge/Pulse-00B4D8?style=for-the-badge&logoColor=white)
 ![Baby Tracker](https://img.shields.io/badge/Baby%20Tracker-FF6F91?style=for-the-badge&logoColor=white)
 ![qbit-labs](https://img.shields.io/badge/qbit--labs-2E7D32?style=for-the-badge&logoColor=white)
+![Forgejo](https://img.shields.io/badge/Forgejo-FB923C?style=for-the-badge&logo=forgejo&logoColor=white)
 
 > A small private cloud running in my home - three computers working together to host
 > my passwords, photos, notes, and a handful of other apps I'd rather not rent from a
@@ -189,6 +190,7 @@ flowchart TB
             kuma["Uptime Kuma"]
             bt["Baby Tracker"]
             ql["qbit-labs"]
+            fj["Forgejo — GitHub mirror"]
         end
         subgraph pg["🔐 Pangolin — brings its own front door"]
             pgedge["Gerbil + Traefik — one pod<br/>10.10.13.52 · TLS + WireGuard UDP"]
@@ -198,7 +200,7 @@ flowchart TB
         subgraph db["🐘 Databases"]
             cnpg[("CNPG PostgreSQL pairs<br/>authentik · grafana · netbox · affine ×2<br/>pangolin ×1")]
             ownpg[("bundled Postgres<br/>immich")]
-            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant<br/>passzilla · pulse · qbit-labs<br/>plain-text log: babytracker<br/>photoprism: SQLite on NFS")]
+            sqlite[("SQLite on Longhorn<br/>vaultwarden · uptime-kuma · home-assistant<br/>passzilla · pulse · qbit-labs · forgejo<br/>plain-text log: babytracker<br/>photoprism: SQLite on NFS")]
         end
         subgraph storage["💾 Storage"]
             longhorn[("Longhorn<br/>replicated block storage")]
@@ -220,6 +222,7 @@ flowchart TB
 
     %% GitOps: Git is the source of truth
     gh -- "watched by" --> flux
+    gh -- "every repo, mirrored hourly" --> fj
     flux -- "applies everything below" --> apps
     sealed -. "decrypts secrets from Git" .-> apps
 
@@ -275,7 +278,7 @@ flowchart TB
     classDef gitc fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95
     class visitor,gh,cf,le,b2,slack,me,pve,nas1,nas2 ext
     class metallb,ingress,certmgr,cfd,pgedge netc
-    class auth,vw,immich,pp,nb,affine,pz,ha,kuma,bt,pango,newt appc
+    class auth,vw,immich,pp,nb,affine,pz,ha,kuma,bt,ql,fj,pango,newt appc
     class cnpg,ownpg,sqlite dbc
     class longhorn,nfsprov stoc
     class velero,cnpgsnap,etcdsnap bakc
@@ -647,6 +650,7 @@ learn.
 | [Home Assistant](https://www.home-assistant.io/) | Home automation - thermostats, sensors, and dashboards | [home-assistant-migration.md](workbook/home-assistant-migration.md) |
 | [Ultimate Baby Tracker](https://github.com/fqazzazee/ultimate-baby-tracker) | One-tap newborn tracking - feeds, diapers, sleep and programmable alarms ([my own project](#things-im-building)) | [babytracker.md](workbook/babytracker.md) |
 | qbit-labs | Self-hosted study platform - lab pages, quizzes, spaced-repetition flashcards and progress tracking ([my own project](#things-im-building), private repo) | [qbit-labs.md](workbook/qbit-labs.md) |
+| [Forgejo](https://forgejo.org/) | Offline copy of all my GitHub repos as pull mirrors, backed up to B2 (14 daily + 12 monthly) | [forgejo.md](workbook/forgejo.md) |
 | [Pangolin](https://pangolin.net/) | Identity-aware remote access (HTTP + browser RDP/VNC/SSH) over WireGuard | [pangolin.md](workbook/pangolin.md) |
 | [Grafana](https://grafana.com/) | Dashboards for everything the cluster reports | [maintenance.md](workbook/maintenance.md) |
 | [Prometheus](https://prometheus.io/) | Metrics collection & alerting engine | [maintenance.md](workbook/maintenance.md) |

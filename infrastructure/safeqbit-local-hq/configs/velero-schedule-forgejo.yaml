@@ -1,0 +1,87 @@
+# velero-schedule-forgejo.yaml
+# Two backups of the forgejo namespace to B2: 14 dailies + 12 monthlies.
+#
+# Covers: forgejo-data, the one PVC holding every mirrored repo, the SQLite
+# DB and app.ini (with the SECRET_KEY that decrypts the DB), plus the k8s
+# objects.
+#
+# ── Why two tiers ─────────────────────────────────────────────────────────
+# The Forgejo copy is a pull MIRROR: a force-push or branch delete on GitHub
+# reaches it within an hour. These backups are the history. The dailies undo
+# anything in the last two weeks; the monthlies are the window for noticing
+# a rewrite or deletion that went unnoticed for a long time.
+#
+# ── Retention math (Velero is TTL-only, no "keep N") ──────────────────────
+# The TTL sits strictly between N and N+1 intervals (see backup-strategy.md):
+#   daily   348h = 14.5d → 14 kept (15 right after a run)
+#   monthly 9120h = 380d → 12 kept (13 right after a run); 12 months is
+#           365–366d and 13 is 393–397d, so 380d is safely in between.
+#
+# Cost: ~300MB of git data that changes slowly. kopia dedups across all
+# backups of the volume, so 26 restore points cost little more than one.
+#
+# Slots: 04:30 daily and 04:45 on the 3rd are both otherwise empty
+# (backup-strategy.md timeline).
+
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: forgejo-daily
+  namespace: velero
+spec:
+  schedule: "30 4 * * *"
+
+  template:
+    ttl: "348h0m0s"   # 14.5 days → keep 14
+    includedNamespaces:
+      - forgejo
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+      # One-shot ACME objects: restoring them plants a stale
+      # CertificateRequest that stalls the next cert renewal.
+      - certificaterequests.cert-manager.io
+      - orders.acme.cert-manager.io
+      - challenges.acme.cert-manager.io
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    # Skips NFS volumes (TrueNAS protects those). See velero-volume-policy.yaml.
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: forgejo-monthly
+  namespace: velero
+spec:
+  schedule: "45 4 3 * *"
+
+  template:
+    ttl: "9120h0m0s"   # 380 days → keep 12
+    includedNamespaces:
+      - forgejo
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - pods
+      - replicasets
+      - certificaterequests.cert-manager.io
+      - orders.acme.cert-manager.io
+      - challenges.acme.cert-manager.io
+    snapshotVolumes: true
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    storageLocation: default
+    resourcePolicy:
+      kind: configmap
+      name: velero-volume-policy
+
+  paused: false
