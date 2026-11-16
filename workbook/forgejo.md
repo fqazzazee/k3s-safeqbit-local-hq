@@ -108,8 +108,10 @@ In `authentik01.local.safeqbit.com` → Admin:
    launch URL `https://git.local.safeqbit.com/`
 3. **Policy / Group / User bindings** on that application: bind my user only.
    This is what keeps anyone else in Authentik from creating a Forgejo account
-4. **Directory → Groups → Create** `Forgejo Admins`, add my user. Authentik's
-   `profile` scope already sends a `groups` claim
+4. **Admin rights come from the existing `authentik Admins` group**, so no new
+   group is needed. Authentik's `profile` scope already sends a `groups` claim.
+   This means anyone who is an Authentik superuser is a Forgejo admin too,
+   provided the step-3 binding lets them log in at all
 
 ### 4. Forgejo auth source
 
@@ -125,7 +127,7 @@ Authentication sources → Add:
 | Auto discovery URL | `https://authentik01.local.safeqbit.com/application/o/forgejo/.well-known/openid-configuration` |
 | Additional scopes | `email profile` |
 | Claim name providing group names | `groups` |
-| Group claim value for administrator users | `Forgejo Admins` |
+| Group claim value for administrator users | `authentik Admins` |
 
 Saving runs OIDC discovery from the pod, so a save error means the pod can't
 reach Authentik (it hairpins through 10.10.13.50, like AFFiNE).
@@ -135,8 +137,11 @@ reach Authentik (it hairpins through 10.10.13.50, like AFFiNE).
 Log out → **Sign in with authentik**. With auto-registration off, Forgejo
 shows a "register new account" form: pick username **`fqazzazee`**, so
 `git.local.safeqbit.com/fqazzazee/<repo>` matches
-`github.com/fqazzazee/<repo>`. The `Forgejo Admins` group makes it an admin
-on every login. The Zonduit repos go under a Forgejo org named `Zonduit`.
+`github.com/fqazzazee/<repo>`. Membership of `authentik Admins` makes it an
+admin; Forgejo re-evaluates that **at each login**, so after changing the
+group setting, log out and back in. Admin matters here: the `Zonduit` org
+is created and owned by `forgejo-admin`, so a non-admin `fqazzazee` can't
+see its repos. The Zonduit repos go under a Forgejo org named `Zonduit`.
 
 Check that the break-glass login still works afterwards (password form on
 `/user/login`).
@@ -302,3 +307,12 @@ Before a major (e.g. to the next LTS), take a restore point
 (`velero backup create --from-schedule forgejo-daily`). Forgejo migrates the
 DB on boot and downgrades are not supported. Read the release notes for
 `app.ini` keys that changed name.
+
+---
+
+## Change log
+
+| Date | Change |
+|---|---|
+| 2026-11-15 | Deployed (PR #184). Gickup mirroring (PR #185). |
+| 2026-11-16 | Admin group switched from a dedicated `Forgejo Admins` group to the existing `authentik Admins`, set live with `forgejo admin auth update-oauth --id 1 --group-claim-name groups --admin-group "authentik Admins"` (the CLI only changes the flags passed; client ID/secret untouched). GitHub PATs re-issued with 1-year expiry: **both expire 2027-11-16/17**. Rotate before then (see Mirroring). |
