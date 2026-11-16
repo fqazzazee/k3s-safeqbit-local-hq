@@ -1,0 +1,274 @@
+# 08-mirror-check.yaml
+# Daily drift check: does every Forgejo mirror still match GitHub?
+#
+# ── Why compare content, not timestamps ──────────────────────────────────
+# Forgejo's `mirror_updated` cannot detect a broken mirror. On a FAILED sync,
+# services/mirror/mirror_pull.go calls repo_model.TouchMirror, which sets
+# updated_unix to now, and that is the field the API reports as
+# mirror_updated (checked in the v15.0.11 source). An expired PAT or a
+# deleted GitHub repo therefore shows a fresh timestamp every hour.
+#
+# So this compares what matters: every branch and tag (name → object ID) in
+# each Forgejo mirror against GitHub. refs/pull/* is ignored; Forgejo mirrors
+# it but it isn't part of the backup's purpose. Wikis aren't compared (no
+# refs API for them).
+#
+# ── What fails the Job (→ stock KubeJobFailed alert → Slack) ─────────────
+#   STALE    refs differ and GitHub's last push is older than GRACE_HOURS
+#            (sync broken: PAT expired/revoked, GitHub unreachable, …)
+#   MISSING  repo on GitHub, no Forgejo repo, and created > 26h ago (Gickup
+#            runs daily, so anything older should exist by now)
+#   GONE     Forgejo mirror whose GitHub repo is no longer listed: deleted,
+#            renamed, transferred, or the PAT lost access. The mirror is
+#            now the only copy. To acknowledge, convert it to a regular repo
+#            (repo Settings → "Convert to regular repository"), which drops
+#            it from this check.
+# Repos with a push inside the grace window are reported as "pending" and
+# don't fail the run. Details are in the Job log:
+#   kubectl -n forgejo logs job/<name>
+#
+# Reuses gickup-tokens (same PATs, same owners), so no second copy of the
+# GitHub tokens exists. Runs at 03:15 UTC, before gickup (04:00) and
+# forgejo-daily (04:30). Pure stdlib Python, ~80 GitHub API calls per run
+# (5,000/h limit per token).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirror-check
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: mirror-check
+    app.kubernetes.io/component: mirror-check
+data:
+  mirror_check.py: |
+    """Compare every Forgejo pull mirror's branches and tags with GitHub."""
+    import json
+    import os
+    import sys
+    import urllib.error
+    import urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    FORGEJO = os.environ.get("FORGEJO_URL", "http://forgejo:3000").rstrip("/")
+    SECRETS = os.environ.get("SECRETS_DIR", "/secrets")
+    GRACE = timedelta(hours=float(os.environ.get("GRACE_HOURS", "3")))
+    NEW_REPO_GRACE = timedelta(hours=26)
+    # GitHub owner → token file. Must match 05-gickup-config.yaml.
+    OWNERS = {"fqazzazee": "github-fqazzazee", "Zonduit": "github-zonduit"}
+    KINDS = ("refs/heads/", "refs/tags/")
+    NOW = datetime.now(timezone.utc)
+
+
+    def token(name):
+        with open(os.path.join(SECRETS, name)) as f:
+            return f.read().strip()
+
+
+    def get(url, tok):
+        """GET → (status, parsed JSON or None)."""
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"token {tok}",
+            "Accept": "application/json",
+            "User-Agent": "forgejo-mirror-check",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, None
+
+
+    def must(url, tok):
+        status, body = get(url, tok)
+        if status != 200:
+            raise RuntimeError(f"GET {url.split('?')[0]} → HTTP {status}")
+        return body
+
+
+    def ts(s):
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+    def github_repos(owner, tok):
+        """Same listing Gickup uses: /user/repos, filtered to one owner."""
+        repos, page = {}, 1
+        while True:
+            batch = must(f"https://api.github.com/user/repos?per_page=100&page={page}", tok)
+            if not batch:
+                return repos
+            for r in batch:
+                if r["owner"]["login"] == owner:
+                    repos[r["name"].lower()] = r
+            page += 1
+
+
+    def github_refs(full_name, tok):
+        refs = {}
+        for kind in ("heads", "tags"):
+            # 404/409 = no refs of this kind (empty repo); treat as none.
+            status, body = get(f"https://api.github.com/repos/{full_name}/git/matching-refs/{kind}", tok)
+            if status == 200:
+                refs.update({x["ref"]: x["object"]["sha"] for x in body})
+            elif status not in (404, 409):
+                raise RuntimeError(f"GitHub refs {full_name} → HTTP {status}")
+        return refs
+
+
+    def forgejo_mirrors(tok):
+        repos, page = {}, 1
+        while True:
+            body = must(f"{FORGEJO}/api/v1/repos/search?limit=50&page={page}", tok)
+            if not body["data"]:
+                return repos
+            for r in body["data"]:
+                repos[(r["owner"]["login"].lower(), r["name"].lower())] = r
+            page += 1
+
+
+    def forgejo_refs(full_name, tok):
+        status, body = get(f"{FORGEJO}/api/v1/repos/{full_name}/git/refs", tok)
+        if status == 404:
+            return {}
+        if status != 200:
+            raise RuntimeError(f"Forgejo refs {full_name} → HTTP {status}")
+        return {x["ref"]: x["object"]["sha"] for x in body if x["ref"].startswith(KINDS)}
+
+
+    def compare(gh, fj):
+        """Return a short human diff, or '' if identical."""
+        if gh == fj:
+            return ""
+        missing = sorted(set(gh) - set(fj))
+        extra = sorted(set(fj) - set(gh))
+        moved = sorted(r for r in set(gh) & set(fj) if gh[r] != fj[r])
+        parts = []
+        for label, refs in (("behind", moved), ("missing", missing), ("extra", extra)):
+            if refs:
+                parts.append(f"{label} {len(refs)}: " + ", ".join(refs[:3]) + (" …" if len(refs) > 3 else ""))
+        return "; ".join(parts)
+
+
+    def main():
+        fj_tok = token("forgejo")
+        mirrors = forgejo_mirrors(fj_tok)
+        problems, pending, ok = [], [], 0
+
+        for owner, token_file in OWNERS.items():
+            gh_tok = token(token_file)
+            upstream = github_repos(owner, gh_tok)
+            if not upstream:
+                problems.append(f"LISTING  {owner}: GitHub returned no repos (token scope/approval?)")
+                continue
+
+            for name, r in sorted(upstream.items()):
+                full = r["full_name"]
+                mine = mirrors.get((owner.lower(), name))
+                if mine is None:
+                    if NOW - ts(r["created_at"]) > NEW_REPO_GRACE:
+                        problems.append(f"MISSING  {full}: no Forgejo repo (is gickup failing?)")
+                    else:
+                        pending.append(f"{full}: new repo, gickup will mirror it")
+                    continue
+                if not mine["mirror"]:
+                    pending.append(f"{full}: Forgejo copy is not a mirror (converted?), skipped")
+                    continue
+                diff = compare(github_refs(full, gh_tok), forgejo_refs(mine["full_name"], fj_tok))
+                if not diff:
+                    ok += 1
+                elif NOW - ts(r["pushed_at"]) < GRACE:
+                    pending.append(f"{full}: pushed {r['pushed_at']}, sync pending ({diff})")
+                else:
+                    problems.append(f"STALE    {full}: {diff} (last GitHub push {r['pushed_at']})")
+
+            for (o, n), mine in sorted(mirrors.items()):
+                if o == owner.lower() and mine["mirror"] and n not in upstream:
+                    problems.append(f"GONE     {mine['full_name']}: no longer on GitHub / not visible to the token. "
+                                    "The mirror is now the only copy; convert it to a regular repo to acknowledge")
+
+        print(f"mirror-check {NOW:%Y-%m-%d %H:%M} UTC: {ok} in sync, {len(pending)} pending, {len(problems)} problems")
+        for p in pending:
+            print(f"  pending  {p}")
+        for p in problems:
+            print(f"  {p}")
+        return 1 if problems else 0
+
+
+    if __name__ == "__main__":
+        try:
+            sys.exit(main())
+        except Exception as e:  # network/API failure is a failed check, not a crash loop
+            print(f"mirror-check ERROR: {e}")
+            sys.exit(1)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mirror-check
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: mirror-check
+    app.kubernetes.io/component: mirror-check
+spec:
+  schedule: "15 3 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      # One failed Job per day at most; never a retry storm.
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mirror-check
+            app.kubernetes.io/component: mirror-check
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          # musl: api.github.com tried as-is first; "forgejo" via the search list.
+          dnsConfig:
+            options:
+              - name: ndots
+                value: "1"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            fsGroup: 65534
+          containers:
+            - name: mirror-check
+              image: python:3.13.18-alpine3.24@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
+              command: ["python3", "/app/mirror_check.py"]
+              env:
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /app
+                  readOnly: true
+                - name: tokens
+                  mountPath: /secrets
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+          volumes:
+            - name: script
+              configMap:
+                name: mirror-check
+            - name: tokens
+              secret:
+                secretName: gickup-tokens
+                defaultMode: 0440

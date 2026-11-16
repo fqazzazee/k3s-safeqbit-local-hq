@@ -9,6 +9,7 @@ resources:
   - 05-gickup-config.yaml
   - 06-gickup-tokens.sealed.yaml
   - 07-gickup-cronjob.yaml
+  - 08-mirror-check.yaml
 
 labels:
   - includeSelectors: false

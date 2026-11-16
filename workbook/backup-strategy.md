@@ -67,6 +67,7 @@ Each layer protects against a different failure mode:
 | **03:00** | `passzilla-bimonthly` | Velero | 11th + 26th | namespace `passzilla` | B2 |
 | **03:00** | `photoprism-bimonthly` | Velero | 13th + 28th | namespace `photoprism` | B2 |
 | **03:30** | `immich-bimonthly` | Velero | 1st + 16th | namespace `immich` | B2 |
+| **03:15** | `mirror-check` | CronJob (forgejo ns) | daily | every Forgejo mirror vs GitHub, fails on drift | (check) |
 | **03:30** | `babytracker-daily` | Velero | daily | namespace `babytracker` | B2 |
 | **03:30** | `pangolin-cnpg-backup` | CNPG snapshot | weekly Sun | pangolin-cnpg | Longhorn |
 | **03:30** | `weekly-trim` | Longhorn fstrim | weekly Sun | every Longhorn volume | (reclaim) |

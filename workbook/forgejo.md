@@ -12,6 +12,7 @@ whole thing to B2 with two retention tiers. Added 2026-11-15.
 - **Backup:** `infrastructure/.../velero-schedule-forgejo.yaml`, `forgejo-daily` (04:30, 14 kept) and `forgejo-monthly` (3rd 04:45, 12 kept), both to B2
 - **Login:** Authentik OIDC, plus a local break-glass admin `forgejo-admin` (password in Vaultwarden)
 - **Mirroring:** Gickup CronJob `gickup`, daily 04:00 UTC, creates the pull mirrors; Forgejo syncs them hourly
+- **Drift check:** CronJob `mirror-check`, daily 03:15 UTC, compares every branch and tag with GitHub; failure → `KubeJobFailed` → Slack
 
 ---
 
@@ -24,7 +25,7 @@ GitHub ──(pull mirror, hourly)──► Forgejo ──(Velero: 14 daily + 12
 | Scenario | Covered by |
 |---|---|
 | GitHub down, or no internet | Forgejo: clone over HTTPS from the LAN |
-| Repo deleted on GitHub / account locked out | Forgejo: sync fails, mirror keeps its last state |
+| Repo deleted on GitHub / account locked out | Forgejo: sync fails, mirror keeps its last state. `mirror-check` flags it as `GONE` the next morning |
 | **Force-push or branch delete on GitHub** | **Velero only.** The mirror copies it within the hour (`git remote update --prune`). Restore from a daily (≤14 days ago) or monthly (≤12 months ago) |
 | Cluster lost | Velero restore from B2 (GitHub itself is still the other copy) |
 
@@ -146,6 +147,25 @@ see its repos. The Zonduit repos go under a Forgejo org named `Zonduit`.
 Check that the break-glass login still works afterwards (password form on
 `/user/login`).
 
+### 6. After the first Gickup run: join the Zonduit org
+
+Gickup creates the `Zonduit` org as `forgejo-admin`, so `forgejo-admin` is its
+only member. Site admins can open it, but it won't appear on `fqazzazee`'s
+profile or dashboard until `fqazzazee` is a member. Add it to the Owners team
+(org → Teams → Owners → Add member, or via the API):
+
+```bash
+T=$(kubectl -n forgejo get secret gickup-tokens -o jsonpath='{.data.forgejo}' | base64 -d)
+TID=$(curl -s -H "Authorization: token $T" https://git.local.safeqbit.com/api/v1/orgs/Zonduit/teams \
+  | python3 -c "import json,sys; print([t['id'] for t in json.load(sys.stdin) if t['name']=='Owners'][0])")
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT -H "Authorization: token $T" \
+  https://git.local.safeqbit.com/api/v1/teams/$TID/members/fqazzazee   # 204
+unset T
+```
+
+Done on 2026-11-16. A restore from Velero keeps the membership, but a
+rebuilt-from-scratch instance needs this step again.
+
 ---
 
 ## Mirroring
@@ -252,6 +272,51 @@ kubectl -n forgejo delete job gickup-manual
 
 ---
 
+## Drift check (`mirror-check`)
+
+`08-mirror-check.yaml`: a daily CronJob at 03:15 UTC (before gickup and the
+backup) that compares **every branch and tag** (name → object ID) of every
+Forgejo mirror with GitHub, using the same `gickup-tokens`.
+
+**Why not `mirror_updated`:** Forgejo bumps it on *failed* syncs too.
+`SyncPullMirror` calls `TouchMirror` when `runSync` fails, and that sets the
+same `updated_unix` column the API reports (checked in the v15.0.11 source).
+A mirror with a dead PAT therefore looks freshly synced every hour, so only a
+content comparison catches it.
+
+| Result | Meaning | Fails the Job? |
+|---|---|---|
+| in sync | all branches and tags identical | no |
+| `pending` | differs, but GitHub saw a push in the last 3h (`GRACE_HOURS`), or the repo is <26h old and gickup hasn't run yet | no |
+| `STALE` | differs and the last GitHub push is older than 3h: sync is broken (PAT expired/revoked, GitHub unreachable) | **yes** |
+| `MISSING` | on GitHub for >26h, no Forgejo repo: gickup is failing | **yes** |
+| `GONE` | Forgejo mirror whose GitHub repo is no longer visible (deleted, renamed, transferred, or the PAT lost access). **The mirror is now the only copy** | **yes** |
+| `ERROR` | GitHub/Forgejo API failure (e.g. 401 from an expired PAT) | **yes** |
+
+A failed Job fires the stock `KubeJobFailed` alert. The details are in the log:
+
+```bash
+kubectl -n forgejo logs job/$(kubectl -n forgejo get jobs -l app.kubernetes.io/name=mirror-check \
+  --sort-by=.metadata.creationTimestamp -o name | tail -1 | cut -d/ -f2)
+kubectl -n forgejo create job --from=cronjob/mirror-check mirror-check-manual   # run now
+```
+
+**Acknowledging a `GONE` repo:** if the GitHub repo was deleted on purpose,
+open the Forgejo repo → Settings → "Convert to regular repository". It stops
+being a mirror (and drops out of the check) but keeps all its history. If the
+repo was *renamed or transferred*, delete the old mirror after gickup has
+created the new one.
+
+Not covered: wiki contents (no refs API) and `refs/pull/*` (mirrored, not
+compared).
+
+Tested 2026-11-16 against the live instance: 39/39 in sync in ~26s; injected
+faults gave `STALE` (one tag rewritten), `pending` (same drift with a fresh
+push), `MISSING`, `GONE` and `ERROR` (401), all with the expected exit codes.
+Also ran as uid 65534 with a read-only rootfs in the pinned image.
+
+---
+
 ## Verify
 
 ```bash
@@ -266,6 +331,7 @@ velero backup describe <name> --details | grep -E "Phase|forgejo-data"
 ```
 
 The Monday `backup-summary-report` picks up both schedules automatically.
+Mirror freshness is `mirror-check`'s job (above), not the weekly report's.
 
 ---
 
@@ -273,16 +339,28 @@ The Monday `backup-summary-report` picks up both schedules automatically.
 
 **One repo to an earlier state** (e.g. after an upstream force-push):
 restore into a scratch namespace, clone from there, push wherever needed.
+This is the exact procedure tested on 2026-11-16 (see restore-drills.md).
 
 ```bash
-velero restore create forgejo-scratch --from-backup <backup> \
-  --namespace-mappings forgejo:forgejo-restore
+velero restore create forgejo-scratch-$(date +%Y%m%d) --from-backup <backup> \
+  --namespace-mappings forgejo:forgejo-restore \
+  --exclude-resources ingresses.networking.k8s.io,certificates.cert-manager.io,cronjobs.batch,jobs.batch,sealedsecrets.bitnami.com \
+  --wait
+kubectl -n forgejo-restore wait --for=condition=ready pod -l app.kubernetes.io/name=forgejo --timeout=300s
 kubectl -n forgejo-restore port-forward deploy/forgejo 3001:3000
-# the restored Ingress points at the real hostname: delete it
-kubectl -n forgejo-restore delete ingress forgejo
 git clone http://localhost:3001/fqazzazee/<repo>.git   # log in as forgejo-admin
+
+# clean up (the PV has reclaimPolicy Delete; the Longhorn volume goes with it)
 kubectl delete ns forgejo-restore
+velero restore delete forgejo-scratch-<date> --confirm
 ```
+
+Why each exclude: the **Ingress** and **Certificate** would compete with the
+live instance for `git.local.safeqbit.com`; the **CronJobs/Jobs** would run a
+second gickup and mirror-check; the **SealedSecret** is bound to the `forgejo`
+namespace and can't decrypt in another one (the plain `gickup-tokens`
+Secret is still restored). The one restore warning to expect is "could not
+restore, CustomResourceDefinition … already exists", which is harmless.
 
 The restored copy still has its mirror settings and will start pulling from
 GitHub on the hourly schedule, so **clone what you need before the next sync
@@ -316,3 +394,4 @@ DB on boot and downgrades are not supported. Read the release notes for
 |---|---|
 | 2026-11-15 | Deployed (PR #184). Gickup mirroring (PR #185). |
 | 2026-11-16 | Admin group switched from a dedicated `Forgejo Admins` group to the existing `authentik Admins`, set live with `forgejo admin auth update-oauth --id 1 --group-claim-name groups --admin-group "authentik Admins"` (the CLI only changes the flags passed; client ID/secret untouched). GitHub PATs re-issued with 1-year expiry: **both expire 2027-11-16/17**. Rotate before then (see Mirroring). |
+| 2026-11-16 | First Gickup run: 39 mirrors (32 + 7), all 209 branches/tags identical to GitHub, fsck clean. First backup (295 MB) + scratch-namespace restore test passed, incl. a mirror sync of a private repo (proves the restored `SECRET_KEY` decrypts the restored DB). `fqazzazee` added to the Zonduit Owners team (setup step 6). `mirror-check` CronJob added instead of the planned `backup-summary-report` check, because `mirror_updated` can't detect failures (see Drift check). |

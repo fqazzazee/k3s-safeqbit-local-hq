@@ -257,4 +257,4 @@ touch the production VMs.
 
 | Date | Drill | Variant | Result | Time taken | Findings / follow-ups |
 |---|---|---|---|---|---|
-| _none yet_ | | | | | |
+| 2026-11-16 | B (on `forgejo`, not passzilla) | B1 non-destructive | **Pass** | ~10 min | Fresh `--from-schedule forgejo-daily` backup (295 MB DataUpload, 0 errors) restored into `forgejo-restore` with ingress/certificate/cronjob/job/sealedsecret excluded. Restored refs byte-identical to live (211 refs, 41 repos), fsck clean, private repo cloned, and a mirror-sync of a private repo succeeded, so the restored `SECRET_KEY` decrypts the restored DB. Only warning: CRD already exists (harmless). Namespace, restore CR and Longhorn volume cleaned up. Procedure now in forgejo.md → Restore. The passzilla B1 is still to do for the Q4 rotation |

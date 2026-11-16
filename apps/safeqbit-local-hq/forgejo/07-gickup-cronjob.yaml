@@ -10,7 +10,8 @@
 # Gickup exits 1 if anything in the run logged an error, which makes the Job
 # fail and fires the stock KubeJobFailed alert to Slack. The mirrors use the
 # same PATs, so an expired or revoked PAT shows up here within a day, before
-# the mirrors have been stale for long.
+# the mirrors have been stale for long. mirror-check (08-mirror-check.yaml)
+# catches the cases this run cannot (a mirror that stopped syncing).
 #
 # backoffLimit 0 + history 1/1: one failed Job per day at most, never a
 # retry storm (see the 2026-08-29 kopia/Slack incident in backup-strategy.md).
