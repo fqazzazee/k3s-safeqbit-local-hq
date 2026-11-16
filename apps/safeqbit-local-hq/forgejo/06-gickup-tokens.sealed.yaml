@@ -1,0 +1,33 @@
+# 06-gickup-tokens.sealed.yaml
+# Tokens for the gickup CronJob (07-gickup-cronjob.yaml), mounted at /secrets:
+#   github-fqazzazee  fine-grained PAT, owner fqazzazee, all repos,
+#                     Contents: Read-only (+ Metadata)
+#   github-zonduit    same, owner Zonduit
+#   forgejo           API token "gickup" of forgejo-admin
+#                     (write:repository, write:organization, read:user, write:admin)
+#
+# The GitHub PATs are also what each mirror was CREATED with: Forgejo stores
+# a copy per mirror, encrypted in its DB. Re-sealing this file alone does NOT
+# update existing mirrors. Rotation procedure: workbook/forgejo.md,
+# "Where the mirror credentials live, and rotating them".
+#
+# Re-seal: workbook/maintenance.md "Sealed Secrets" with
+#   kubectl create secret generic gickup-tokens -n forgejo \
+#     --from-file=github-fqazzazee=… --from-file=github-zonduit=… \
+#     --from-file=forgejo=… --dry-run=client -o yaml | kubeseal --cert … --format yaml
+---
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: gickup-tokens
+  namespace: forgejo
+spec:
+  encryptedData:
+    forgejo: AgBCeIpwO4Lk4SYWkwdJMgoDgBGQlajNBnOa5w30L4eAM8xskv+GRb0v+LX73IoSs4Q50ox9GRFhp6Q0xZm8jtDO2sWLVwhxZFSd5ZXHscGkcwcgsoxuuBzvItcik7kDRQqth7urXvINon1SkEi3F36/U9nS5tfozq5DjbCGPut4OUco79Tky2OB4SkNcWZdVIfU9Z5Ux/gMETTGLfHF2TyfS0Fq35K9Y3xHUT4VyKvfx7JMo4SVvM7DWbMDQrNc5/pFWRQpEfPVye8zCYnQQRLj9fx3NfDz8ga1pjYo5yQvKBclx6mrkFzrtR9vz4grIJ24jLTP1wghh9S8GY4rYgmYYws2ios43RAoOjHAMULQ/QiQNRYB+qKOAGibAHJ1dAzTeXKxjnM2dKosuwbWgHTO5B2XjrwbfBRWvaYedFap8ZlKpvI9NvUExCeP3GLnhr85sI+AgkHBFyk9Csy8md8oF/cATYybFFnk/aQBXwaukPHTobCymTuvpJoUKnY6tcgmroXfqiY8tv7Nux90uo5AY0sS/1LYomPilFM5+MlVaGlhFG5bssEbolTBnJUApkAg/YCXlI1nltJn4hL46B5zy2uvGoGB290G3xaozNp5LQskOUH6mBaEDY3osZYjMMeHNvHG6EyVKxsO62sMcDdjUpY4xDMvtS2meVf5mFdktf3x1pjaTkLu+KD2GlJAVJsUqt2nY9pF+VnRKmpm3ui/14Kv7bYrVSOCA5+D0NvQbaCv0h3qkY1L
+    github-fqazzazee: AgAsyw6WL7LspCYh+rK6Wky4pPYIl60j6PxKMKPlbP6u7y4MRf2QBxWkoUz0vwHVTdHIWrrdyn4VOsX8ZVo/apAAwhaeMCv2+NOPlccyEismf+MxW7G/F4rVT5dwdfKFW+iczLoki3msZ7KwfbDK5Q4owxKcnL7x1kZf5/tPbCqv0pUodBfRpHWEu4A34pl18VhI99ZJCFkJ0cfir0r08h9gBjXr1Rf0xaWwV3HOxzrlAb3zyvcoTyauH+nWMxL6hypW93+0oBme9tf8Hbj7pB7IWEK2T54qtmBL08faCkOlIz7khTLy1cmQVjPOydLDEF3Fq3BJxlBIf4YRj1jup/Q0I1eo45P6Zs1YDDDXzrJFzqHUhYt8OHlaC5ZDSxV1YOdilqSKLkoGtsQckHcDDUYnFlY04FEJahyL9KE1RyL/YrbmjhOaPFkC3SIzxjtEHg2yNhZO1v4hg/nNwvD8Fgvczzlc7Deifa0m7pvh+PRrR3Zz6+45ypzbd5CU7KNC13PAdbpxlG5dXqiLIMEdwM+HvXcggrgGmCyja45hQGwNALs5hEQhVZIInoxMrj09Lu9x/4Im1tIxAvkY2O1rBxmijJAPvnwkelMpUWpkF6PnFtWjSIbDdGTBHRKNrjCGN4aBn5IIIO6Q6MX2+kRUu0nLgiYmefem+wjz3tKdMYCBz9Xgtt42FJn7qrfmNMFBgwWeS0oltgej7io1ts/X1lf5E3E+clhO2cR3XyMIQvvAfVwannajelI5GO2aJi3EByuWlGImmPx4WPQ90DkuFHnnaKCamR7kBscWZgPzcpWFF30/vJakqfGiVnITK/g=
+    github-zonduit: AgA1W4Qr9WwtVF4Ap2NOoQgd5/7o3GFy3O5L4lhlNRtJtMA4hy/h9bmdu3H8KQi70UUwt9CR4ueAlrqEtxEbvbP7IDo/vrhx7gEj1g0JXqhgn+WjHO2H/ZvCQu+npwGoWVuYrti28EyTp9Q/zP9swCuMlWf/G6rZkWSrbPv9zVag4n7VesgeyG7KEm9pAwc2seyBnRWXdr2E8ii5tofM1fdxqKg8mlIDOA0ZjspxfWXIXaN4VIcQDGMR3jo/AmhbGsiZwYXr4zBLK7gmOTBMr10Fu9VmYF+V6z9dazApAhlSbGmfliREqzwOPlkaabbGoCTt4ZDxCPm52ksMdMi7XztTCoE1cfr04Dhh58fziNKjgOiz4igFicOSxua9Dj9UeBMTsOUs1iXefpAZNH1HUXA2ZjnEzHy5FEBhPsgkHVdkrp8rCXmvNVKcLIZKqFbmzqv1mGlE5coL8HT0SOMn6IfONjXZT5OcJywC2ilXUjqHbyHB568+gF6s1kU+IcAKlFSz7B3BPjJkv+hKH3S2TDaiRURAiJJD2uN8NqeuEpRhuUJNFBihHYuIe1pw+cByIlEUFWgzHh7kDFvswDvir55hF/ZK2uK+vhRbf/PqoYlFDgDlYFJjDE8iVPgMs8HSHkVBSh3JHOqVIP3/l2OLKvVRIykH2nLVoeH47qmpderHoudMHpE+uSXOlWP8dYWAWIembYZTdhrFRchNQnwgRsPeMYvfq63rGkJ3GcH7AhSxdx95ppGva/xekv/Y0TGupxVgnXyBhQ/aIWiCtF6F09oN5JXIPj+Xwuvg+Jiky9m4dN/h+k6Vhe9PrBoluUQ=
+  template:
+    metadata:
+      name: gickup-tokens
+      namespace: forgejo

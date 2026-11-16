@@ -74,6 +74,7 @@ Each layer protects against a different failure mode:
 | **04:00** | `uptime-kuma-weekly` | Velero | weekly Sun | namespace `uptime-kuma` | B2 |
 | **04:15** | `pangolin-monthly` | Velero | 25th | namespace `pangolin` | B2 |
 | **04:15** | `weekly-snapshot` | Longhorn snapshot, retain 1 | weekly Sun | every Longhorn volume | Longhorn |
+| **04:00** | `gickup` | CronJob (forgejo ns) | daily | creates missing GitHub pull mirrors | (feeds forgejo-daily) |
 | **04:30** | `forgejo-daily` | Velero | daily | namespace `forgejo` | B2 |
 | **04:45** | `forgejo-monthly` | Velero | 3rd | namespace `forgejo` | B2 |
 | **05:00** | `pulse-bimonthly` | Velero | 6th + 21st | namespace `pulse` | B2 |

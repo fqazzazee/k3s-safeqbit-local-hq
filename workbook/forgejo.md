@@ -11,6 +11,7 @@ whole thing to B2 with two retention tiers. Added 2026-11-15.
 - **Storage:** `forgejo-data` 5Gi Longhorn RWO at `/var/lib/gitea`: repos, SQLite DB and `app.ini` (with its generated secrets)
 - **Backup:** `infrastructure/.../velero-schedule-forgejo.yaml`, `forgejo-daily` (04:30, 14 kept) and `forgejo-monthly` (3rd 04:45, 12 kept), both to B2
 - **Login:** Authentik OIDC, plus a local break-glass admin `forgejo-admin` (password in Vaultwarden)
+- **Mirroring:** Gickup CronJob `gickup`, daily 04:00 UTC, creates the pull mirrors; Forgejo syncs them hourly
 
 ---
 
@@ -107,8 +108,10 @@ In `authentik01.local.safeqbit.com` → Admin:
    launch URL `https://git.local.safeqbit.com/`
 3. **Policy / Group / User bindings** on that application: bind my user only.
    This is what keeps anyone else in Authentik from creating a Forgejo account
-4. **Directory → Groups → Create** `Forgejo Admins`, add my user. Authentik's
-   `profile` scope already sends a `groups` claim
+4. **Admin rights come from the existing `authentik Admins` group**, so no new
+   group is needed. Authentik's `profile` scope already sends a `groups` claim.
+   This means anyone who is an Authentik superuser is a Forgejo admin too,
+   provided the step-3 binding lets them log in at all
 
 ### 4. Forgejo auth source
 
@@ -124,7 +127,7 @@ Authentication sources → Add:
 | Auto discovery URL | `https://authentik01.local.safeqbit.com/application/o/forgejo/.well-known/openid-configuration` |
 | Additional scopes | `email profile` |
 | Claim name providing group names | `groups` |
-| Group claim value for administrator users | `Forgejo Admins` |
+| Group claim value for administrator users | `authentik Admins` |
 
 Saving runs OIDC discovery from the pod, so a save error means the pod can't
 reach Authentik (it hairpins through 10.10.13.50, like AFFiNE).
@@ -134,8 +137,11 @@ reach Authentik (it hairpins through 10.10.13.50, like AFFiNE).
 Log out → **Sign in with authentik**. With auto-registration off, Forgejo
 shows a "register new account" form: pick username **`fqazzazee`**, so
 `git.local.safeqbit.com/fqazzazee/<repo>` matches
-`github.com/fqazzazee/<repo>`. The `Forgejo Admins` group makes it an admin
-on every login. The Zonduit repos go under a Forgejo org named `Zonduit`.
+`github.com/fqazzazee/<repo>`. Membership of `authentik Admins` makes it an
+admin; Forgejo re-evaluates that **at each login**, so after changing the
+group setting, log out and back in. Admin matters here: the `Zonduit` org
+is created and owned by `forgejo-admin`, so a non-admin `fqazzazee` can't
+see its repos. The Zonduit repos go under a Forgejo org named `Zonduit`.
 
 Check that the break-glass login still works afterwards (password form on
 `/user/login`).
@@ -144,20 +150,105 @@ Check that the break-glass login still works afterwards (password form on
 
 ## Mirroring
 
-The Gickup CronJob that creates and maintains the mirrors comes in a
-follow-up PR. Until then the instance is empty. The plan:
+A daily **Gickup** CronJob (`05-gickup-config.yaml`, `07-gickup-cronjob.yaml`,
+04:00 UTC) lists both GitHub owners and creates a Forgejo **pull mirror**
+(hourly) for any repo that doesn't have one yet. For existing mirrors it
+just triggers a sync. Forgejo does the hourly fetching itself.
 
-- **GitHub credentials:** two fine-grained PATs, read-only **Contents** +
-  **Metadata** on all repos. One is for `fqazzazee`, the other for `Zonduit`:
-  a fine-grained PAT can only target one owner, and the org may need to
-  approve it. Both go in SealedSecrets.
-- **Forgejo credentials:** an API token of `forgejo-admin`, also sealed.
-- Gickup runs daily, lists both owners and creates any missing pull mirror
-  (hourly interval). Forgejo does the actual syncing.
-- **PAT expiry is the most likely way this breaks without anyone noticing.**
-  Mirrors keep the credentials they were created with, so check during the
-  build whether rotation needs a per-mirror update. A stale-mirror check
-  goes into `backup-summary-report`.
+| GitHub | Forgejo | Token |
+|---|---|---|
+| `github.com/fqazzazee/*` (32 repos on 2026-11-15) | user `fqazzazee` | `github-fqazzazee` |
+| `github.com/Zonduit/*` (7, all private) | org `Zonduit` (created on first run) | `github-zonduit` |
+
+The three tokens live in the `gickup-tokens` SealedSecret
+(`06-gickup-tokens.sealed.yaml`): the two GitHub PATs and `forgejo`, an API
+token of `forgejo-admin`.
+
+**Gotchas, all checked against v0.10.47 + Forgejo 15 on 2026-11-15:**
+
+- **`mirror.enabled: false` is correct.** In Gickup's gitea destination,
+  `true` means "clone and push a plain copy", and only the default creates a
+  real pull mirror.
+- **`mirrorinterval` must be written `1h0m0s`**, exactly as Forgejo returns
+  it. Otherwise every run re-PATCHes the interval and counts it as a failure.
+- **Register `fqazzazee` (step 5) before the first run.** Pair 1 targets that
+  *user* with `createorg: false`, so an early run fails all 32 repos instead
+  of creating an org that takes the username. Tested: 32 errors, no org
+  created, exit 1.
+- **Wikis** (NetScan-WoL and howdy-fedora-helper-script have one) are mirrored
+  into the same Forgejo repo. The log line `starting backup for ….wiki.git`
+  with nothing after it is Gickup skipping its separate wiki entry. That's
+  expected.
+- **Exit code:** any error → exit 1 → Job failed → stock `KubeJobFailed`
+  alert. An expired or revoked PAT breaks the listing, so it shows up here
+  within a day. `backoffLimit: 0` keeps it to one failed Job per day.
+
+### Creating the tokens
+
+GitHub → Settings → Developer settings → Fine-grained tokens, **two** tokens
+(a fine-grained PAT can only target one resource owner):
+
+| Name | Resource owner | Repository access | Permissions |
+|---|---|---|---|
+| `forgejo-mirror-fqazzazee` | fqazzazee | All repositories | Contents: Read-only (Metadata: Read-only is added automatically) |
+| `forgejo-mirror-zonduit` | Zonduit | All repositories | same |
+
+The Zonduit one may need approving under the org's Settings → Personal
+access tokens → Pending requests.
+
+**Expiration:** pick *No expiration* if GitHub offers it. These tokens are
+read-only and scoped to one owner, they sit on a LAN-only instance, and
+Forgejo stores the mirror copy encrypted (below). Rotating them means
+re-creating every mirror (next section), so expiry has a real cost. If the
+org enforces a lifetime, use the maximum and put a reminder a week before it.
+
+The Forgejo token (after step 2 above):
+
+```bash
+kubectl -n forgejo exec deploy/forgejo -- forgejo admin user generate-access-token \
+  --username forgejo-admin --token-name gickup --raw \
+  --scopes write:repository,write:organization,read:user,write:admin
+```
+
+`write:admin` is in the tested scope set because the token creates repos
+under another account (`fqazzazee`).
+
+### Where the mirror credentials live, and rotating them
+
+Forgejo stores each mirror's GitHub token **in the DB**
+(`mirror.encrypted_remote_address`, encrypted with `SECRET_KEY`). The bare
+repo's git config only has `https://oauth2@github.com/…`. So:
+
+- the Velero copies hold the PATs only in encrypted form, and only together
+  with the key (see Design notes);
+- **there is no API to change a mirror's credentials** (Forgejo 15
+  `EditRepoOption` has only `mirror_interval` / `enable_prune`), and Gickup
+  never updates an existing mirror's credentials (it only triggers a sync).
+  Don't hand-edit the token into the git config either: the DB copy is the
+  one Forgejo manages, so a config edit would leave the two out of step.
+
+**Rotation = re-create the mirrors:**
+
+1. Re-seal `gickup-tokens` with the new PAT, merge, let Flux apply it.
+2. Take a restore point: `velero backup create --from-schedule forgejo-daily`.
+3. Delete the affected mirrors. **Only delete repos that still exist on
+   GitHub.** A mirror whose source is gone is the only live copy, and Gickup
+   won't re-create it. One at a time: repo → Settings → Danger zone → Delete
+   (as `forgejo-admin` or `fqazzazee`).
+4. `kubectl -n forgejo create job --from=cronjob/gickup gickup-rotate` and
+   check that it exits 0. It re-clones everything (~300MB, a minute or two).
+
+(Alternatively, the per-repo UI at Settings → Repository → Mirror settings →
+Authorization updates the stored credential in place. That's 39 forms.)
+
+### Run it now / check it
+
+```bash
+kubectl -n forgejo create job --from=cronjob/gickup gickup-manual
+kubectl -n forgejo logs -f job/gickup-manual
+kubectl -n forgejo get job gickup-manual -o jsonpath='{.status.succeeded}{"\n"}'
+kubectl -n forgejo delete job gickup-manual
+```
 
 ---
 
@@ -216,3 +307,12 @@ Before a major (e.g. to the next LTS), take a restore point
 (`velero backup create --from-schedule forgejo-daily`). Forgejo migrates the
 DB on boot and downgrades are not supported. Read the release notes for
 `app.ini` keys that changed name.
+
+---
+
+## Change log
+
+| Date | Change |
+|---|---|
+| 2026-11-15 | Deployed (PR #184). Gickup mirroring (PR #185). |
+| 2026-11-16 | Admin group switched from a dedicated `Forgejo Admins` group to the existing `authentik Admins`, set live with `forgejo admin auth update-oauth --id 1 --group-claim-name groups --admin-group "authentik Admins"` (the CLI only changes the flags passed; client ID/secret untouched). GitHub PATs re-issued with 1-year expiry: **both expire 2027-11-16/17**. Rotate before then (see Mirroring). |

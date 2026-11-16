@@ -6,6 +6,9 @@ resources:
   - 02-pvc.yaml
   - 03-deployment.yaml
   - 04-ingress.yaml
+  - 05-gickup-config.yaml
+  - 06-gickup-tokens.sealed.yaml
+  - 07-gickup-cronjob.yaml
 
 labels:
   - includeSelectors: false
