@@ -34,6 +34,7 @@ resources:
   - velero-schedule-pangolin.yaml
   - velero-schedule-babytracker.yaml
   - velero-schedule-qbit-labs.yaml
+  - velero-schedule-forgejo.yaml
   - pdbs.yaml
   - coredns-autoscaler.yaml
   - alertmanager-slack.yaml

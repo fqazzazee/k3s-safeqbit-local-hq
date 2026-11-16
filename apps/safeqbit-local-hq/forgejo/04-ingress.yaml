@@ -1,0 +1,41 @@
+# 04-ingress.yaml
+# Ingress for Forgejo at https://git.local.safeqbit.com
+# cert-manager issues a Let's Encrypt prod cert via DNS-01 (Cloudflare).
+#
+# DNS: git.local.safeqbit.com must CNAME to ingress.local.safeqbit.com
+# (→ 10.10.13.50) on the router, like every other app. The certificate does
+# not depend on that record.
+#
+# LAN only: no cloudflared tunnel, no Pangolin resource. Login is required
+# for everything (REQUIRE_SIGNIN_VIEW), via Authentik or the local
+# break-glass admin. See 03-deployment.yaml.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: forgejo
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Big clones (librepods is ~190MB) can run past the 60s default.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - git.local.safeqbit.com
+      secretName: forgejo-tls
+  rules:
+    - host: git.local.safeqbit.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: forgejo
+                port:
+                  number: 3000

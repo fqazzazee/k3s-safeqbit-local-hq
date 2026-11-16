@@ -1,0 +1,227 @@
+# 03-deployment.yaml
+# Forgejo Deployment + ClusterIP Service.
+#
+# Purpose: an offline, LAN-side copy of every GitHub repo (fqazzazee + the
+# Zonduit org). Each repo is a read-only PULL MIRROR that Forgejo re-fetches
+# from GitHub on an interval. The mirrors are created by the Gickup CronJob
+# (added separately), which also picks up new GitHub repos.
+#
+# ── The mirror is not the backup; the Velero copies are ──────────────────
+# A pull mirror runs `git remote update --prune`, so force-pushes and branch
+# deletions on GitHub reach this copy within an hour. Point-in-time history
+# comes from the Velero schedules (14 dailies + 12 monthlies on B2). If a
+# GitHub repo is DELETED, the mirror just fails to sync and keeps its last
+# state.
+#
+# ── Config model ──────────────────────────────────────────────────────────
+# Every setting below is a FORGEJO__<section>__<KEY> env var. On every start
+# the image's docker-setup.sh runs `environment-to-ini`, which writes these
+# into /var/lib/gitea/custom/conf/app.ini on the PVC, so Git always wins
+# over the file. Keys NOT set here (SECRET_KEY, INTERNAL_TOKEN, JWT_SECRET)
+# are generated on first boot and persist in that file (see 02-pvc.yaml).
+# Verified against this exact image digest locally (podman, read-only
+# rootfs, uid 1000) on 2026-11-15: boots, secrets stable across restarts,
+# local sign-up refused, anonymous API → 403, non-GitHub migration refused.
+#
+# ── Login ─────────────────────────────────────────────────────────────────
+# Two ways in, on purpose:
+#   1. Authentik OIDC: the normal path. The auth source lives in the DB
+#      (configured once in the UI; workbook/forgejo.md has the steps), not here.
+#   2. Local break-glass admin `forgejo-admin`, password in Vaultwarden. The
+#      password form stays enabled, so this works when Authentik is down.
+# Local sign-up is off; accounts can only be created through Authentik
+# (ALLOW_ONLY_EXTERNAL_REGISTRATION), and the Authentik application is
+# restricted to my user, so nobody else can get an account.
+#
+# ── Single replica ─────────────────────────────────────────────────────────
+# SQLite + bare repos on an RWO Longhorn volume: one writer by construction.
+# Resilience = fast rescheduling (60s tolerations), the same doctrine as the
+# other single-writer apps.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgejo
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # Recreate: RollingUpdate would deadlock on Multi-Attach of the RWO volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: forgejo
+        app.kubernetes.io/component: server
+    spec:
+      # The Service is called "forgejo", so service links would inject
+      # FORGEJO_PORT=tcp://… and friends. environment-to-ini only reads
+      # FORGEJO__ (double underscore), but there's no reason to risk it.
+      enableServiceLinks: false
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 60
+      # Alpine/musl image: under the default ndots:5, github.com is tried
+      # through the local.safeqbit.com search domain first and can hard-fail
+      # with EAI_NODATA. Same fix as qbit-labs / home-assistant / pangolin.
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        # Thousands of git objects: don't re-chown the whole volume every start.
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: forgejo
+          # Forgejo 15 = the current LTS (supported into 2027). For a
+          # backup mirror, staying on the LTS line beats the newest major.
+          # Rootless variant: runs as uid 1000, no s6/sshd, no root.
+          image: codeberg.org/forgejo/forgejo:15.0.11-rootless@sha256:3cd6bc2b74c87cbde0a0fd527c9665cb416f5a0540dee54fe5afb3fa2df9f40c
+          env:
+            # ── server ──
+            - name: FORGEJO__server__DOMAIN
+              value: git.local.safeqbit.com
+            - name: FORGEJO__server__ROOT_URL
+              value: https://git.local.safeqbit.com/
+            - name: FORGEJO__server__HTTP_PORT
+              value: "3000"
+            # HTTPS clone only: no SSH server, no extra LoadBalancer IP.
+            - name: FORGEJO__server__DISABLE_SSH
+              value: "true"
+            - name: FORGEJO__server__START_SSH_SERVER
+              value: "false"
+            - name: FORGEJO__server__LFS_START_SERVER
+              value: "true"
+            # No Gravatar/CDN calls from the browser or the server.
+            - name: FORGEJO__server__OFFLINE_MODE
+              value: "true"
+            # ── database ──
+            - name: FORGEJO__database__DB_TYPE
+              value: sqlite3
+            # ── security / service ──
+            - name: FORGEJO__security__INSTALL_LOCK
+              value: "true"
+            # Nothing is readable without logging in: the Zonduit repos are private.
+            - name: FORGEJO__service__REQUIRE_SIGNIN_VIEW
+              value: "true"
+            # Local sign-up refused; first Authentik login can create an account.
+            - name: FORGEJO__service__DISABLE_REGISTRATION
+              value: "false"
+            - name: FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION
+              value: "true"
+            - name: FORGEJO__service__DEFAULT_KEEP_EMAIL_PRIVATE
+              value: "true"
+            # First Authentik login shows "register / link to existing account"
+            # instead of silently creating a user.
+            - name: FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION
+              value: "false"
+            # Legacy OpenID 2.0 (not OIDC). Unused.
+            - name: FORGEJO__openid__ENABLE_OPENID_SIGNIN
+              value: "false"
+            - name: FORGEJO__openid__ENABLE_OPENID_SIGNUP
+              value: "false"
+            - name: FORGEJO__session__COOKIE_SECURE
+              value: "true"
+            # ── repositories / mirrors ──
+            - name: FORGEJO__repository__FORCE_PRIVATE
+              value: "true"
+            - name: FORGEJO__repository__DEFAULT_PRIVATE
+              value: private
+            # Migrations (= mirror creation) may only pull from GitHub. Also
+            # keeps the migrate API from being an SSRF tool against the LAN.
+            - name: FORGEJO__migrations__ALLOWED_DOMAINS
+              value: github.com
+            # Applies to mirrors created without an explicit interval.
+            - name: FORGEJO__mirror__DEFAULT_INTERVAL
+              value: 1h
+            # ── features this instance doesn't need ──
+            - name: FORGEJO__actions__ENABLED
+              value: "false"
+            - name: FORGEJO__packages__ENABLED
+              value: "false"
+            # Versions are tracked in Git, not by phoning forgejo.org.
+            - name: FORGEJO__cron.update_checker__ENABLED
+              value: "false"
+          ports:
+            - containerPort: 3000
+              name: http
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/gitea
+            # GITEA_TEMP=/tmp/gitea: local-repo copies, uploads, git temp files.
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            # ~110MiB idle in the local test. The limit leaves room for git
+            # child processes during a mirror fetch or a big clone.
+            requests:
+              cpu: 25m
+              memory: 192Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: forgejo-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forgejo
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP

@@ -32,6 +32,9 @@ resources:
   # read-only deploy key, builds it, and runs it on stock node:alpine.
   # LAN-only, no auth.
   - qbit-labs
+  # Offline copy of every GitHub repo (user + Zonduit org) as pull mirrors.
+  # LAN-only; Authentik OIDC + a local break-glass admin. See workbook/forgejo.md.
+  - forgejo
   # When you add Linkding or other apps later, append them here:
   # - linkding
   # - paperless-ngx
