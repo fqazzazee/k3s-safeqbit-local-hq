@@ -65,11 +65,16 @@ For **every** monitor below:
 |---|---|---|
 | AFFiNE       | https://affine.local.safeqbit.com        | 200-299 |
 | Authentik    | https://authentik01.local.safeqbit.com   | 200-299 |
+| Forgejo      | https://git.local.safeqbit.com/api/healthz | 200-299 |
 | Immich       | https://immich.local.safeqbit.com        | 200-299 |
 | NetBox       | https://netbox.local.safeqbit.com        | 200-399 |
 | Passzilla    | https://passzilla.local.safeqbit.com     | 200-299 |
 | Photoprism   | https://photoprism.local.safeqbit.com    | 200-299 |
 | Vaultwarden  | https://vaultwarden.local.safeqbit.com   | 200-299 |
+
+Forgejo uses `/api/healthz` rather than `/`: it needs no login (everything
+else on that host does), returns 200 only when the SQLite DB and cache answer,
+and the TLS check still covers the real certificate.
 
 ### Group: Infrastructure
 

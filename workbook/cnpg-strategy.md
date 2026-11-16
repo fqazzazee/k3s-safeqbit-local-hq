@@ -65,7 +65,7 @@ Not on CNPG:
 | Workload | Database | Notes |
 |---|---|---|
 | Immich | Own `immich-postgres` Deployment (`ghcr.io/immich-app/postgres:14-vectorchord…`) | Needs Immich's custom image with vector extensions. Covered by Velero only |
-| Vaultwarden, passzilla, uptime-kuma, home-assistant, qbit-labs | SQLite on a Longhorn RWO volume | Single replica each. See [vaultwarden.md](vaultwarden.md), [passzilla.md](passzilla.md) |
+| Vaultwarden, passzilla, uptime-kuma, home-assistant, qbit-labs, forgejo | SQLite on a Longhorn RWO volume | Single replica each. See [vaultwarden.md](vaultwarden.md), [passzilla.md](passzilla.md), [forgejo.md](forgejo.md) (DB shares the volume with the repos and the `SECRET_KEY` that encrypts it) |
 | PhotoPrism | SQLite on the static NFS PV | TrueNAS is its only protection |
 
 Guacamole's `guacamole-cnpg` was deleted with the app on 2026-08-29. Its
